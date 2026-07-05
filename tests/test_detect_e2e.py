@@ -30,9 +30,16 @@ N_WINDOWS = 3 * N_PER_BLOCK
 # than a std=1.0 scenario where the smoother has nothing to do.
 _NOISE_STD = 1.5
 _MEANS = ((0.0, 0.0), (6.0, 6.0), (-6.0, 6.0))
+# Data-generation seed (independent of DetectConfig.random_seed, which seeds the
+# clusterer/smoother): seed sweep {0, 1, 7, 42, 123} with cfg.random_seed=7 gives raw
+# KMeans mismatch counts {3, 7, 1, 8, 1} respectively (all reach smoothed ARI 1.0).
+# seed=7 (the prior default) yields only 1 raw error -- the weakest demonstration of
+# the smoother's contribution in the sweep. seed=42 yields 8 raw errors, the strongest
+# in the sweep while still reaching smoothed ARI 1.0, so it is used as the default.
+_DEFAULT_SEED = 42
 
 
-def _synthetic_three_state_stream(seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
+def _synthetic_three_state_stream(seed: int = _DEFAULT_SEED) -> tuple[np.ndarray, np.ndarray]:
     """600-window, 2-D synthetic feature stream in 3 contiguous 200-window blocks.
 
     Returns (features, truth) where truth is the per-window ground-truth block id
@@ -56,6 +63,21 @@ def _cfg() -> DetectConfig:
     return DetectConfig(n_states=3, self_transition=0.98, min_dwell_s=5.0, random_seed=7)
 
 
+def _map_labels_to_truth_via_majority_vote(labels: np.ndarray, truth: np.ndarray) -> np.ndarray:
+    """Remap arbitrary cluster ids in `labels` onto the truth id each cluster overlaps
+    most, so `labels` and `truth` become directly comparable element-wise (KMeans/GMM
+    label ids are an arbitrary permutation of `{0, ..., k-1}`, not aligned to truth ids
+    by construction). Majority vote per predicted cluster is exact here (verified against
+    the optimal Hungarian assignment) because this module's synthetic blocks are
+    well-separated: each predicted cluster's plurality truth label is unambiguous."""
+    mapped = np.empty_like(labels)
+    for cluster_id in np.unique(labels):
+        cluster_mask = labels == cluster_id
+        majority_truth = np.bincount(truth[cluster_mask]).argmax()
+        mapped[cluster_mask] = majority_truth
+    return mapped
+
+
 def test_smoothing_fixes_raw_kmeans_mistakes_before_duration_filter_even_runs() -> None:
     """The two required facts, at the exact granularity the brief asks for: (1) raw
     KMeans differs from truth, (2) the SMOOTHED labels (StickyHmmSmoother.fit_decode
@@ -66,7 +88,13 @@ def test_smoothing_fixes_raw_kmeans_mistakes_before_duration_filter_even_runs() 
     would not distinguish "the HMM smoother fixed it" from "duration_filter would have
     fixed it regardless of what fed it". Asserting the intermediate smoothed-but-not-yet-
     filtered labels pins down that the smoother itself, not just duration_filter, does
-    genuine work in this scenario."""
+    genuine work in this scenario.
+
+    The raw-vs-truth mismatch is asserted TWICE, at two different strengths: `ari < 1.0`
+    (any mistake at all) and a minimum COUNT of >= 3 mismatched windows. ARI alone would
+    pass even for a single-window fluke, which is a much weaker demonstration of the
+    smoother's job than this scenario is calibrated to provide (seed sweep note above:
+    the default seed gives 8 raw mismatches, comfortably over this floor)."""
     features, truth = _synthetic_three_state_stream()
     cfg = _cfg()
 
@@ -79,6 +107,13 @@ def test_smoothing_fixes_raw_kmeans_mistakes_before_duration_filter_even_runs() 
         f"expected raw KMeans to make at least one mistake (ARI < 1.0), got {raw_ari}"
     )
 
+    raw_mapped = _map_labels_to_truth_via_majority_vote(raw_labels, truth)
+    raw_mismatch_count = int(np.sum(raw_mapped != truth))
+    assert raw_mismatch_count >= 3, (
+        f"expected raw KMeans to make at least 3 mismatched-window errors (a stronger "
+        f"floor than merely ari < 1.0), got {raw_mismatch_count}"
+    )
+
     smoothed = StickyHmmSmoother(
         self_transition=cfg.self_transition, random_seed=cfg.random_seed
     ).fit_decode(z, raw_labels)
@@ -86,6 +121,31 @@ def test_smoothing_fixes_raw_kmeans_mistakes_before_duration_filter_even_runs() 
     assert smoothed_ari == 1.0, (
         f"expected StickyHmmSmoother alone (pre-duration_filter) to reach ARI 1.0, "
         f"got {smoothed_ari}"
+    )
+
+
+def test_zscore_scaling_materially_improves_clustering_on_unequal_scale_features() -> None:
+    """Dedicated, clusterer-level regression guard for `zscore`'s actual purpose
+    (normalising features of heterogeneous scale before clustering) -- a purpose this
+    module's main synthetic scenario cannot exercise (see the module-level mutation-
+    testing note: both feature axes there share the same noise std, so skipping zscore
+    is numerically invisible on that scenario). Here `big` is 100x the scale of `small`
+    and carries NO class-discriminative signal (same mean, same std, for all 3 truth
+    blocks); on the raw features KMeans clusters almost entirely on `big`'s noise
+    (ari ~ 0), while z-scoring puts both columns on equal footing and lets `small`'s
+    genuine block structure dominate (ari ~ 0.4). Margin verified robust (>= 0.32) across
+    12 independent seeds during calibration, not a single-seed fluke."""
+    rng = np.random.default_rng(3)
+    truth = np.repeat(np.array([0, 1, 2]), 200)
+    small = np.concatenate([rng.normal(m, 1.0, 200) for m in (0.0, 5.0, -5.0)])
+    big = rng.normal(0.0, 100.0, 600)  # non-discriminative, 100x scale
+    features = np.column_stack([small, big])
+
+    unscaled = adjusted_rand_score(truth, KMeansClusterer(3, 7).fit_predict(features))
+    scaled = adjusted_rand_score(truth, KMeansClusterer(3, 7).fit_predict(zscore(features)))
+    assert scaled - unscaled > 0.3, (
+        f"expected zscore to materially improve clustering (margin > 0.3), got "
+        f"unscaled={unscaled:.4f} scaled={scaled:.4f} margin={scaled - unscaled:.4f}"
     )
 
 
@@ -388,4 +448,4 @@ def test_raises_value_error_on_unknown_clusterer_string() -> None:
     cfg = _cfg()
 
     with pytest.raises(ValueError, match="clusterer"):
-        run_detection(features, grid, cfg, clusterer="not-a-real-clusterer")
+        run_detection(features, grid, cfg, clusterer="not-a-real-clusterer")  # type: ignore[arg-type]
