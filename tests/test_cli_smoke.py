@@ -421,3 +421,51 @@ def test_extract_stream_features_tolerates_one_sample_clock_jitter(tmp_path) -> 
         f"expected every window to be featurized despite clock jitter, "
         f"but {nan_rows.sum()}/{n_windows} are NaN"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Fusion assembly must not let a few invalid-window NaN rows zero out
+#    every fused column for the WHOLE run
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_variant_features_fusion_survives_a_few_nan_rows() -> None:
+    # Task 13 real-data run (TU/fusion): a real run always has a handful of invalid
+    # windows (coverage gaps at file boundaries, ~11/8286 on the June-25 TU run) whose
+    # rows are NaN in every per-stream feature matrix -- this is normal and expected
+    # (see _StreamFeatureResult.features' own docstring). `assemble_variant_features`'s
+    # fusion path calls `fuse()` -> `zscore()` on the FULL, still-NaN-containing matrix
+    # (valid-masking happens later, in _detect_and_report) -- `zscore`'s zero-std guard
+    # (`std >= 1e-12`) is `False` for ANY column containing a NaN (NaN comparisons are
+    # always False in IEEE-754), which zeroed out EVERY fused column for the ENTIRE run,
+    # not just the invalid rows: real ARI on TU/fusion was silently 0.0 because of this
+    # (sklearn KMeans then collapses to a single cluster on the resulting all-zero input).
+    #
+    # Reproduces the bug with a handful of NaN rows (not real data) and asserts the
+    # non-NaN rows keep genuine, non-degenerate variance after fusion.
+    from run_step1 import (
+        _AUDIO_STREAMS,
+        _VIB_STREAMS,
+        _StreamFeatureResult,
+        assemble_variant_features,
+    )
+
+    rng = np.random.default_rng(0)
+    n_windows = 50
+    stream_results = {}
+    for stream in (*_AUDIO_STREAMS, *_VIB_STREAMS):
+        features = rng.normal(size=(n_windows, 4))
+        features[3] = np.nan  # one invalid window, matching real run's small NaN fraction
+        stream_results[stream] = _StreamFeatureResult(
+            features=features, coverage=np.ones(n_windows)
+        )
+
+    fused = assemble_variant_features("fusion", stream_results)
+
+    valid_rows = ~np.isnan(fused).any(axis=1)
+    assert valid_rows.sum() == n_windows - 1
+    valid_std = fused[valid_rows].std(axis=0)
+    assert (valid_std > 1e-6).all(), (
+        "expected every fused column to retain genuine variance on the valid rows, "
+        f"but {int((valid_std <= 1e-6).sum())}/{len(valid_std)} columns are degenerate"
+    )

@@ -374,19 +374,35 @@ class VibFeaturizer:
 
 
 def zscore(x: np.ndarray) -> np.ndarray:
-    """Per-column `(x - mean) / std`, float64. Columns with `std < 1e-12` become zero.
+    """Per-column `(x - mean) / std`, float64, ignoring NaN rows. Columns with
+    `std < 1e-12` (over the non-NaN rows) become zero; NaN input rows stay NaN.
 
     The zero-std guard avoids `inf`/`NaN` for constant columns (e.g. a
     feature that never varies within a batch) -- such a column carries no
     discriminative information, so an all-zero output is the correct neutral
     value rather than propagating a division blow-up.
+
+    Mean/std use `nanmean`/`nanstd` (Task 13 fix): a real feature matrix
+    routinely has a handful of NaN rows (invalid windows -- see
+    `_StreamFeatureResult.features`'s docstring in `scripts/run_step1.py`).
+    Plain `.mean()`/`.std()` propagate NaN into EVERY row's statistics for a
+    column touched by even one NaN, and the old zero-std guard
+    (`std >= 1e-12`) is always False for a NaN std (IEEE-754), which zeroed
+    out the WHOLE column -- not just the NaN row -- for any column with any
+    invalid window. On a real run (every stream has at least one invalid
+    window) this silently zeroed out every fused column, collapsing
+    downstream KMeans to a single cluster. Genuinely-NaN rows are restored
+    to NaN in the output (not left as whatever the NaN-ignoring arithmetic
+    produced) so a caller can still detect and mask them exactly as before.
     """
     x64 = np.asarray(x, dtype=np.float64)
-    mean = x64.mean(axis=0)
-    std = x64.std(axis=0)
+    nan_rows = np.isnan(x64).any(axis=1)
+    mean = np.nanmean(x64, axis=0)
+    std = np.nanstd(x64, axis=0)
     out = np.zeros_like(x64)
     safe = std >= 1e-12
     out[:, safe] = (x64[:, safe] - mean[safe]) / std[safe]
+    out[nan_rows] = np.nan
     return out
 
 

@@ -453,6 +453,29 @@ def test_zscore_output_dtype_is_float64() -> None:
     assert z.dtype == np.float64
 
 
+def test_zscore_a_few_nan_rows_do_not_zero_out_the_whole_column() -> None:
+    # Task 13 real-data finding (TU/fusion run): a real feature matrix always has a
+    # handful of NaN rows (invalid windows, ~11/8286 on the real run) -- plain
+    # `np.std` propagates NaN into the column's std, and `NaN >= 1e-12` is ALWAYS
+    # False (IEEE-754), so the OLD zero-std guard (`safe = std >= 1e-12`) silently
+    # zeroed out the ENTIRE column, not just the NaN row, for every column touched
+    # by even one invalid window. On the real TU/fusion run this zeroed out all 231
+    # fused columns (every stream has at least one NaN row), collapsing KMeans to a
+    # single cluster and silently producing ARI=0.0. zscore must compute its
+    # mean/std ignoring NaN rows (nanmean/nanstd) and leave genuinely-NaN entries as
+    # NaN in the output, without corrupting the column's valid rows.
+    rng = np.random.default_rng(11)
+    x = rng.normal(loc=10.0, scale=3.0, size=(200, 3))
+    x[7] = np.nan  # one invalid window -- must not affect the other 199 rows' z-score
+
+    z = zscore(x)
+
+    assert np.isnan(z[7]).all()
+    valid = np.delete(z, 7, axis=0)
+    np.testing.assert_allclose(valid.mean(axis=0), np.zeros(3), atol=1e-9)
+    np.testing.assert_allclose(valid.std(axis=0), np.ones(3), atol=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # fuse
 # ---------------------------------------------------------------------------
