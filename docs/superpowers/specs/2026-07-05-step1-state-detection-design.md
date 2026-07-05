@@ -17,14 +17,20 @@ distinct operating states are recovered reliably from the sensor streams, per in
 modality (audio-only / vibration-only / fusion).
 
 **Positioning (from the thesis design):** Step 1 is a prerequisite capability, not a
-research axis. The unsupervised pipeline is fixed and simple; the only comparisons
-reported are (a) input modality {audio, vibration, fusion} and (b) a clusterer
-robustness check {KMeans, GMM}. The representation/model ablation belongs to Step 2.
+research axis. The unsupervised pipeline is fixed and simple; the comparisons reported
+are (a) input modality {audio, vibration, fusion}, (b) audio-branch featurizer
+{handcrafted, frozen BEATs embeddings} (Stefan, 2026-07-05: include BEATs as the
+proven-on-v1 reference, since the June data is the first real-plant recording), and
+(c) a clusterer robustness check {KMeans, GMM}. Hard cap: no further representations
+(no TF-C, SSAST, from-scratch AE) in Step 1 — the representation ablation proper
+belongs to Step 2. BEATs serves the audio branch only and never ingests vibration
+(thesis rule).
 
 ## 2. Non-goals
 
 - No supervised state classifier (thesis TODO T5.3: interim milestone is unsupervised).
-- No BEATs / torch dependency in Step 1 (arrives with Step 2 via the featurizer interface).
+- No torch in the core install; BEATs (with torch/torchaudio) lives behind the optional
+  extra `rowii-monitor[beats]`. No representation beyond handcrafted + frozen BEATs.
 - No anomaly detection, no phase-shifter handling beyond a configurable state set
   (phase-shifter does not occur in the June-25 recordings).
 - No SCADA input to the detector at run time (SCADA is ground truth only).
@@ -84,7 +90,12 @@ src/rowii/
 │                         #   blade-pass (43.75 Hz), guide-vane-pass (125 Hz) ± tolerance,
 │                         #   octave-band log-energies, spectral centroid/rolloff, per ring.
 │                         #   VibFeaturizer: per live axis RMS, band energies, kurtosis.
-│                         #   FusionFeaturizer = concat(audio, vib) after per-feature z-score.
+│                         #   FusionFeaturizer = concat(audio-branch, vib) after z-score.
+│                         #   BeatsFeaturizer (extra [beats], audio only): 50 kHz -> 16 kHz
+│                         #   resample, 128-d log-Mel fbank, frozen BEATs encoder, one
+│                         #   pooled embedding per window; checkpoint path via config
+│                         #   (BEATS_CHECKPOINT); fresh device helper (MPS > CUDA > CPU,
+│                         #   env override), fresh-written per reuse policy.
 ├── scada/
 │   ├── channels.py       # Betriebsdaten channel selection by name pattern
 │   │                     #   (speed / active power / guide-vane; names resolved from
@@ -122,8 +133,11 @@ frames the unsupervised interim milestone.
 Features z-scored per run. KMeans k = |expected states in run| (TU: standstill,
 turbine, transition → k sweep 3–6 reported; load sub-structure appears as extra
 clusters and is merged by the HMM/duration stage or reported as sub-clusters). Sticky
-HMM self-transition 0.98 (config), duration filter min dwell 5 s (config). Grid of
-runs: {audio, vibration, fusion} × {kmeans, gmm} per recording (TU, PU) = 12 cheap runs.
+HMM self-transition 0.98 (config), duration filter min dwell 5 s (config). Run grid
+per recording (TU, PU): variants {audio-handcrafted, audio-beats, vibration,
+fusion-handcrafted, fusion-beats} × clusterer {kmeans, gmm} = 20 runs total; all fast
+(BEATs inference on ~2.3 h audio runs in minutes on MPS). Milestone order: handcrafted
+end-to-end first, BeatsFeaturizer second.
 
 ## 6. Error handling
 
@@ -144,18 +158,21 @@ runs: {audio, vibration, fusion} × {kmeans, gmm} per recording (TU, PU) = 12 ch
 - Detection integration test: synthetic 3-state feature sequence with known boundaries
   → ARI 1.0 expected, duration filter removes injected flicker.
 - Eval tests: Hungarian matching, boundary metrics on constructed cases.
+- BeatsFeaturizer tests run against a stub encoder (protocol-level, no checkpoint, no
+  torch needed in CI); real-checkpoint smoke test under `@pytest.mark.data`.
 - A `@pytest.mark.data` tier runs a real-data smoke test locally (skipped when
   `DATA_ROOT` unset / in CI).
 - Tooling: Python 3.12, pyproject (src layout), ruff (line length 100), mypy, pytest.
-  Dependencies: numpy, scipy, scikit-learn, hmmlearn, pandas, matplotlib, openpyxl
-  (sensor xlsx), python-dotenv. No torch.
+  Core dependencies: numpy, scipy, scikit-learn, hmmlearn, pandas, matplotlib, openpyxl
+  (sensor xlsx), python-dotenv. Optional extra `[beats]`: torch, torchaudio.
 
 ## 8. Deliverables & acceptance
 
 - `results/<run>/<variant>/`: segments.csv, frame_labels.parquet, report.md,
   timeline.png (detected states vs SCADA GT vs power curve).
-- Campaign-1 summary table: ARI / macro-F1 / boundary median |Δt| per modality ×
-  clusterer × recording.
+- Campaign-1 summary table: ARI / macro-F1 / boundary median |Δt| per variant
+  (modality × audio-branch featurizer) × clusterer × recording, so the handcrafted-vs-
+  BEATs and audio-vs-vibration-vs-fusion questions are answered in one table.
 - Acceptance: TU fusion variant reaches ARI ≥ 0.9 against SCADA GT on covered windows
   (expectation from prior v1 work: ~1.0 on clean segments); all tests green; repo
   clones + installs + runs from README alone.
