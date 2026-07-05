@@ -88,7 +88,13 @@ def _base_state(scada: pd.DataFrame, rules: GtRules) -> pd.Series:
     is_standstill = known & (np.abs(speed) < rules.speed_eps_frac * n_nom) & (
         np.abs(power) < rules.power_eps_mw
     )
-    is_nominal = known & (speed >= (1.0 - rules.speed_eps_frac) * n_nom)
+    # 1_Drehzahl_Ist is SIGNED by rotation direction at this plant (verified Task 13, real
+    # 2026-06-25 data): positive during turbine operation, negative during pump operation (a
+    # reversible pump-turbine spins the opposite way in each mode) -- the nominal-speed gate
+    # must compare the MAGNITUDE against the threshold, exactly like is_standstill already
+    # does above, or every pump-mode window fails this check and falls through to
+    # "transition" regardless of how the flow/power rules below would otherwise resolve it.
+    is_nominal = known & (np.abs(speed) >= (1.0 - rules.speed_eps_frac) * n_nom)
 
     # Pump power may be logged POSITIVE at this plant (plant-specific SCADA convention) --
     # flow dominance at nominal speed is the ground truth's way of overriding a misleading
