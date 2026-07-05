@@ -378,3 +378,46 @@ def test_run_combo_k_sweep_writes_four_rows_with_silhouette_and_k_sweep_note(
     assert len(summary) == 4
     assert (summary["notes"] == "k-sweep").all()
     assert list(summary["k"]) == [3, 4, 5, 6]
+
+
+# ---------------------------------------------------------------------------
+# 6. Real-hardware clock jitter: +/-1 sample/window must not NaN out the window
+# ---------------------------------------------------------------------------
+
+
+def test_extract_stream_features_tolerates_one_sample_clock_jitter(tmp_path) -> None:
+    # Task 13 real-data finding: real DAQ files do NOT tile perfectly into
+    # `round(rate_hz * window_s)` samples per window -- natural clock jitter puts some
+    # windows at expected_samples +/- 1 (measured on the real June-25 TU mic/vib streams:
+    # ~33% of windows off by exactly 1 sample, with NO actual data gap). Before the fix,
+    # `_extract_stream_features` required an EXACT sample-count match to featurize a
+    # window, so every jittered window was silently left NaN -- at real jitter rates this
+    # blows straight through the pipeline's 5%-invalid hard-fail threshold.
+    #
+    # A rate_hz that is not an exact integer nanosecond period (100.003 Hz here) makes
+    # `build_gantner_file`'s own timestamp spacing accumulate exactly this kind of +/-1
+    # rounding jitter across windows, without needing a special jittered-timestamp fixture.
+    import run_step1
+
+    from rowii.io.dataset import BurstFile
+    from rowii.signals.features import AudioFeaturizer
+    from rowii.signals.windows import WindowGrid
+    from tests.fixtures.gantner_builder import build_gantner_file
+
+    rate_hz = 100.003
+    n_windows = 5
+    n_samples = round(rate_hz * n_windows)  # ~500, spans exactly n_windows nominal seconds
+    data = np.ones((n_samples, 2), dtype=np.float32)
+    path = build_gantner_file(
+        tmp_path / "jitter.dat", ["ChA", "ChB"], data, t0_ns=0, rate_hz=rate_hz,
+    )
+    burst = BurstFile(path=path, stream="RAWGeneratorMic__0", start_utc_hint=None)  # type: ignore[arg-type]
+    grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n_windows)
+
+    result = run_step1._extract_stream_features([burst], grid, AudioFeaturizer())
+
+    nan_rows = np.isnan(result.features).any(axis=1)
+    assert not nan_rows.any(), (
+        f"expected every window to be featurized despite clock jitter, "
+        f"but {nan_rows.sum()}/{n_windows} are NaN"
+    )

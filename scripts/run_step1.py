@@ -79,6 +79,11 @@ _VIB_STREAMS: tuple[str, ...] = ("RAWGeneratorVib__2", "RAWTurbineVib__3")
 _COVERAGE_THRESHOLD = 0.8
 _MAX_INVALID_FRACTION = 0.05
 _INVALID_LABEL = -1
+_SAMPLE_JITTER_TOLERANCE = 4
+"""Max |actual - expected| sample count still treated as a "full" window (Task 13 real-data
+finding: real DAQ clocks jitter by +/-1 sample/window at 10 kHz/50 kHz -- a sample count off
+by 2370+ is a genuine partial window at a file boundary, not jitter; see
+`_extract_stream_features`)."""
 
 _BEATS_INSTALL_HINT = (
     'install extra: pip install -e ".[beats]" and set ROWII_BEATS_CHECKPOINT'
@@ -208,13 +213,26 @@ def _extract_stream_features(
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
 
-    Only FULL windows (exactly the expected sample count for the file's own
-    rate) are featurized; partial windows are left as NaN in that file's rows
-    and contribute to the coverage accounting only (a genuinely full window
-    can still be assembled later from a DIFFERENT file that covers the same
-    grid index, if the burst boundary falls inside that window -- but per the
-    discovery contract runs are contiguous with < 15 min gaps and each grid
-    window in practice is covered by exactly one file).
+    A window is FULL (and gets featurized) if its sample count is within
+    `_SAMPLE_JITTER_TOLERANCE` of the expected count for the file's own rate;
+    windows further off are left as NaN and contribute to the coverage
+    accounting only (a genuinely full window can still be assembled later
+    from a DIFFERENT file that covers the same grid index, if the burst
+    boundary falls inside that window -- but per the discovery contract runs
+    are contiguous with < 15 min gaps and each grid window in practice is
+    covered by exactly one file).
+
+    Tolerance rationale (Task 13 real-data finding): real DAQ clocks jitter
+    by +/-1 sample per window even with no actual data gap -- `read_gantner`'s
+    rate estimate is a median over the whole file, so any single window can
+    round to one sample more or fewer than that estimate predicts. A genuine
+    partial window at a file boundary is off by thousands of samples (the
+    file's own start/end falling mid-window), nowhere near this tolerance, so
+    the two cases stay cleanly separated. Accepted windows within tolerance
+    but not EXACTLY `expected_samples` long are trimmed to the batch's
+    shortest accepted length before stacking (`np.stack` requires uniform
+    shape) -- losing a small number of jitter samples out of tens of
+    thousands has no meaningful effect on any spectral feature.
 
     Note on `VibFeaturizer`'s per-file live-channel discovery: `VibFeaturizer.
     transform` re-derives which channels are live from the STD of whatever
@@ -246,11 +264,15 @@ def _extract_stream_features(
         coverage_acc += file_coverage
 
         full_window_indices = [
-            i for i, sl in enumerate(slices) if (sl.stop - sl.start) == expected_samples
+            i for i, sl in enumerate(slices)
+            if abs((sl.stop - sl.start) - expected_samples) <= _SAMPLE_JITTER_TOLERANCE
         ]
         if full_window_indices:
+            trim_len = min(slices[i].stop - slices[i].start for i in full_window_indices)
             stack = np.stack(
-                [gf.data[slices[i], :] for i in full_window_indices], axis=0
+                [gf.data[slices[i].start : slices[i].start + trim_len, :]
+                 for i in full_window_indices],
+                axis=0,
             ).astype(np.float32)
             batch_features = featurizer.transform(stack, rate_hz)
             if feature_matrix is None:
