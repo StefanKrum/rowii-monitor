@@ -7,23 +7,36 @@ per-channel-expanded using the channel INDEX (e.g. `ch0_log_rms`,
 -- callers that need human-readable channel identity must remap `chN_*`
 themselves.
 
-Spectral features (band energy, octave energy, spectral centroid, 95%
-rolloff) are derived from a Welch PSD estimate
+Octave energy, spectral centroid, and 95% rolloff are derived from an
+AVERAGED Welch PSD estimate
 (`scipy.signal.welch(x, fs=rate_hz, nperseg=min(nperseg_cfg, S))`, with
-`nperseg_cfg = 4096` for `rate_hz > 20_000` else `2048`). All log-scaled
+`nperseg_cfg = 4096` for `rate_hz > 20_000` else `2048`). These are broadband
+features (octave bands are >= 1 octave wide; centroid/rolloff summarise the
+whole spectrum), so averaging several shorter FFT segments to reduce
+estimator variance is the right trade-off -- losing some frequency
+resolution does not lose information these features actually use.
+
+`MACHINE_HZ` band energies (see below) are narrowband tones, not broadband
+content, so they need the OPPOSITE trade-off: resolution over variance
+reduction. They are therefore computed from a SEPARATE, DEDICATED
+high-resolution PSD pass, `scipy.signal.welch(x, fs=rate_hz,
+nperseg=n_samples)` -- i.e. the full window length, no averaging, one
+Welch segment. Frequency resolution is then `1 / window_s` (1 Hz at the
+project's 1-s windows), which is fine-grained enough that all three
+`MACHINE_HZ` bands (shaft: 1.25 Hz wide, blade_pass: 8.75 Hz wide,
+guide_vane_pass: 25 Hz wide) contain at least one genuine in-band bin --
+see `machine_band_bin_counts` for the formula and
+`_band_energy`/`_machine_band_energies` for how it's used. All log-scaled
 features use `log10` with a `1e-12` floor to avoid `-inf` on silence.
 
 Band energy is the mean PSD over the FFT bins whose frequency falls inside
-the band. Because a Welch PSD has a fixed frequency resolution
-(`rate_hz / nperseg`), a band narrower than that resolution can contain ZERO
-bins -- this happens for the narrow `MACHINE_HZ` bands (+/-10 % of a few Hz
-to ~44 Hz) at `nperseg=4096`/50 kHz (resolution ~12.2 Hz). In that case the
-single FFT bin nearest the band's CENTER frequency is used instead, which is
-the natural generalisation of "mean PSD over band bins" to a zero-bin band
-and keeps the feature meaningful (a tone at 44 Hz still shows up in the
-`blade_pass` band because 48.8 Hz -- the nearest bin to the 43.75 Hz center
--- captures the tone's spectral leakage) rather than emitting a fixed
-placeholder value.
+the band. The single-bin-nearest-center fallback in `_band_energy` remains
+as a last resort for pathological short windows (`window_s < 1 s`, where
+even the dedicated high-resolution pass's `1/window_s` resolution could
+exceed a band's width) but is NOT exercised in the project's normal
+operating regime: with `window_s >= 1 s`, all three `MACHINE_HZ` bands are
+resolved by >= 1 real bin, so the fallback path is dead code in practice for
+any window at or above 1 s.
 
 Both `MACHINE_HZ` bands and the octave bands adapt to the sampling rate:
 any band whose upper edge exceeds Nyquist (`rate_hz / 2`) is skipped
@@ -88,9 +101,14 @@ def _band_energy(freqs: np.ndarray, psd: np.ndarray, lo_hz: float, hi_hz: float)
     """Mean PSD over bins inside `[lo_hz, hi_hz]`; nearest single bin if none fall inside.
 
     A band narrower than the PSD's frequency resolution (`freqs[1] - freqs[0]`)
-    can contain zero bins -- see module docstring for why the nearest-bin
-    fallback is the correct generalisation here, rather than e.g. returning NaN
-    or a fixed floor value.
+    can contain zero bins. For `MACHINE_HZ` bands this is avoided in practice
+    by feeding this function a dedicated high-resolution PSD (module
+    docstring); the nearest-bin fallback below remains only as a defensive
+    last resort for windows shorter than 1 s, where even that dedicated
+    pass's `1/window_s` resolution could still exceed a band's width -- it is
+    the natural generalisation of "mean PSD over band bins" to a zero-bin
+    band and keeps the feature meaningful rather than returning NaN or a
+    fixed placeholder value.
     """
     mask = (freqs >= lo_hz) & (freqs <= hi_hz)
     if mask.any():
@@ -126,6 +144,54 @@ def _machine_bands(nyquist_hz: float) -> list[tuple[str, float, float]]:
         if hi_hz <= nyquist_hz:
             bands.append((name, lo_hz, hi_hz))
     return bands
+
+
+def machine_band_bin_counts(rate_hz: float, n_samples: int) -> dict[str, int]:
+    """Count of real (in-band) FFT bins per `MACHINE_HZ` band at the resolution
+    the dedicated high-resolution machine-band PSD pass would use for a window
+    of `n_samples` samples at `rate_hz` (i.e. `rfftfreq(n_samples, d=1/rate_hz)`,
+    matching `nperseg=n_samples` -- see module docstring and
+    `_machine_band_energies`, which is the function that actually computes
+    machine-band energies at this resolution during `transform`).
+
+    A band whose upper edge exceeds Nyquist is omitted from the result
+    entirely (same truncation rule as `_machine_bands`), so the returned dict
+    can have fewer than 3 keys at low sampling rates.
+
+    Used both by `_machine_band_energies` (indirectly, via the same
+    `rfftfreq` resolution) to document the actual guarantee, and directly by
+    tests to assert the guarantee holds (e.g. all three bands resolved by
+    >= 1 real bin at 50 kHz/1-s windows) without duplicating the bin-counting
+    formula in test code.
+    """
+    nyquist_hz = rate_hz / 2.0
+    freqs = np.fft.rfftfreq(n_samples, d=1.0 / rate_hz)
+    counts: dict[str, int] = {}
+    for name, lo_hz, hi_hz in _machine_bands(nyquist_hz):
+        counts[name] = int(((freqs >= lo_hz) & (freqs <= hi_hz)).sum())
+    return counts
+
+
+def _machine_band_energies(
+    x: np.ndarray, rate_hz: float, machine_bands: list[tuple[str, float, float]]
+) -> dict[str, float]:
+    """Machine-band energies from a DEDICATED high-resolution PSD pass.
+
+    Uses `nperseg=len(x)` (the full window, no Welch averaging/segmenting) so
+    the frequency resolution is `rate_hz / len(x) == 1 / window_s` -- fine
+    enough (1 Hz at the project's 1-s windows) that all three `MACHINE_HZ`
+    bands contain >= 1 real in-band bin (see module docstring and
+    `machine_band_bin_counts`). This is intentionally SEPARATE from the
+    averaged-Welch PSD used for octave bands/centroid/rolloff
+    (`_welch_nperseg`), which trades resolution for lower estimator variance
+    -- the right trade-off for broadband features but the wrong one for
+    narrowband machine-frequency tones.
+    """
+    freqs, psd = signal.welch(x, fs=rate_hz, nperseg=len(x))
+    return {
+        name: _band_energy(freqs, psd, lo_hz, hi_hz)
+        for name, lo_hz, hi_hz in machine_bands
+    }
 
 
 def _octave_bands(
@@ -183,14 +249,14 @@ class AudioFeaturizer:
             for ch in range(n_channels):
                 x = windows[w, :, ch].astype(np.float64)
                 freqs, psd = signal.welch(x, fs=rate_hz, nperseg=nperseg)
+                machine_energies = _machine_band_energies(x, rate_hz, machine_bands)
 
                 rms = float(np.sqrt(np.mean(np.square(x))))
                 out[w, col] = _log10_floor(rms)
                 col += 1
 
-                for _, lo_hz, hi_hz in machine_bands:
-                    energy = _band_energy(freqs, psd, lo_hz, hi_hz)
-                    out[w, col] = _log10_floor(energy)
+                for band_name, _, _ in machine_bands:
+                    out[w, col] = _log10_floor(machine_energies[band_name])
                     col += 1
 
                 for _, lo_hz, hi_hz in octave_bands:
@@ -214,7 +280,12 @@ class VibFeaturizer:
     and an `octave_<center>` energy for every octave band up to 4000 Hz that
     fits under Nyquist. A channel whose std is `< 1e-9` across the WHOLE
     `(W, S)` input is considered dead: it is dropped from the feature set
-    entirely (`logging.warning` names the dropped channel index).
+    entirely (`logging.warning` names the dropped channel index). Caveat:
+    this is a batch-GLOBAL check, not per-window -- a channel that is
+    constant WITHIN each window but takes a different constant value ACROSS
+    windows (nonzero cross-window variance, zero within-window variance)
+    counts as live here, since the std is computed over the whole `(W, S)`
+    block rather than per window.
 
     Stateful design: `transform` discovers live channels from the batch it is
     given and caches them on `self.live_channels_` / `self._feature_names`.
@@ -281,6 +352,7 @@ class VibFeaturizer:
             for ch in live_channels:
                 x = windows[w, :, ch].astype(np.float64)
                 freqs, psd = signal.welch(x, fs=rate_hz, nperseg=nperseg)
+                machine_energies = _machine_band_energies(x, rate_hz, machine_bands)
 
                 rms = float(np.sqrt(np.mean(np.square(x))))
                 out[w, col] = _log10_floor(rms)
@@ -289,9 +361,8 @@ class VibFeaturizer:
                 out[w, col] = float(_scipy_kurtosis(x))
                 col += 1
 
-                for _, lo_hz, hi_hz in machine_bands:
-                    energy = _band_energy(freqs, psd, lo_hz, hi_hz)
-                    out[w, col] = _log10_floor(energy)
+                for band_name, _, _ in machine_bands:
+                    out[w, col] = _log10_floor(machine_energies[band_name])
                     col += 1
 
                 for _, lo_hz, hi_hz in octave_bands:
