@@ -17,6 +17,11 @@
 - `hmmlearn` GaussianHMM with `params="mc"` (never re-estimate the sticky transmat — proven lesson).
 - Conventional commits, no AI attribution, line length 100 (ruff), mypy clean.
 - All timestamps UTC; UDBF frame timestamps (ns since Unix epoch) are authoritative, filenames are local-time hints only.
+- **No legacy assumptions (Stefan, 2026-07-05):** every machine parameter (nominal speed,
+  machine frequencies, number of states, channel liveness, GT thresholds) is a config
+  DEFAULT that must be verified on the June-25 data itself (Tasks 5/12/13); results from
+  the v1 prototype never justify a value or an expectation. Vibration is a first-class
+  input everywhere (own variant, both fusions, Step-1 grid), evaluated fresh on this data.
 
 ## Gantner container format (reference for Task 2; verified on real files 2026-07-05)
 
@@ -661,7 +666,7 @@ def write_report(out_dir: Path, run: str, variant: str, det: DetectionResult,
 
 **copy_data.py:** argparse `--source` (default `~/Downloads/illwerke-250526-analysis`) `--dest` (default from config) `--dry-run`. Copies exactly: `20260626 Messung/TU/*.dat`, `20260626 Messung/PU/*.dat`, `20260626 Messung/Betriebsdaten/2026-06-25_*.dat`, `Sensor_Anordnung_15062026.xlsx`, `MANIFEST.md`, `ROWII_Leistung_*.jpg`, `20260626 Messung/ROWII_Leistung.jpg`. Skips files already present with equal size; writes `copy_manifest.json` (per file: relpath, bytes); prints total copied/skipped; refuses if free disk < 1.2 × required (`shutil.disk_usage`).
 
-**run_step1.py:** argparse `--run {tu,pu-morning,pu-afternoon,all}` `--variant {audio,audio-beats,vibration,fusion,fusion-beats,all}` `--clusterer {kmeans,gmm,all}` `--k INT` (default cfg.n_states). Flow per (run, variant, clusterer): discover → grid over the run's used streams → featurize (audio streams: both mic files' channels; vibration: both vib streams' live channels; beats variants import `rowii.signals.beats` lazily with an actionable ImportError pointing to `pip install -e ".[beats]"`) → run_detection → load SCADA GT (skip eval with a logged notice when no Betriebsdaten coverage, e.g. pu-afternoon) → evaluate → write_report to `results/<run>/<variant>-<clusterer>/`. Ends by writing `results/summary.csv` (one row per executed combination).
+**run_step1.py:** argparse `--run {tu,pu-morning,pu-afternoon,all}` `--variant {audio,audio-beats,vibration,fusion,fusion-beats,all}` `--clusterer {kmeans,gmm,all}` `--k INT` (default cfg.n_states) `--k-sweep` (runs k=3..6 for the given combination and appends silhouette score + ARI per k to summary.csv, so the state count is established from the data, not assumed). Flow per (run, variant, clusterer): discover → grid over the run's used streams → featurize (audio streams: both mic files' channels; vibration: both vib streams' live channels; beats variants import `rowii.signals.beats` lazily with an actionable ImportError pointing to `pip install -e ".[beats]"`) → run_detection → load SCADA GT (skip eval with a logged notice when no Betriebsdaten coverage, e.g. pu-afternoon) → evaluate → write_report to `results/<run>/<variant>-<clusterer>/`. Ends by writing `results/summary.csv` (one row per executed combination).
 
 - [ ] **Steps: failing smoke test (invoke `copy_data.py --dry-run` on a fake tree → correct file list printed, nothing copied; `run_step1.py --help` exits 0); implement both scripts; green; commit `feat: selective data copy and step-1 CLI`.**
 
@@ -671,8 +676,8 @@ def write_report(out_dir: Path, run: str, variant: str, det: DetectionResult,
 
 - [ ] **Step 1: `@pytest.mark.data` test: discover real `ROWII_DATA_ROOT` → expect run "tu" with 4 streams × 12 files; `read_header` of one mic file reports ~50 kHz and 4+ channels; one Betriebsdaten file contains all `GT_CHANNELS` names.**
 - [ ] **Step 2: Run `python scripts/copy_data.py` (real copy ~35 GB), then `pytest -m data -v` → PASS.**
-- [ ] **Step 3: `python scripts/run_step1.py --run tu --variant audio --clusterer kmeans` then `--variant fusion`; inspect `results/tu/*/report.md` + timeline.png; sanity: detected standstill/turbine phases match the deck's power timeline; record ARI in README results table.**
-- [ ] **Step 4: Fix whatever reality breaks (channel-name mismatches, sign conventions, speed nominal) in config defaults — each fix with its own test + commit.**
+- [ ] **Step 3: Parameter verification on the real data (no-legacy-assumptions constraint): (a) measure the speed plateau from `1_Drehzahl_Ist` during turbine operation and confirm/correct `GtRules.speed_nominal_rpm`; (b) Welch spectrum of one turbine-phase mic window and confirm spectral peaks within ±10 % of the configured `MACHINE_HZ` values, logging measured peak frequencies into the report; (c) confirm which vibration channels are live from the data itself. Each corrected default = its own test + commit.**
+- [ ] **Step 4: `python scripts/run_step1.py --run tu --variant audio --clusterer kmeans`, then `--variant vibration`, then `--variant fusion`, plus `--k-sweep` for fusion; inspect `results/tu/*/report.md` + timeline.png; sanity: detected standstill/turbine phases match the SCADA power curve; record ARI + chosen k in README results table. Fix whatever reality breaks (channel-name mismatches, sign conventions) — each fix with its own test + commit.**
 - [ ] **Step 5: Commit `feat: real-data smoke tests + first TU results` and STOP for review with Stefan (acceptance gate: fusion ARI ≥ 0.9 on TU).**
 
 ### Task 14: BeatsFeaturizer (extra `[beats]`)
