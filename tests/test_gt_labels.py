@@ -141,8 +141,8 @@ def test_gt_channel_names_with_spaces_and_dots_round_trip_through_gantner_reader
 # gt_labels
 # ---------------------------------------------------------------------------
 
-RULES = GtRules()  # nominal=375.0, speed_eps_frac=0.05, power_eps_mw=2.0, ramp=1.0 MW/s,
-# transition_buffer_s=10.0, n_load_bins=3
+RULES = GtRules()  # nominal=101.0 (measured, Task 13), speed_eps_frac=0.05, power_eps_mw=2.0,
+# ramp=1.0 MW/s, transition_buffer_s=10.0, n_load_bins=3
 WINDOW_S = 5.0  # matches the scenarios' hand-derivation (buffer=10s -> 2-window radius)
 
 
@@ -351,8 +351,14 @@ def test_gt_labels_load_bin_degenerate_single_value_group_still_gets_bin_zero() 
 
 
 def test_gt_labels_standstill_base_rule() -> None:
+    # Speeds derived from RULES.speed_nominal_rpm (not a hardcoded magic number) so this test
+    # keeps exercising "clearly below the standstill epsilon" regardless of what
+    # speed_nominal_rpm is currently set to (Task 13 changed it from an unverified 375 to a
+    # measured 101.0 -- a hardcoded sub-threshold value here would have silently stopped being
+    # sub-threshold and turned this into a false green).
+    standstill_eps = RULES.speed_eps_frac * RULES.speed_nominal_rpm
     power = [0.5, -1.5, 0.0]
-    speed = [10.0, -5.0, 18.0]  # all |speed| < 0.05*375 = 18.75
+    speed = [0.2 * standstill_eps, -0.4 * standstill_eps, 0.8 * standstill_eps]
     scada = _scada(power, speed)
 
     result = gt_labels(scada, RULES, window_s=WINDOW_S)
