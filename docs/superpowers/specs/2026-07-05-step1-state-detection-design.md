@@ -173,9 +173,11 @@ end-to-end first, BeatsFeaturizer second.
 - Campaign-1 summary table: ARI / macro-F1 / boundary median |Δt| per variant
   (modality × audio-branch featurizer) × clusterer × recording, so the handcrafted-vs-
   BEATs and audio-vs-vibration-vs-fusion questions are answered in one table.
-- Acceptance: TU fusion variant reaches ARI ≥ 0.9 against SCADA GT on covered windows
-  (expectation from prior v1 work: ~1.0 on clean segments); all tests green; repo
-  clones + installs + runs from README alone.
+- Acceptance: TU fusion variant reaches ARI ≥ 0.9 against SCADA GT on covered windows;
+  all tests green; repo clones + installs + runs from README alone. No result from the
+  v1 prototype counts as evidence for this data: nominal speed, machine frequencies,
+  state count k (via sweep), channel liveness, and GT thresholds are all verified on
+  the June-25 recordings themselves before results are reported.
 - GitHub: private repo `StefanKrum/rowii-monitor`, pushed from day one, conventional
   commits, no AI attribution.
 
