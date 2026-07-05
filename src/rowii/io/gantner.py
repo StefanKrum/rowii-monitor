@@ -1,8 +1,14 @@
 """Reader for the Gantner 'UniversalDataBinFile' container used at Rodundwerk II.
 
-Layout (verified on the June-2026 delivery, see plan header): version-prefixed magic
-string, JSON metadata, channel descriptor block (name [unit] uuid per channel),
-a run of 0x2a padding, then frames of uint64 ns-timestamp + one float32 per channel.
+Layout: version-prefixed magic string, JSON metadata, channel descriptor block
+(name [unit] uuid per channel, each length-prefixed -- see `_valid_token_at`),
+a run of 0x2a padding, then frames of uint64 ns-timestamp + one float32 per
+channel. Verified against real files (Betriebsdaten `DeviceAppVersion` V2.17,
+TU vibration streams V2.18) during Task 13: earlier revisions of this reader
+had only ever been exercised against the synthetic test fixture
+(`tests/fixtures/gantner_builder.py`), which -- until Task 13's fix -- encoded
+a subtly different (and wrong) token length-prefix convention than the real
+delivery; see `_valid_token_at`'s docstring for the corrected semantic.
 """
 from __future__ import annotations
 
@@ -69,34 +75,81 @@ def _find_json(buf: bytes) -> tuple[dict[str, str], int]:
     raise GantnerFormatError("unterminated JSON metadata")
 
 
+def _valid_token_at(desc: bytes, i: int) -> tuple[str, int] | None:
+    """If a length-prefixed token validates starting at *i*, return `(payload, end)` with
+    `end` the index one past its NUL terminator; else `None`.
+
+    Length semantic verified against the real June-2026 delivery (Task 13): the u16
+    length prefix counts the payload bytes PLUS the terminating NUL itself (`length ==
+    len(payload) + 1`), not the payload alone -- so payload is `desc[i+2 : i+2+length-1]`
+    and the terminator is the single byte at `i+2+length-1`.
+    """
+    n = len(desc)
+    if i + 2 > n:
+        return None
+    length = struct.unpack_from("<H", desc, i)[0]
+    end = i + 2 + length
+    if not (2 <= length <= _MAX_TOKEN_LEN + 1 and end <= n):
+        return None
+    payload = desc[i + 2 : end - 1]
+    if all(0x20 <= b <= 0x7E for b in payload) and desc[end - 1] == 0x00:
+        return payload.decode("ascii"), end
+    return None
+
+
 def _scan_tokens(desc: bytes) -> list[str]:
     """Validating scan-tokenizer over the channel-descriptor region.
 
-    Every real token is length-prefixed: ``<u16 LE length L><L printable-ASCII
-    bytes>\\x00``. A plain printable-ASCII regex (the previous approach) cannot
-    distinguish a token's own 2-byte length prefix from real token bytes: whenever a
-    token's length L falls in [32, 126], the prefix's low byte (L & 0xFF) is itself a
-    printable ASCII character, and a regex scan mis-parses it as a spurious 1-character
-    token, silently corrupting the following name/unit.
+    Every real token is length-prefixed: ``<u16 LE length L><L-1 printable-ASCII
+    bytes>\\x00`` -- *L* counts the terminating NUL as part of the length (see
+    `_valid_token_at`). A plain printable-ASCII regex cannot distinguish a token's own
+    2-byte length prefix from real token bytes: whenever a token's length L falls in
+    [32, 126], the prefix's low byte (L & 0xFF) is itself a printable ASCII character,
+    and a regex scan mis-parses it as a spurious 1-character token, silently corrupting
+    the following name/unit.
 
     This scanner is structural instead: at each byte offset it validates that a
     plausible length-prefixed token actually starts there (length in range, all payload
     bytes printable, NUL terminator present) before accepting it. Unknown filler bytes
     between tokens (observed as a small per-channel descriptor blob in the container's
     reverse-engineered binary layout) fail validation and are skipped one byte at a time.
+
+    Maximal munch: the real per-channel record layout has a short run of fixed
+    non-token bytes right before each token's true length prefix (Task 13 finding --
+    e.g. `2b 00 02 00` before a UUID token's own `<len><uuid>\\x00`). Those bytes can,
+    read from one byte earlier than the genuine token's start, coincidentally validate
+    as a SHORT token themselves (short length, one printable payload byte, NUL
+    terminator) -- e.g. a `length=2` token whose single payload byte happens to be the
+    genuine token's own length-prefix low byte. Accepting such a short match would
+    silently swallow the position where the real, longer token starts and drop it
+    entirely. So whenever a candidate token validates at `i` with end `end`, this
+    scanner first checks every later position `j` in `(i, end)` for a LONGER valid
+    token (one whose own `end` extends past the candidate's `end`) and prefers that
+    one instead of accepting the shorter match -- the ambiguity can only arise within
+    the short candidate's own byte span, since a `length` field is itself only 2 bytes
+    wide, so this lookahead never needs to extend past the current candidate's `end`.
     """
     tokens: list[str] = []
     i = 0
     n = len(desc)
     while i + 2 <= n:
-        length = struct.unpack_from("<H", desc, i)[0]
-        end = i + 2 + length
-        if 1 <= length <= _MAX_TOKEN_LEN and end < n:
-            payload = desc[i + 2 : end]
-            if all(0x20 <= b <= 0x7E for b in payload) and desc[end] == 0x00:
-                tokens.append(payload.decode("ascii"))
-                i = end + 1
+        candidate = _valid_token_at(desc, i)
+        if candidate is not None:
+            _, cand_end = candidate
+            better = None
+            for j in range(i + 1, cand_end):
+                alt = _valid_token_at(desc, j)
+                if alt is not None and alt[1] > cand_end:
+                    better = (j, alt)
+                    break
+            if better is None:
+                tokens.append(candidate[0])
+                i = cand_end
                 continue
+            j, (payload, end) = better
+            tokens.append(payload)
+            i = end
+            continue
         i += 1
     return tokens
 
