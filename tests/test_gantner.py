@@ -95,3 +95,23 @@ def test_filler_bytes_between_tokens_are_skipped(tmp_path) -> None:
     assert f.header.channel_units == ["Pa", "m/s2"]
     assert f.header.n_frames == 20
     np.testing.assert_allclose(f.data, data, rtol=1e-6)
+
+
+def test_real_channel_record_gap_pattern_does_not_shadow_the_uuid_token(tmp_path) -> None:
+    # Task 13 real-data finding (Betriebsdaten 2026-06-25_05-00-00.dat and TU vib files):
+    # every real channel record has FIXED gap bytes between name-end and unit-start
+    # (`00 00 08 00 08 00 02 00`) and between unit-end and the uuid's own length prefix
+    # (`2b 00 02 00`). The second gap's tail happens to overlap the uuid length-prefix's own
+    # bytes in a way that, read one byte later than intended, forms an accidental but
+    # STRUCTURALLY VALID short token (length=2, one printable payload byte, NUL terminator) --
+    # in the real file this shadows the genuine 36-byte uuid token entirely, dropping the
+    # channel. A validating scan-tokenizer must prefer the longer, later-starting genuine
+    # token over the shorter one that appears to validate first when scanning byte by byte.
+    real_gap_pattern = bytes.fromhex("00000800080002002b00020002")
+    p = build_gantner_file(
+        tmp_path / "t.dat", ["ChA", "ChB"], np.zeros((5, 2), dtype=np.float32),
+        units=["Pa", "m/s2"], raw_filler=real_gap_pattern,
+    )
+    f = read_gantner(p)
+    assert f.header.channel_names == ["ChA", "ChB"]
+    assert f.header.channel_units == ["Pa", "m/s2"]
