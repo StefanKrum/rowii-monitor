@@ -128,8 +128,18 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
     Returns:
         An `EvalResult` (see field docs for exactly which windows/timeline each metric
         is computed over).
+
+    Raises:
+        ValueError: When no windows have a known ground-truth state.
     """
     eval_mask = gt["state"].to_numpy() != _UNKNOWN
+    n_eval = int(eval_mask.sum())
+    if n_eval == 0:
+        raise ValueError(
+            "no windows with a known ground-truth state; cannot evaluate "
+            "(all gt.state == 'unknown' — check SCADA coverage for this run)"
+        )
+
     gt_eval_states = gt.loc[eval_mask, "state"]
     pred_eval = pred[eval_mask]
 
@@ -170,6 +180,6 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
         macro_f1=macro_f1,
         confusion=confusion,
         boundary_median_abs_s=boundary_median_abs_s,
-        n_eval_windows=int(eval_mask.sum()),
+        n_eval_windows=n_eval,
         mapping=mapping,
     )

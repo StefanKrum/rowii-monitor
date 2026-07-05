@@ -201,3 +201,12 @@ def test_imperfect_prediction_yields_macro_f1_below_one() -> None:
 
     assert result.macro_f1 < 1.0
     assert result.ari < 1.0
+
+
+def test_evaluate_raises_clear_error_when_all_gt_windows_are_unknown() -> None:
+    """Evaluate must raise a clear ValueError when no GT windows have a known state."""
+    grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=4)
+    pred = np.array([0, 0, 1, 1], dtype=np.int64)
+    gt = pd.DataFrame({"state": ["unknown"] * 4, "load_bin": [-1] * 4})
+    with pytest.raises(ValueError, match="known ground-truth state"):
+        evaluate(pred, gt, grid)
