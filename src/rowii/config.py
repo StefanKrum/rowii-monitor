@@ -16,7 +16,11 @@ class WindowConfig:
 
 @dataclass(frozen=True)
 class GtRules:
-    speed_nominal_rpm: float = 375.0       # 8-pole 50 Hz machine: 375 rpm hypothesis;
+    # Measured plateau of 1_Drehzahl_Ist during full-power turbine generation (Task 13,
+    # 2026-06-25 05:00 Betriebsdaten hour: median while power > 50 MW). The pre-delivery
+    # "8-pole 50 Hz machine" 375 rpm hypothesis was off by 73% and is superseded by this
+    # measured value; see results/parameter_verification.md for the full derivation.
+    speed_nominal_rpm: float = 101.0
     speed_eps_frac: float = 0.05           # validated against data in Task 5/13
     power_eps_mw: float = 2.0
     ramp_mw_per_s: float = 1.0
