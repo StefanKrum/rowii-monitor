@@ -1,0 +1,175 @@
+"""ARI / Hungarian-matched macro-F1 / boundary-deviation evaluation against SCADA GT.
+
+`evaluate` compares a detector's per-window cluster labels (anonymous integer ids,
+`rowii.state.detect.DetectionResult.frame_labels`) against `rowii.scada.labels.gt_labels`
+output. Windows with `gt.state == "unknown"` (no SCADA coverage, or a rule genuinely
+could not decide) are dropped BEFORE every metric except the boundary deviation, which
+by construction runs on the full per-window timeline (see `_state_change_indices`).
+
+Cluster ids are an arbitrary permutation with no inherent correspondence to GT state
+names (KMeans/GMM label ids are assigned by the clustering algorithm, not by this
+module) -- `_hungarian_mapping` recovers the best 1:1 correspondence via the Hungarian
+algorithm (`scipy.optimize.linear_sum_assignment`) on the GT-state x predicted-cluster
+contingency table, maximizing the total number of matched windows. When there are more
+predicted clusters than GT states (k > #states, e.g. load sub-structure appearing as
+extra clusters -- spec §5), every cluster beyond the 1:1 assignment is left over; each
+such leftover cluster maps independently onto whichever GT state its own column in the
+contingency table maximizes (not restricted to already-matched states), so a k-sweep
+run never leaves a predicted cluster unmapped.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import linear_sum_assignment
+from sklearn.metrics import adjusted_rand_score, f1_score
+
+from rowii.signals.windows import WindowGrid
+
+_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class EvalResult:
+    """Metrics comparing detected states against SCADA ground truth on one run."""
+
+    ari: float
+    """Adjusted Rand Index, computed on eval windows (gt.state != "unknown") only."""
+    macro_f1: float
+    """Macro-averaged F1 of Hungarian-mapped predicted states vs GT states."""
+    confusion: pd.DataFrame
+    """Cross-tabulation: rows = GT states, columns = mapped predicted states."""
+    boundary_median_abs_s: float | None
+    """Median |Δt| (seconds) from each GT state change to the nearest predicted state
+    change, both found on the FULL per-window timeline (not eval-windows-only).
+    `None` when either side has zero countable state changes."""
+    n_eval_windows: int
+    """Count of windows with gt.state != "unknown" -- the population every metric
+    except `boundary_median_abs_s` is computed over."""
+    mapping: dict[int, str]
+    """Predicted cluster id -> GT state name, from Hungarian matching (see module
+    docstring for the k > #states extra-cluster fallback)."""
+
+
+def _hungarian_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]:
+    """Cluster id -> GT state name, one entry per cluster id present in *pred*.
+
+    *gt_states* and *pred* must already be restricted to eval windows (this function
+    assumes every id in *pred* has a genuine, non-"unknown" GT counterpart to be
+    matched against).
+    """
+    state_names = sorted(gt_states.unique())
+    cluster_ids = sorted({int(c) for c in np.unique(pred)})
+
+    contingency = pd.DataFrame(0, index=state_names, columns=cluster_ids, dtype=np.int64)
+    for state, cluster in zip(gt_states, pred, strict=True):
+        contingency.loc[state, int(cluster)] += 1
+
+    # linear_sum_assignment minimizes cost; negate to MAXIMIZE matched-window count.
+    # Rectangular support (more clusters than states, or vice versa) yields exactly
+    # min(n_states, n_clusters) pairs -- scipy handles this natively, no padding needed.
+    row_idx, col_idx = linear_sum_assignment(-contingency.to_numpy())
+
+    mapping: dict[int, str] = {}
+    for r, c in zip(row_idx, col_idx, strict=True):
+        mapping[cluster_ids[c]] = state_names[r]
+
+    # Clusters left unmatched by the 1:1 Hungarian assignment (k > #states) each fall
+    # back independently to whichever GT state their own column maximizes.
+    for cluster_id in cluster_ids:
+        if cluster_id not in mapping:
+            column = contingency[cluster_id]
+            mapping[cluster_id] = str(column.idxmax())
+
+    return mapping
+
+
+def _state_change_indices(states: list[str]) -> list[int]:
+    """Window indices *i* (>= 1) where `states[i] != states[i - 1]`, excluding any
+    change touching `"unknown"` on either side (neither a genuine GT transition nor a
+    meaningful predicted one -- see module docstring)."""
+    return [
+        i
+        for i in range(1, len(states))
+        if states[i] != states[i - 1] and _UNKNOWN not in (states[i], states[i - 1])
+    ]
+
+
+def _boundary_median_abs_s(
+    gt_state_col: pd.Series, mapped_full: np.ndarray, grid: WindowGrid
+) -> float | None:
+    window_s = grid.window_ns / 1e9
+    gt_changes = _state_change_indices(list(gt_state_col))
+    pred_changes = _state_change_indices(list(mapped_full))
+
+    if not gt_changes or not pred_changes:
+        return None
+
+    pred_changes_arr = np.asarray(pred_changes, dtype=np.float64)
+    deviations = [
+        float(np.min(np.abs(pred_changes_arr - gt_i))) * window_s for gt_i in gt_changes
+    ]
+    return float(np.median(deviations))
+
+
+def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult:
+    """Compare *pred* (per-window cluster ids) against *gt* (`gt_labels` output).
+
+    Args:
+        pred: Per-window predicted cluster ids, shape (grid.n_windows,).
+        gt: Ground-truth DataFrame (`rowii.scada.labels.gt_labels` output), indexed
+            0..grid.n_windows - 1, with a `state` column (including possibly
+            `"unknown"`).
+        grid: The `WindowGrid` both *pred* and *gt* were computed against; used only
+            to convert the boundary metric's window-index deviations into seconds.
+
+    Returns:
+        An `EvalResult` (see field docs for exactly which windows/timeline each metric
+        is computed over).
+    """
+    eval_mask = gt["state"].to_numpy() != _UNKNOWN
+    gt_eval_states = gt.loc[eval_mask, "state"]
+    pred_eval = pred[eval_mask]
+
+    mapping = _hungarian_mapping(gt_eval_states, pred_eval)
+
+    ari = float(adjusted_rand_score(gt_eval_states.to_numpy(), pred_eval))
+
+    mapped_eval = np.array([mapping[int(c)] for c in pred_eval], dtype=object)
+    state_names = sorted(gt_eval_states.unique())
+    macro_f1 = float(
+        f1_score(
+            gt_eval_states.to_numpy(),
+            mapped_eval,
+            average="macro",
+            labels=state_names,
+            zero_division=0,
+        )
+    )
+
+    confusion = pd.crosstab(
+        pd.Series(gt_eval_states.to_numpy(), name="gt"),
+        pd.Series(mapped_eval, name="predicted"),
+    )
+
+    # Boundary metric runs on the FULL timeline (all windows, including the ones
+    # dropped above for every other metric) -- a cluster id outside `mapping` can only
+    # occur here if it has zero eval-window presence at all (fully confined to
+    # "unknown" zones); such an id maps to a placeholder string that can never equal a
+    # real GT state name, so it can still register as a "predicted change" without
+    # ever spuriously matching a GT state by coincidence.
+    mapped_full = np.array(
+        [mapping.get(int(c), "__unmapped__") for c in pred], dtype=object
+    )
+    boundary_median_abs_s = _boundary_median_abs_s(gt["state"], mapped_full, grid)
+
+    return EvalResult(
+        ari=ari,
+        macro_f1=macro_f1,
+        confusion=confusion,
+        boundary_median_abs_s=boundary_median_abs_s,
+        n_eval_windows=int(eval_mask.sum()),
+        mapping=mapping,
+    )
