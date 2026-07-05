@@ -272,6 +272,29 @@ def test_gt_labels_pump_via_negative_power() -> None:
     assert list(result["load_bin"]) == [0, 0, 0]
 
 
+def test_gt_labels_pump_mode_with_negative_speed_is_still_nominal() -> None:
+    # Task 13 real-data finding (Rodundwerk II, 2026-06-25 09:00 pump run): 1_Drehzahl_Ist is
+    # SIGNED by rotation direction at this plant -- positive during turbine operation, negative
+    # during pump operation (a reversible pump-turbine spins the opposite way in each mode).
+    # The base-state "nominal speed" check must use |speed|, exactly like the standstill check
+    # already does two lines above it in _base_state -- a negative-but-nominal-magnitude speed
+    # must not silently fail the nominal-speed gate and fall through to "transition" for the
+    # entire pump run (the bug this test guards against: is_nominal previously compared signed
+    # speed directly against a positive threshold, so it was never true when speed < 0).
+    #
+    # Uses an explicit speed_nominal_rpm (independent of RULES' own default) so this test's
+    # pass/fail is decoupled from whatever nominal-speed value GtRules ships with -- the
+    # magnitude/sign behaviour under test is orthogonal to that number.
+    rules = dataclasses.replace(RULES, speed_nominal_rpm=101.0)
+    power = [-281.0, -281.0, -281.0]
+    speed = [-100.8, -100.8, -100.8]  # measured PU-morning plateau magnitude, negated
+    scada = _scada(power, speed)
+
+    result = gt_labels(scada, rules, window_s=WINDOW_S)
+
+    assert list(result["state"]) == ["pump", "pump", "pump"]
+
+
 def test_gt_labels_pump_via_flow_pu_dominance_with_positive_power() -> None:
     # Pump power may be logged POSITIVE at this plant -- that is exactly why flow dominance
     # (flow_pu > flow_tu at nominal speed) overrides the naive power-sign rule: without the
