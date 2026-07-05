@@ -130,3 +130,86 @@ def test_betriebsdaten_duplicate_hour_prefers_larger_file_and_logs_warning(
         for record in caplog.records
         if record.levelno == logging.WARNING
     )
+
+
+def test_betriebsdaten_equal_size_tie_break_prefers_lexicographically_smaller_name(
+    tmp_path, caplog, monkeypatch
+):
+    meas = tmp_path / "20260626 Messung"
+    bd = meas / "Betriebsdaten"
+    bd.mkdir(parents=True)
+    winner = bd / "2026-06-25_08-00-00.dat"
+    loser = bd / "2026-06-25_08-00-00_1.dat"
+    # identical byte counts -> size comparison alone can't break the tie
+    winner.write_bytes(b"x" * 16)
+    loser.write_bytes(b"x" * 16)
+
+    # Directory iteration order is arbitrary (Path.iterdir gives no ordering
+    # guarantee). Force the "wrong" arrival order here -- loser first -- so
+    # the assertion below can only pass if the tie-break is a deterministic
+    # name comparison, not an accident of this filesystem's iterdir() order.
+    real_iterdir = Path.iterdir
+
+    def reversed_iterdir(self: Path):
+        entries = list(real_iterdir(self))
+        return iter(sorted(entries, key=lambda p: p.name, reverse=True))
+
+    monkeypatch.setattr(Path, "iterdir", reversed_iterdir)
+
+    with caplog.at_level(logging.WARNING):
+        index = discover(tmp_path)
+
+    assert len(index.betriebsdaten) == 1
+    assert index.betriebsdaten[0] == winner
+    assert any(
+        "2026-06-25" in record.message and "08" in record.message
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    )
+
+
+def test_masked_per_stream_gap_within_a_run_logs_warning(tmp_path, caplog):
+    # mic files every 10 min (06:00, 06:10, 06:20, 06:30) pool with vib files
+    # only at the endpoints (06:00, 06:30) -- the pooled sequence never has a
+    # gap > 15 min (mic fills every slot), so this stays one run, but the vib
+    # stream alone has a masked 30-min gap between its two files.
+    meas = tmp_path / "20260626 Messung"
+    tu = meas / "TU"
+    for t in ("06-00-00", "06-10-00", "06-20-00", "06-30-00"):
+        _touch(tu / f"RAWGeneratorMic__0_2026-06-25_{t}_000000.dat")
+    for t in ("06-00-00", "06-30-00"):
+        _touch(tu / f"RAWGeneratorVib__2_2026-06-25_{t}_000000.dat")
+
+    with caplog.at_level(logging.WARNING):
+        index = discover(tmp_path)
+
+    tu_runs = [r for r in index.runs if r.name == "tu"]
+    assert len(tu_runs) == 1
+    assert len(tu_runs[0].files["RAWGeneratorVib__2"]) == 2
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("RAWGeneratorVib__2" in msg and "tu" in msg for msg in warnings)
+
+
+def test_burst_filename_with_unparseable_date_is_excluded_and_logs_warning(
+    tmp_path, caplog
+):
+    meas = tmp_path / "20260626 Messung"
+    tu = meas / "TU"
+    # matches the burst filename *shape* (regex doesn't validate month range)
+    # but month=13 fails strptime -- must be excluded, not silently dropped.
+    bad_name = "RAWGeneratorMic__0_2026-13-05_06-00-00_000000.dat"
+    _touch(tu / bad_name)
+    _touch(tu / "RAWGeneratorMic__0_2026-06-25_06-00-00_000000.dat")
+
+    with caplog.at_level(logging.WARNING):
+        index = discover(tmp_path)
+
+    tu_runs = [r for r in index.runs if r.name == "tu"]
+    assert len(tu_runs) == 1
+    files = tu_runs[0].files["RAWGeneratorMic__0"]
+    assert len(files) == 1
+    assert files[0].path.name == "RAWGeneratorMic__0_2026-06-25_06-00-00_000000.dat"
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(bad_name in msg for msg in warnings)
