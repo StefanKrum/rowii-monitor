@@ -11,6 +11,7 @@ from rowii.signals.features import (
     AudioFeaturizer,
     VibFeaturizer,
     fuse,
+    machine_band_bin_counts,
     zscore,
 )
 
@@ -36,6 +37,60 @@ def test_machine_hz_constant_has_the_three_documented_frequencies() -> None:
 
 
 # ---------------------------------------------------------------------------
+# machine_band_bin_counts (dedicated high-resolution PSD pass, fix round 1)
+# ---------------------------------------------------------------------------
+
+
+def test_machine_band_bin_counts_all_three_bands_resolved_at_50khz_1s_window() -> None:
+    """At 50 kHz with a 1-s window (S=50_000), the dedicated high-resolution
+    PSD pass has `nperseg=S` -> 1 Hz bins. All three MACHINE_HZ bands are
+    wider than 1 Hz (shaft: 1.25 Hz, blade_pass: 8.75 Hz,
+    guide_vane_pass: 25 Hz), so each must contain >= 1 real bin -- the
+    nearest-bin fallback is never exercised in this regime.
+    """
+    rate_hz = 50_000.0
+    n_samples = int(rate_hz)
+
+    counts = machine_band_bin_counts(rate_hz, n_samples)
+
+    assert counts["shaft"] >= 1
+    assert counts["blade_pass"] >= 1
+    assert counts["guide_vane_pass"] >= 1
+
+
+def test_machine_band_bin_counts_shaft_band_resolved_at_10khz_vib_rate_1s_window() -> None:
+    """Vibration path sanity check at a lower sampling rate: 10 kHz with a
+    1-s window (S=10_000) also gives 1 Hz bins, so the shaft band -- the
+    narrowest of the three (1.25 Hz wide) -- is still resolved by >= 1 real
+    bin, not just at audio's 50 kHz.
+    """
+    rate_hz = 10_000.0
+    n_samples = int(rate_hz)
+
+    counts = machine_band_bin_counts(rate_hz, n_samples)
+
+    assert counts["shaft"] >= 1
+
+
+def test_machine_band_bin_counts_shaft_band_is_zero_bins_at_old_coarse_resolution() -> None:
+    """Sanity check that the reviewer's diagnosis is reproduced by the
+    formula itself: at the OLD averaged-Welch-only resolution
+    (nperseg=4096 @ 50 kHz -> ~12.2 Hz bins), the shaft band (1.25 Hz wide)
+    contains zero bins. `machine_band_bin_counts` takes `n_samples` (the
+    dedicated high-res pass's nperseg), not the coarse 4096/2048 rule, so
+    this test calls it with `n_samples=4096` to probe that OLD resolution
+    specifically, confirming the module-level helper's formula agrees with
+    the hand-derived numerics in the design analysis before this fix.
+    """
+    old_resolution_nperseg = 4096
+    rate_hz = 50_000.0
+
+    counts = machine_band_bin_counts(rate_hz, old_resolution_nperseg)
+
+    assert counts["shaft"] == 0
+
+
+# ---------------------------------------------------------------------------
 # AudioFeaturizer
 # ---------------------------------------------------------------------------
 
@@ -49,10 +104,22 @@ def test_audio_featurizer_44hz_sine_at_50khz_blade_pass_band_dominates() -> None
     outside the shaft (6.25 Hz +/- 10%) and guide_vane_pass (125 Hz +/- 10%)
     bands, so its band-energy feature must be the largest of the three for
     the channel carrying the tone.
+
+    At 50 kHz with a 1-s window (S=50_000 samples), the dedicated
+    high-resolution machine-band PSD pass has 1 Hz bins (`nperseg=S`), so the
+    blade_pass band (39.375-48.125 Hz, width 8.75 Hz) is resolved by several
+    REAL bins -- not the nearest-bin-to-center fallback. Assert that
+    directly via `machine_band_bin_counts` so a future change that silently
+    regresses to the coarse (0-bin) resolution is caught here too, not just
+    by the energy-ordering assertion below.
     """
     rate_hz = 50_000.0
+    n_samples = int(rate_hz)  # 1-s window
     windows = _windows(_sine(44.0, rate_hz))
     feat = AudioFeaturizer()
+
+    bin_counts = machine_band_bin_counts(rate_hz, n_samples)
+    assert bin_counts["blade_pass"] >= 1
 
     out = feat.transform(windows, rate_hz)
     names = feat.feature_names()
@@ -62,6 +129,69 @@ def test_audio_featurizer_44hz_sine_at_50khz_blade_pass_band_dominates() -> None
     guide = out[0, names.index("ch0_band_guide_vane_pass")]
     assert blade > shaft
     assert blade > guide
+
+
+def test_audio_featurizer_625hz_sine_at_50khz_shaft_band_dominates() -> None:
+    """A 6.25 Hz tone sits exactly at the shaft band's center (6.25 Hz +/-
+    10%, i.e. [5.625, 6.875] Hz) and far outside the blade_pass (43.75 Hz
+    +/- 10%) and guide_vane_pass (125 Hz +/- 10%) bands.
+
+    This is the shaft-band analogue of the blade_pass test above: with the
+    OLD averaged-Welch-only implementation (`nperseg=4096` @ 50 kHz, 12.2 Hz
+    resolution), the shaft band contains ZERO real bins (width 1.25 Hz <<
+    12.2 Hz resolution) and the nearest-bin fallback lands on the 12.2 Hz
+    bin -- a frequency that is NOT inside the true shaft band and would, for
+    example, equally "detect" any tone anywhere in the [~0, ~18] Hz range as
+    shaft-band energy. The dedicated high-resolution pass (1 Hz bins at 1-s
+    windows) resolves the shaft band with a genuine in-band bin instead.
+    """
+    rate_hz = 50_000.0
+    n_samples = int(rate_hz)  # 1-s window
+    windows = _windows(_sine(MACHINE_HZ["shaft"], rate_hz))
+    feat = AudioFeaturizer()
+
+    bin_counts = machine_band_bin_counts(rate_hz, n_samples)
+    assert bin_counts["shaft"] >= 1
+
+    out = feat.transform(windows, rate_hz)
+    names = feat.feature_names()
+
+    shaft = out[0, names.index("ch0_band_shaft")]
+    blade = out[0, names.index("ch0_band_blade_pass")]
+    guide = out[0, names.index("ch0_band_guide_vane_pass")]
+    assert shaft > blade
+    assert shaft > guide
+
+
+def test_audio_featurizer_shaft_band_does_not_alias_a_tone_outside_the_true_band() -> None:
+    """Reproduces the reviewer-identified bug directly: under the OLD
+    single-averaged-Welch-PSD implementation, the shaft band's nearest-bin
+    fallback landed on the 12.2 Hz bin (the resolution of `nperseg=4096` @
+    50 kHz) -- a frequency well outside the true shaft band
+    [5.625, 6.875] Hz. A pure tone placed AT that old fallback frequency
+    (12.207 Hz, no relation to the true shaft band) must NOT register a
+    higher "shaft" band-energy reading than a pure tone placed genuinely
+    inside the shaft band. This is the ordering test the coarse-resolution
+    implementation actually fails (unlike the plain energy-dominance
+    checks above, which happen to still pass under the old code because
+    spectral leakage from a 6.25 Hz tone still peaks nearer the 12.2 Hz bin
+    than the 48.8/125-ish Hz bins) -- so this is the genuine RED case for
+    the fix, verified against the pre-fix implementation before writing it.
+    """
+    rate_hz = 50_000.0
+    true_shaft_tone = _sine(MACHINE_HZ["shaft"], rate_hz)
+    old_fallback_bin_hz = 50_000.0 / 4096  # ~12.207 Hz: the old nperseg=4096 resolution
+    false_tone_outside_true_band = _sine(old_fallback_bin_hz, rate_hz)
+    windows = np.stack([true_shaft_tone, false_tone_outside_true_band])[:, :, np.newaxis]
+    feat = AudioFeaturizer()
+
+    out = feat.transform(windows, rate_hz)
+    names = feat.feature_names()
+    idx = names.index("ch0_band_shaft")
+
+    true_band_energy = out[0, idx]
+    false_band_energy = out[1, idx]
+    assert true_band_energy > false_band_energy
 
 
 def test_audio_featurizer_white_noise_centroid_exceeds_pure_low_sine_centroid() -> None:
@@ -152,6 +282,30 @@ def test_audio_featurizer_does_not_drop_dead_channels() -> None:
 
 def test_vib_featurizer_has_the_documented_name() -> None:
     assert VibFeaturizer().name == "vib-handcrafted"
+
+
+def test_vib_featurizer_625hz_sine_at_10khz_shaft_band_resolved_and_dominates() -> None:
+    """Vibration path at a lower sampling rate (10 kHz, typical accelerometer
+    rate) with a 1-s window: the shaft band must be resolved by a genuine
+    in-band bin (not the nearest-bin fallback), verified directly via
+    `machine_band_bin_counts`, and a 6.25 Hz tone's shaft-band energy must
+    dominate the blade_pass/guide_vane_pass bands for that channel -- the
+    same guarantee as the audio path, now checked on VibFeaturizer.
+    """
+    rate_hz = 10_000.0
+    n_samples = int(rate_hz)  # 1-s window
+    windows = _windows(_sine(MACHINE_HZ["shaft"], rate_hz))
+    feat = VibFeaturizer()
+
+    bin_counts = machine_band_bin_counts(rate_hz, n_samples)
+    assert bin_counts["shaft"] >= 1
+
+    out = feat.transform(windows, rate_hz)
+    names = feat.feature_names()
+
+    shaft = out[0, names.index("ch0_band_shaft")]
+    blade = out[0, names.index("ch0_band_blade_pass")]
+    assert shaft > blade
 
 
 def test_vib_featurizer_dead_channel_dropped_with_warning_and_feature_count_shrinks(
