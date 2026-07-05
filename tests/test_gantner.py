@@ -46,3 +46,52 @@ def test_read_header_is_cheap_and_consistent(tmp_path) -> None:
     p = build_gantner_file(tmp_path / "t.dat", ["A", "B"], data, rate_hz=50.0)
     h = read_header(p)
     assert h.n_frames == 1000 and abs(h.sample_rate_hz - 50.0) < 0.5
+
+
+def test_channel_name_of_length_36_roundtrips(tmp_path) -> None:
+    # 36 is the length of every uuid.uuid4() string, so its own 2-byte little-endian
+    # length prefix has low byte 0x24 ('$') — printable ASCII. A name of the same length
+    # reproduces the same length-prefix/token collision for a *name* token, not just a UUID.
+    name = "N" * 36
+    data = np.zeros((5, 1), dtype=np.float32)
+    p = build_gantner_file(tmp_path / "t.dat", [name], data, units=["Pa"])
+    f = read_gantner(p)
+    assert f.header.channel_names == [name]
+    assert f.header.channel_units == ["Pa"]
+
+
+def test_channel_name_of_length_50_roundtrips(tmp_path) -> None:
+    # length 50 -> low byte 0x32 ('2'), a different point in the printable-ASCII collision
+    # range (32-126) than the UUID-driven 36-char case.
+    name = "N" * 50
+    data = np.zeros((5, 1), dtype=np.float32)
+    p = build_gantner_file(tmp_path / "t.dat", [name], data, units=["Pa"])
+    f = read_gantner(p)
+    assert f.header.channel_names == [name]
+    assert f.header.channel_units == ["Pa"]
+
+
+def test_channel_unit_of_length_40_roundtrips(tmp_path) -> None:
+    # length 40 -> low byte 0x28 ('('), exercising the same collision class on the unit
+    # token specifically, with a short (unaffected) name alongside it.
+    unit = "U" * 40
+    data = np.zeros((5, 1), dtype=np.float32)
+    p = build_gantner_file(tmp_path / "t.dat", ["ChA"], data, units=[unit])
+    f = read_gantner(p)
+    assert f.header.channel_names == ["ChA"]
+    assert f.header.channel_units == [unit]
+
+
+def test_filler_bytes_between_tokens_are_skipped(tmp_path) -> None:
+    # Simulates unknown filler bytes between name/unit tokens and the UUID token of each
+    # channel (observed as a ~16-byte per-channel descriptor blob during the V2.18 reverse
+    # engineering). A validating scan-tokenizer must reject-and-advance through this filler
+    # rather than mis-parsing bytes inside it as spurious tokens.
+    data = np.random.default_rng(1).normal(size=(20, 2)).astype(np.float32)
+    p = build_gantner_file(tmp_path / "t.dat", ["ChA", "ChB"], data,
+                           units=["Pa", "m/s2"], filler_bytes=16)
+    f = read_gantner(p)
+    assert f.header.channel_names == ["ChA", "ChB"]
+    assert f.header.channel_units == ["Pa", "m/s2"]
+    assert f.header.n_frames == 20
+    np.testing.assert_allclose(f.data, data, rtol=1e-6)

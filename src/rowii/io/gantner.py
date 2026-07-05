@@ -7,6 +7,7 @@ a run of 0x2a padding, then frames of uint64 ns-timestamp + one float32 per chan
 from __future__ import annotations
 
 import json
+import logging
 import re
 import struct
 from dataclasses import dataclass
@@ -14,10 +15,12 @@ from pathlib import Path
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 _MAGIC = b"UniversalDataBinFile - GANTNER instruments"
-_UUID_RE = re.compile(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-_NAME_RE = re.compile(rb"([ -~]{1,60})\x00")
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _HEADER_SCAN = 64 * 1024
+_MAX_TOKEN_LEN = 200
 
 
 class GantnerFormatError(Exception):
@@ -66,6 +69,38 @@ def _find_json(buf: bytes) -> tuple[dict[str, str], int]:
     raise GantnerFormatError("unterminated JSON metadata")
 
 
+def _scan_tokens(desc: bytes) -> list[str]:
+    """Validating scan-tokenizer over the channel-descriptor region.
+
+    Every real token is length-prefixed: ``<u16 LE length L><L printable-ASCII
+    bytes>\\x00``. A plain printable-ASCII regex (the previous approach) cannot
+    distinguish a token's own 2-byte length prefix from real token bytes: whenever a
+    token's length L falls in [32, 126], the prefix's low byte (L & 0xFF) is itself a
+    printable ASCII character, and a regex scan mis-parses it as a spurious 1-character
+    token, silently corrupting the following name/unit.
+
+    This scanner is structural instead: at each byte offset it validates that a
+    plausible length-prefixed token actually starts there (length in range, all payload
+    bytes printable, NUL terminator present) before accepting it. Unknown filler bytes
+    between tokens (observed as a small per-channel descriptor blob in the container's
+    reverse-engineered binary layout) fail validation and are skipped one byte at a time.
+    """
+    tokens: list[str] = []
+    i = 0
+    n = len(desc)
+    while i + 2 <= n:
+        length = struct.unpack_from("<H", desc, i)[0]
+        end = i + 2 + length
+        if 1 <= length <= _MAX_TOKEN_LEN and end < n:
+            payload = desc[i + 2 : end]
+            if all(0x20 <= b <= 0x7E for b in payload) and desc[end] == 0x00:
+                tokens.append(payload.decode("ascii"))
+                i = end + 1
+                continue
+        i += 1
+    return tokens
+
+
 def _parse_descriptor(buf: bytes, json_end: int) -> tuple[list[str], list[str], int]:
     pad = re.search(rb"\x2a{8,}", buf[json_end:])
     if pad is None:
@@ -73,20 +108,24 @@ def _parse_descriptor(buf: bytes, json_end: int) -> tuple[list[str], list[str], 
     desc = buf[json_end : json_end + pad.start()]
     names: list[str] = []
     units: list[str] = []
-    cursor = 0
-    for m in _UUID_RE.finditer(desc):
-        # exclude the 2-byte little-endian length prefix of the UUID token itself: its
-        # low byte (uuid string length is always 36 = 0x24 = '$') is printable ASCII and
-        # would otherwise be mistaken for a 1-character name/unit token.
-        tokens = [
-            t.group(1).decode("ascii") for t in _NAME_RE.finditer(desc[cursor : m.start() - 2])
-        ]
-        tokens = [t for t in tokens if not _UUID_RE.fullmatch(t.encode())]
-        if not tokens:
-            raise GantnerFormatError("channel descriptor without a name token")
-        names.append(tokens[0])
-        units.append(tokens[1] if len(tokens) > 1 else "")
-        cursor = m.end()
+    pending: list[str] = []
+    for token in _scan_tokens(desc):
+        if _UUID_RE.fullmatch(token):
+            if not pending:
+                raise GantnerFormatError("channel descriptor without a name token")
+            names.append(pending[0])
+            units.append(pending[1] if len(pending) > 1 else "")
+            if len(pending) > 2:
+                logger.warning(
+                    "channel descriptor has %d name/unit tokens before its UUID "
+                    "(expected at most 2: name, unit); using the first two, "
+                    "ignoring: %r",
+                    len(pending),
+                    pending[2:],
+                )
+            pending = []
+        else:
+            pending.append(token)
     if not names:
         raise GantnerFormatError("no channels found in descriptor block")
     return names, units, json_end + pad.end()
