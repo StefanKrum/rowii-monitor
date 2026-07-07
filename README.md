@@ -94,11 +94,17 @@ ruff check .
 mypy src scripts
 ```
 
-## First real results (TU + PU-morning, 2026-06-25)
+## Step-1 grid results (TU + PU-morning + PU-afternoon, 2026-06-25)
 
-Tasks 13/13b ran Step 1 against the real June-25 Rodundwerk II delivery (35
-GB: 48 TU + 8 PU-morning burst files across 4 streams, 12 Betriebsdaten
-hours). Parameter verification (`scripts/verify_parameters.py`,
+The complete Step-1 grid ran against the real June-25 Rodundwerk II delivery
+(35 GB: 48 TU + 8 PU-morning + 13 PU-afternoon burst files across 4 streams,
+12 Betriebsdaten hours): all three recordings x {audio, vibration, fusion} x
+{KMeans, GMM}, plus TU and PU-morning x {audio-beats, fusion-beats} x both
+clusterers, plus the TU fusion KMeans k-sweep — `results/summary.csv` was
+deleted and fully regenerated from scratch (30 rows: 26 combinations + 4
+k-sweep rows, each combination exactly once). All KMeans numbers reproduce
+the earlier Task-13/13b/14 values bit-for-bit (fixed `random_seed = 7`).
+Parameter verification (`scripts/verify_parameters.py`,
 `results/parameter_verification.md`) measured every machine-parameter
 hypothesis directly from this data rather than carrying over pre-delivery
 guesses. **Measured nominal speed: 378.832 rpm** (`GT_CHANNELS["speed"]` =
@@ -112,46 +118,90 @@ speed sign, fixed in `is_nominal`).
 **State-level metrics** (primary view: each cluster maps independently to
 its majority GT state, so legitimate load-level sub-clusters within one
 operating mode are not penalized as confusion -- see
-`rowii.eval.metrics` module docstring):
+`rowii.eval.metrics` module docstring). TU has 8275 eval windows
+(122 standstill / 403 transition / 7750 turbine):
 
-| run | variant | state ARI | state accuracy | state macro-F1 |
-|---|---|---|---|---|
-| tu | audio | 0.684 | 0.960 | 0.721 |
-| tu | vibration | 0.153 | 0.942 | 0.509 |
-| tu | fusion | 0.687 | 0.959 | 0.705 |
-| tu | audio-beats | 0.000 | 0.937 | 0.322 |
-| tu | fusion-beats | 0.000 | 0.937 | 0.322 |
-| pu-morning | audio | 1.000 | 1.000 | 1.000 |
-| pu-morning | vibration | 1.000 | 1.000 | 1.000 |
-| pu-morning | fusion | 1.000 | 1.000 | 1.000 |
-| pu-morning | audio-beats | 1.000 | 1.000 | 1.000 |
+| run | variant | clusterer | state ARI | state accuracy | state macro-F1 |
+|---|---|---|---|---|---|
+| tu | audio | kmeans | 0.684 | 0.960 | 0.721 |
+| tu | audio | gmm | 0.691 | 0.954 | 0.509 |
+| tu | vibration | kmeans | 0.153 | 0.942 | 0.509 |
+| tu | vibration | gmm | 0.683 | 0.955 | 0.501 |
+| tu | fusion | kmeans | 0.687 | 0.959 | 0.705 |
+| tu | fusion | gmm | 0.704 | 0.956 | 0.513 |
+| tu | audio-beats | kmeans | 0.000 | 0.937 | 0.322 |
+| tu | audio-beats | gmm | 0.000 | 0.937 | 0.322 |
+| tu | fusion-beats | kmeans | 0.000 | 0.937 | 0.322 |
+| tu | fusion-beats | gmm | 0.000 | 0.937 | 0.322 |
+| pu-morning | *all five variants* | kmeans & gmm | 1.000 | 1.000 | 1.000 |
 
-PU-morning's 1.000 row is a degenerate case, not a detector triumph: this
+PU-morning's 1.000 rows are a degenerate case, not a detector triumph: this
 recording never leaves the pump state (all 719-1439 eval windows are GT
 `"pump"`), so every cluster's majority vote trivially resolves to
 `"pump"` and every state-level metric collapses to its
-identical-partition value by convention. The strict-metrics table below
-shows the same runs' `ARI = 0.000` (single-GT-class ARI is degenerate),
-which is the more honest read of PU-morning's actual information content.
+identical-partition value by convention -- for every variant and BOTH
+clusterers alike. The strict-metrics view shows the same runs'
+`ARI = 0.000` (single-GT-class ARI is degenerate), which is the more honest
+read of PU-morning's actual information content. Note also that TU state
+accuracy has a floor of 0.937 from turbine prevalence alone (an
+always-turbine labeling scores 7750/8275 = 0.937 -- exactly what all four
+BEATs rows land on), so accuracy is nearly uninformative here; state ARI
+and state macro-F1 carry the signal.
+
+**GMM vs. KMeans.** GMM edges out KMeans on TU state ARI for every
+handcrafted variant (audio 0.691 vs. 0.684, vibration 0.683 vs. 0.153,
+fusion 0.704 vs. 0.687 -- the vibration jump is the single largest change
+anywhere in the grid), but the mechanism deserves suspicion before
+celebration: **no TU GMM run allocates any majority-standstill cluster.**
+In all three handcrafted GMM runs, all 122 standstill windows fall into the
+cluster whose majority is `transition`, so state-level standstill recall is
+0/122 and standstill F1 is 0 -- which is why every TU GMM row's state
+macro-F1 sits at ~0.50-0.51 while KMeans audio/fusion reach 0.72/0.70.
+GMM's higher ARI reflects a cleaner two-way turbine vs. non-turbine split
+(its small mixed cluster absorbs most standstill+transition mass together),
+not a better three-mode recovery. KMeans remains the better operating choice
+when catching standstill matters (audio-kmeans: 118/122 in the strict view);
+GMM's vibration result mostly shows that vibration's KMeans weakness was
+partly a clusterer artifact, not purely a modality limit. GMM also does
+nothing for BEATs: all four TU beats x gmm rows keep state ARI at exactly
+0.000 with the same degenerate all-turbine majority mapping as kmeans.
 
 **Strict (1:1 Hungarian) metrics** -- secondary, kept for continuity with
 Task 13's original numbers and as an over-segmentation diagnostic (a large
 state-level vs. strict gap means the detector's extra clusters are
 sub-modes, not confusion):
 
-| run | variant | k | ARI | macro-F1 | boundary \|Δt\| (s) | silhouette |
-|---|---|---|---|---|---|---|
-| tu | audio | 4 | 0.144 | 0.721 | 40 | 0.470 |
-| tu | vibration | 4 | 0.128 | 0.658 | 135 | 0.316 |
-| tu | fusion | 4 | 0.153 | 0.705 | 58 | 0.399 |
-| tu | audio-beats | 4 | 0.064 | 0.430 | 39.5 | 0.162 |
-| tu | fusion-beats | 4 | 0.007 | 0.333 | 37 | 0.171 |
-| pu-morning | audio | 4 | 0.000 | 1.000 | None | 0.045 |
-| pu-morning | vibration | 4 | 0.000 | 1.000 | None | 0.023 |
-| pu-morning | fusion | 4 | 0.000 | 1.000 | None | 0.035 |
-| pu-morning | audio-beats | 4 | 0.000 | 1.000 | None | 0.011 |
+| run | variant | clusterer | k | ARI | macro-F1 | boundary \|Δt\| (s) | silhouette |
+|---|---|---|---|---|---|---|---|
+| tu | audio | kmeans | 4 | 0.144 | 0.721 | 40 | 0.470 |
+| tu | audio | gmm | 4 | 0.073 | 0.451 | 56.5 | 0.295 |
+| tu | vibration | kmeans | 4 | 0.128 | 0.658 | 135 | 0.316 |
+| tu | vibration | gmm | 4 | 0.125 | 0.444 | 43 | 0.161 |
+| tu | fusion | kmeans | 4 | 0.153 | 0.705 | 58 | 0.399 |
+| tu | fusion | gmm | 4 | 0.072 | 0.455 | 57 | 0.219 |
+| tu | audio-beats | kmeans | 4 | 0.064 | 0.430 | 39.5 | 0.162 |
+| tu | audio-beats | gmm | 4 | 0.012 | 0.312 | 129.5 | 0.148 |
+| tu | fusion-beats | kmeans | 4 | 0.007 | 0.333 | 37 | 0.171 |
+| tu | fusion-beats | gmm | 4 | 0.028 | 0.348 | 186.5 | 0.169 |
 
-TU fusion k-sweep (state ARI now the headline column, strict ARI/macro-F1
+On the strict view GMM is a regression nearly across the board (audio 0.073
+vs. 0.144, fusion 0.072 vs. 0.153), with one bright spot: vibration-gmm's
+boundary deviation (43 s) is a third of vibration-kmeans' 135 s.
+PU-morning's strict rows are uniformly degenerate for both clusterers
+(ARI 0.000, macro-F1 1.000, boundary None, silhouettes 0.011-0.045).
+
+**PU-afternoon: processed, but excluded from GT metrics.** The afternoon
+pump recording's streams span 13:44-14:40 UTC while the delivered
+Betriebsdaten hours end at 12:00 UTC -- zero SCADA overlap, so all six
+pu-afternoon combinations (audio/vibration/fusion x kmeans/gmm; 1439
+windows for audio/fusion grids, 2159 for the longer vibration-only grid)
+ran the full detection pipeline and then took the documented reduced-report
+path: `report.md` + `segments.csv` + `frame_labels.parquet` written,
+`summary.csv` rows carry `notes = "no SCADA coverage"` with every GT metric
+empty (`n_eval = 0`). This is exactly the spec's "processed but excluded
+from GT metrics" contract, now evidenced end-to-end on real data.
+
+TU fusion k-sweep (KMeans; state ARI the headline column, strict ARI/macro-F1
 alongside for comparison; full detail per k in
 `results/tu/fusion-kmeans-k<k>/report.md`):
 
@@ -165,24 +215,27 @@ alongside for comparison; full detail per k in
 **Load-alignment verdict.** `rowii.eval.metrics.load_alignment` cross-tabs
 predicted cluster id against SCADA `load_bin` on each run's turbine (TU) or
 pump (PU-morning) eval windows -- "do sub-clusters track load levels?" is
-answered *partially yes*: ARI(load_bin, cluster) is 0.457 (audio), 0.514
-(vibration), 0.465 (fusion), 0.567 (audio-beats), 0.620 (fusion-beats) on
-TU, and 0.259 (audio), 0.204 (vibration), 0.259 (fusion), 0.155
-(audio-beats) on PU-morning. These are well above 0 (genuine, non-random
-structure) but well below 1 (not a clean recovery of the 3 load bins) --
-the detector's turbine-phase sub-clusters correlate with load level more
-than chance but do not cleanly separate it, consistent with load level
-being one of several factors (alongside noise, transient dynamics, and
-whatever else drives the acoustic/vibration signature) the unsupervised
-clustering is picking up on. Both BEATs variants' TU load-alignment ARI
-exceeds every handcrafted variant's -- the one metric family where BEATs
-embeddings are the clear winner, not just competitive.
+answered *partially yes*, and this is where GMM genuinely helps. TU
+ARI(load_bin, cluster), kmeans / gmm: audio 0.457 / 0.577, vibration
+0.514 / 0.508, fusion 0.465 / 0.576, audio-beats 0.567 / 0.628,
+fusion-beats 0.620 / 0.370. PU-morning: audio 0.259 / 0.259, vibration
+0.204 / 0.155, fusion 0.259 / 0.259, audio-beats 0.155 / 0.121,
+fusion-beats 0.160 / 0.140 (audio/fusion GMM converged to the same
+partition as their KMeans init there). These are well above 0 (genuine,
+non-random structure) but well below 1 -- the detector's turbine-phase
+sub-clusters correlate with load level more than chance but do not cleanly
+separate it. The grid's best load alignment is audio-beats-gmm at 0.628;
+within KMeans both beats variants still beat every handcrafted variant on
+TU, but the picture is no longer uniform once GMM enters: handcrafted
+audio/fusion GMM (0.577/0.576) overtake audio-beats-kmeans, and
+fusion-beats-gmm collapses to the grid's worst TU value (0.370).
 
-**Does fusion clear 0.9 on state-level ARI?** No, on either run in the
-"real detector recovering real structure" sense: TU fusion state ARI is
-0.687 (best k-sweep value 0.710 at k=6, still short of 0.9); PU-morning
-fusion's 1.000 is the degenerate single-GT-class case described above, not
-a genuine 3-state recovery.
+**Does fusion clear 0.9 on state-level ARI?** No, on any run in the
+"real detector recovering real structure" sense: TU fusion tops out at
+0.704 (GMM, k=4) and 0.710 (KMeans k-sweep, k=6), both short of 0.9;
+PU-morning's 1.000 is the degenerate single-GT-class case described above,
+not a genuine 3-state recovery; PU-afternoon has no GT to evaluate against
+at all.
 
 **Honest reading.** State-level metrics change the story dramatically from
 Task 13's strict-only view: TU fusion's strict ARI (0.153) looked like
@@ -190,61 +243,59 @@ near-total failure, but its state ARI (0.687) shows the detector recovers
 the correct mode most of the time once load-level sub-clusters are
 credited instead of penalized -- confirming Task 13's own qualitative
 read (the timeline visually tracked the SCADA power curve) was closer to
-the truth than the strict ARI number suggested. Audio and fusion are close
-on TU (state ARI 0.684 vs. 0.687); vibration lags substantially (0.153),
-consistent with Task 13's standstill-recall finding (vibration and fusion
-both catch only 47/121 standstill windows vs. audio's 118/121) still being
-the dominant weakness. PU-morning's perfect-looking numbers are an
-artifact of this delivery containing no non-pump SCADA-covered windows in
-that run, not evidence the detector solves a harder multi-state problem
-there -- the load-alignment ARIs (0.2-0.26) are PU-morning's only
-non-degenerate signal, and they show a similar "some real structure, not a
-clean recovery" pattern to TU. Neither run clears the ARI >= 0.9
-acceptance gate in any metric family that isn't degenerate.
+the truth than the strict ARI number suggested. Audio and fusion remain
+close on TU (state ARI 0.684 vs. 0.687 with KMeans; 0.691 vs. 0.704 with
+GMM); vibration lags badly only under KMeans (0.153), and mostly for
+clusterer rather than modality reasons (see the GMM paragraph above). The
+standstill-recall weakness persists as the grid's dominant failure mode:
+audio-kmeans catches 118/122 standstill windows, vibration/fusion-kmeans
+catch 47/122, every GMM run catches 0/122 at the state level, and every
+BEATs run's majority mapping never labels standstill at all. PU-morning's
+perfect-looking numbers are an artifact of this delivery containing no
+non-pump SCADA-covered windows in that run -- the load-alignment ARIs
+(0.12-0.26) are PU-morning's only non-degenerate signal. Neither run
+clears the ARI >= 0.9 acceptance gate in any metric family that isn't
+degenerate.
 
 **Does frozen-BEATs beat handcrafted audio?** No -- on every headline
-metric it is worse, not better. TU audio-beats' state ARI is 0.000 versus
-handcrafted audio's 0.684, and its strict ARI (0.064) and macro-F1 (0.430)
-both trail handcrafted audio (0.144, 0.721) too; TU fusion-beats fares even
-worse on strict ARI (0.007 vs. handcrafted fusion's 0.153). The reason is
-visible directly in the standstill row of each confusion matrix:
-handcrafted audio catches 118/122 standstill windows, but audio-beats alone
-catches **0/122** -- every single standstill window lands in the same
-cluster as the transition phase, so KMeans on raw BEATs embeddings finds no
-separating structure between "machine off" and "machine ramping" at all.
-This is consistent with BEATs' AudioSet pretraining objective: it was never
+metric, with either clusterer, it is worse. TU audio-beats' state ARI is
+0.000 (both clusterers) versus handcrafted audio's 0.684/0.691, and its
+strict ARI (0.064 kmeans, 0.012 gmm) and macro-F1 (0.430/0.312) trail
+handcrafted audio (0.144/0.073, 0.721/0.451) too. All four TU beats rows
+share the identical degenerate signature: every cluster's majority is
+turbine, so state accuracy pins to the 0.937 always-turbine floor and
+state macro-F1 to 0.322 (turbine F1 alone). The mechanism is visible in
+the strict confusion matrices: audio-beats alone catches **0/122**
+standstill windows -- KMeans and GMM alike find no separating structure
+between "machine off" and "machine ramping" in raw BEATs embeddings. This
+is consistent with BEATs' AudioSet pretraining objective: it was never
 trained to represent "silence vs. quiet machinery," a distinction
 handcrafted `log_rms` and machine-frequency band energies capture directly
 by construction.
 
-**Does fusion-beats fix the standstill weakness?** In terms of the observed
-number, yes: fusion-beats' standstill row (118, 4, 0) exactly matches
-handcrafted audio's own row, a striking result given that audio-beats alone
-scores 0/122 on the same metric. What this repo's evaluation cannot cleanly
-attribute is *why* -- handcrafted fusion's standstill recall (47/122) is
-identical to handcrafted vibration alone's 47/122 (suggesting vibration,
-not handcrafted audio, already drove fusion's standstill recall before
-BEATs entered the picture), yet fusion-beats' 118/122 is far above that
-47/122 floor despite audio-beats itself contributing nothing to standstill
-recognition alone. The most defensible reading is that z-scored
-concatenation is not a simple sum of each branch's individual behavior --
-BEATs' very different embedding geometry changes what KMeans finds
-separable in the FUSED space, in a way that happens to recover the
-standstill/turbine split even though neither individual branch's isolated
-confusion-matrix number predicts that outcome. Confirming a precise
-mechanism would need per-branch ablations inside the fused feature matrix,
-out of scope here.
+**Does fusion-beats fix the standstill weakness?** Only in the strict
+(Hungarian) view, and the state-level view now reveals how thin that
+result is: fusion-beats-kmeans' Hungarian-forced standstill cluster does
+contain 118/122 standstill windows (matching handcrafted audio's row), but
+that same cluster also contains 1921 turbine windows -- its majority is
+turbine, so the state-level mapping labels nothing standstill and state
+ARI is exactly 0.000. The earlier reading stands with sharper wording:
+z-scored concatenation with BEATs changes what KMeans finds separable in
+the fused space enough to concentrate standstill windows into one cluster,
+but not enough to make that cluster standstill-dominated. Confirming a
+precise mechanism would need per-branch ablations inside the fused feature
+matrix, out of scope here.
 
-BEATs' one genuine advantage across every metric measured here is
-load-alignment ARI (previous paragraph): both beats variants beat every
-handcrafted variant on TU, the only metric family where BEATs is a clear
-win rather than a regression. Runtime: audio-beats loads one frozen BEATs
-model (90.3M params) per mic stream, so TU/PU-morning audio-beats each
-construct two model copies; TU audio-beats ran in 4m32s, TU fusion-beats
-(two BEATs copies plus handcrafted vibration) in 6m07s, and PU-morning
-audio-beats (a ~9x smaller run) in 32s -- all three on Apple Silicon MPS
-via `best_device()`'s default priority, no `ROWII_FORCE_CPU` fallback
-needed.
+BEATs' one genuine advantage across every metric measured here remains
+load-alignment ARI (see verdict above): audio-beats-gmm posts the grid's
+best TU value (0.628), though fusion-beats-gmm simultaneously posts its
+worst (0.370), so the advantage is variant-dependent rather than uniform.
+Runtime: each beats combo loads one frozen BEATs model (90.3M params) per
+mic stream; on Apple Silicon MPS (`best_device()` default, no
+`ROWII_FORCE_CPU` fallback needed) the two-combo steps (kmeans + gmm, one
+full feature extraction each) took 7m12s (TU audio-beats), 9m49s (TU
+fusion-beats), 46s (PU-morning audio-beats), and 59s (PU-morning
+fusion-beats).
 
 Genuine bugs surfaced and were fixed while getting real data through the
 pipeline for the first time (see commit history, one fix per commit):
