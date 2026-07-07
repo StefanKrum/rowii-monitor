@@ -379,6 +379,19 @@ def test_run_combo_k_sweep_writes_four_rows_with_silhouette_and_k_sweep_note(
     assert (summary["notes"] == "k-sweep").all()
     assert list(summary["k"]) == [3, 4, 5, 6]
 
+    # Each k's report.md/timeline.png must land in its OWN directory, not overwrite a
+    # shared one -- otherwise only the last k value's artifacts survive on disk.
+    run_dir = cfg.results_root / "tu"
+    k_dirs = sorted(p.name for p in run_dir.iterdir() if p.is_dir() and "-k" in p.name)
+    assert len(set(k_dirs)) >= 2, f"expected at least 2 distinct per-k dirs, found {k_dirs}"
+    for k in (3, 4, 5, 6):
+        k_dir = run_dir / f"audio-kmeans-k{k}"
+        assert k_dir.is_dir(), f"expected {k_dir} to exist"
+        assert (k_dir / "report.md").is_file()
+        assert (k_dir / "timeline.png").is_file()
+        assert (k_dir / "segments.csv").is_file()
+        assert (k_dir / "frame_labels.parquet").is_file()
+
 
 # ---------------------------------------------------------------------------
 # 6. Real-hardware clock jitter: +/-1 sample/window must not NaN out the window

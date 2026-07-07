@@ -508,6 +508,19 @@ def _prepare_run_features(
     )
 
 
+def _combo_out_dir(
+    results_root: Path, run_name: str, variant: str, clusterer: ClustererName, k: int, *,
+    is_k_sweep: bool,
+) -> Path:
+    """`results/<run>/<variant>-<clusterer>/` for a single-k run, or
+    `results/<run>/<variant>-<clusterer>-k<k>/` for one iteration of a `--k-sweep`
+    (each k gets its own directory so a sweep's 4 iterations don't overwrite each
+    other's `report.md`/`timeline.png` -- only `summary.csv`'s per-k ROWS are meant
+    to accumulate across a sweep, not the detailed per-combo artifacts)."""
+    combo_name = f"{variant}-{clusterer}-k{k}" if is_k_sweep else f"{variant}-{clusterer}"
+    return results_root / run_name / combo_name
+
+
 def _detect_and_report(
     run_name: str,
     variant: str,
@@ -518,6 +531,7 @@ def _detect_and_report(
     *,
     k: int | None,
     notes: str = "",
+    is_k_sweep: bool = False,
 ) -> ComboResult:
     """Cheap, k/clusterer-dependent half: run_detection -> evaluate -> write_report.
 
@@ -541,7 +555,9 @@ def _detect_and_report(
 
     silhouette = _silhouette_or_nan(features_valid, det_valid.frame_labels)
 
-    out_dir = results_root / run_name / f"{variant}-{clusterer}"
+    out_dir = _combo_out_dir(
+        results_root, run_name, variant, clusterer, det.k, is_k_sweep=is_k_sweep
+    )
     gt = prepared.gt
     n_unknown = int((gt["state"] == "unknown").sum())
 
@@ -628,7 +644,8 @@ def run_combo_k_sweep(
     rows = []
     for k in _K_SWEEP_VALUES:
         result = _detect_and_report(
-            run.name, variant, clusterer, cfg, prepared, results_root, k=k, notes="k-sweep"
+            run.name, variant, clusterer, cfg, prepared, results_root,
+            k=k, notes="k-sweep", is_k_sweep=True,
         )
         _append_summary_row(results_root, result)
         rows.append(result)
