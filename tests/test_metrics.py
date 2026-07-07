@@ -210,3 +210,103 @@ def test_evaluate_raises_clear_error_when_all_gt_windows_are_unknown() -> None:
     gt = pd.DataFrame({"state": ["unknown"] * 4, "load_bin": [-1] * 4})
     with pytest.raises(ValueError, match="known ground-truth state"):
         evaluate(pred, gt, grid)
+
+
+# ---------------------------------------------------------------------------
+# Mode-level (state) metrics -- primary view (Task 13b)
+#
+# The strict Hungarian mapping is a 1:1 correspondence: two predicted clusters
+# that are both genuinely a turbine-load sub-cluster (a legitimate partition
+# refinement per the design spec §5 -- "load sub-structure appears as extra
+# clusters ... or reported as sub-clusters") get Hungarian-assigned to TWO
+# DIFFERENT GT states when there are exactly as many clusters as states, which
+# then penalizes ARI/macro_f1 as if the split were a genuine misclassification.
+# The state-level view collapses every cluster onto its OWN majority GT state
+# (independently, no 1:1 constraint) before scoring, so genuine sub-clusters of
+# the same state count as fully correct.
+# ---------------------------------------------------------------------------
+
+
+def test_state_level_two_clusters_both_majority_turbine_count_as_turbine() -> None:
+    # 2 GT states (standstill, turbine). Cluster 0 is PURELY turbine (14 windows).
+    # Cluster 1 is turbine-majority but has one contaminating standstill window (1
+    # standstill + 15 turbine) -- both clusters are unambiguously turbine-majority,
+    # so state_mapping (independent per-cluster majority vote) correctly resolves
+    # BOTH to "turbine". Hungarian's STRICT 1:1 assignment, however, is scored by
+    # TOTAL matched windows: pairing (cluster0->turbine, cluster1->standstill)
+    # matches 14 + 1 = 15 windows, while the "intuitive" pairing
+    # (cluster0->turbine, cluster1->turbine is impossible under 1:1 -- the only
+    # other valid pairing is cluster0->standstill, cluster1->turbine, matching
+    # 0 + 15 = 15) -- Hungarian is indifferent on raw count here but the mapping it
+    # picks forces cluster1, 15/16 of which is genuinely turbine, onto a single
+    # GT state that only fits its 1 contaminating window -- this is the exact
+    # failure mode Task 13b targets: a legitimate load sub-cluster loses its
+    # "turbine" identity to satisfy a global 1:1 constraint it has no reason to
+    # respect. state_macro_f1 must score strictly higher than the strict
+    # macro_f1 on this exact scenario (see module-level docstring above).
+    states = ["turbine"] * 14 + ["standstill"] * 1 + ["turbine"] * 15
+    gt = _gt(states)
+    pred = np.array([0] * 14 + [1] * 1 + [1] * 15, dtype=np.int64)
+    grid = _grid(30)
+
+    result = evaluate(pred, gt, grid)
+
+    assert result.state_mapping[0] == "turbine"
+    assert result.state_mapping[1] == "turbine"
+    # The strict, Hungarian-based macro_f1 must be strictly worse in this exact
+    # scenario -- pinning down that the new state-level view is a genuine
+    # improvement here, not just an alias for the strict one.
+    assert result.state_macro_f1 > result.macro_f1
+
+
+def test_state_level_degenerate_all_one_state_scores_perfectly() -> None:
+    # Degenerate case: every GT window (and every cluster) is the same single
+    # state. Both accuracy and macro-F1 must resolve to a clean 1.0, not NaN or a
+    # divide-by-zero artifact, and state_ari (a single-partition-vs-itself
+    # comparison) must also be well-defined (ARI is 1.0 by convention for
+    # identical partitions, including the trivial single-cluster case per
+    # sklearn's own documented behaviour).
+    states = ["turbine"] * 12
+    gt = _gt(states)
+    pred = np.array([0] * 7 + [1] * 5, dtype=np.int64)  # 2 clusters, both pure turbine
+    grid = _grid(12)
+
+    result = evaluate(pred, gt, grid)
+
+    assert result.state_mapping == {0: "turbine", 1: "turbine"}
+    assert result.state_accuracy == pytest.approx(1.0)
+    assert result.state_macro_f1 == pytest.approx(1.0)
+    assert result.state_ari == pytest.approx(1.0)
+
+
+def test_state_ari_between_gt_states_and_majority_collapsed_predictions() -> None:
+    # state_ari collapses cluster ids onto their majority GT state name FIRST,
+    # then computes ARI between that collapsed label sequence and the raw GT
+    # state sequence -- unlike the strict `ari` field (raw cluster ids vs GT), a
+    # perfect partition-preserving split (every cluster pure, one-to-many onto
+    # GT states) must score exactly 1.0 here even though the strict `ari` is
+    # penalized for the same over-segmentation.
+    states = ["standstill"] * 10 + ["turbine"] * 10 + ["turbine"] * 10
+    gt = _gt(states)
+    pred = np.array([0] * 10 + [1] * 10 + [2] * 10, dtype=np.int64)
+    grid = _grid(30)
+
+    result = evaluate(pred, gt, grid)
+
+    assert result.state_ari == pytest.approx(1.0)
+    assert result.ari < 1.0
+
+
+def test_state_mapping_uses_majority_vote_not_hungarian_1to1() -> None:
+    # A single cluster (0) spans BOTH standstill and turbine windows, with
+    # turbine as the majority (7 vs 3) -- state_mapping must resolve it to
+    # "turbine" (plain majority vote), independent of any other cluster's
+    # assignment (no 1:1 constraint to violate, unlike Hungarian).
+    states = ["standstill"] * 3 + ["turbine"] * 7
+    gt = _gt(states)
+    pred = np.array([0] * 10, dtype=np.int64)
+    grid = _grid(10)
+
+    result = evaluate(pred, gt, grid)
+
+    assert result.state_mapping == {0: "turbine"}
