@@ -90,9 +90,13 @@ def test_copy_data_dry_run_prints_file_list_and_copies_nothing(tmp_path, capsys)
     # The out-of-range Betriebsdaten file and the irrelevant top-level file must be excluded.
     assert "2026-06-24_23-00-00.dat" not in out
     assert "irrelevant_readme.txt" not in out
-    # Total size line: 8 * 128 (docs+ROWII_Leistung.jpg) - wait, see total below.
+    # Total size line: every fixture file is touched at the default 128 bytes
+    # (_build_fake_source_tree's sizes=None), so the total is exactly 128 *
+    # len(expected_relpaths) -- assert the precise byte count `_print_dry_run`
+    # writes (`f"Total: {total} bytes (...)"`), not just that some size-shaped
+    # substring appears.
     total_bytes = 128 * len(expected_relpaths)
-    assert str(total_bytes) in out or f"{total_bytes / 1e9:.3f}" in out or "GB" in out
+    assert f"Total: {total_bytes} bytes" in out
 
 
 # ---------------------------------------------------------------------------
