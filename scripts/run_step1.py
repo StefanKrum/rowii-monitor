@@ -502,6 +502,14 @@ class ComboResult:
     macro_f1: float | None
     boundary_median_abs_s: float | None
     silhouette: float | None
+    state_ari: float | None
+    """State-level (mode) ARI (`rowii.eval.metrics.EvalResult.state_ari`) -- the
+    primary metric per the design (module docstring: majority cluster->state mapping,
+    no 1:1 restriction). `None` for a no-GT combo (see `_write_no_gt_report`)."""
+    state_accuracy: float | None
+    """State-level accuracy (`EvalResult.state_accuracy`). `None` for a no-GT combo."""
+    state_macro_f1: float | None
+    """State-level macro-F1 (`EvalResult.state_macro_f1`). `None` for a no-GT combo."""
     notes: str
 
 
@@ -611,6 +619,7 @@ def _detect_and_report(
             run=run_name, variant=variant, clusterer=clusterer, k=det.k,
             n_windows=grid.n_windows, n_valid=n_valid, n_eval=0,
             ari=None, macro_f1=None, boundary_median_abs_s=None, silhouette=silhouette,
+            state_ari=None, state_accuracy=None, state_macro_f1=None,
             notes=_combine_notes("no SCADA coverage", notes),
         )
 
@@ -621,6 +630,8 @@ def _detect_and_report(
         n_windows=grid.n_windows, n_valid=n_valid, n_eval=ev.n_eval_windows,
         ari=ev.ari, macro_f1=ev.macro_f1,
         boundary_median_abs_s=ev.boundary_median_abs_s, silhouette=silhouette,
+        state_ari=ev.state_ari, state_accuracy=ev.state_accuracy,
+        state_macro_f1=ev.state_macro_f1,
         notes=_combine_notes("", notes),
     )
 
@@ -704,7 +715,8 @@ def _import_beats_or_exit() -> None:
 
 _SUMMARY_COLUMNS: tuple[str, ...] = (
     "run", "variant", "clusterer", "k", "n_windows", "n_valid", "n_eval",
-    "ari", "macro_f1", "boundary_median_abs_s", "silhouette", "notes",
+    "ari", "macro_f1", "boundary_median_abs_s", "silhouette",
+    "state_ari", "state_accuracy", "state_macro_f1", "notes",
 )
 
 

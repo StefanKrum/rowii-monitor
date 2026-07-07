@@ -347,6 +347,11 @@ def test_run_combo_fusion_kmeans_k2_end_to_end(tmp_path, monkeypatch) -> None:
     assert summary.iloc[0]["run"] == "tu"
     assert summary.iloc[0]["variant"] == "fusion"
     assert summary.iloc[0]["clusterer"] == "kmeans"
+    # State-level (primary) metrics must be present and populated for a GT combo --
+    # NaN would silently defeat their purpose as the summary's headline columns.
+    for col in ("state_ari", "state_accuracy", "state_macro_f1"):
+        assert col in summary.columns, f"missing column {col!r} in summary.csv"
+        assert pd.notna(summary.iloc[0][col]), f"{col!r} is NaN for a GT combo"
 
 
 def test_run_combo_k_sweep_writes_four_rows_with_silhouette_and_k_sweep_note(
