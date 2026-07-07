@@ -24,6 +24,7 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["src/rowii/vendor"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
@@ -31,6 +32,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+exclude = ["src/rowii/vendor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
