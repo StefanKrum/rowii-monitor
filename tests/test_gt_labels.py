@@ -12,7 +12,7 @@ from tests.fixtures.gantner_builder import build_gantner_file
 
 GT_CHANNEL_NAMES = [
     "1_P_Ist",
-    "1_Drehzahl_Ist",
+    "1_Drehzahl UPM",
     "1_Leitapparat Stell.",
     "Durchfluss TU",
     "Durchfluss PU",
@@ -20,9 +20,14 @@ GT_CHANNEL_NAMES = [
 
 
 def test_gt_channels_constant_matches_the_five_real_betriebsdaten_channel_names() -> None:
+    # Task 13b real-data finding: "1_Drehzahl_Ist" is NOT rpm -- it is a
+    # percent-of-nominal-ish quantity (measured ratio ~3.75x smaller than the true rpm
+    # channel on the same file). "1_Drehzahl UPM" ("Umdrehungen Pro Minute" = rpm) is
+    # the genuine rpm channel and is what GtRules.speed_nominal_rpm must be compared
+    # against.
     assert dict(GT_CHANNELS) == {
         "power": "1_P_Ist",
-        "speed": "1_Drehzahl_Ist",
+        "speed": "1_Drehzahl UPM",
         "guide_vane": "1_Leitapparat Stell.",
         "flow_tu": "Durchfluss TU",
         "flow_pu": "Durchfluss PU",
@@ -108,9 +113,13 @@ def test_load_scada_window_means_nan_for_window_with_no_scada_samples(tmp_path) 
 def test_load_scada_window_means_missing_channel_raises_key_error_listing_available(
     tmp_path,
 ) -> None:
+    # "1_Leitapparat Stell." (guide_vane) is the ONLY GT_CHANNELS entry missing from
+    # this file -- "power" and "speed" are both present under their real names, so the
+    # KeyError must specifically name guide_vane, not fire early on an unrelated
+    # missing channel.
     rate_hz = 10.0
     data = np.zeros((10, 3), dtype=np.float32)
-    other_names = ["1_P_Ist", "1_Drehzahl_Ist", "SomeOtherChannel"]
+    other_names = ["1_P_Ist", "1_Drehzahl UPM", "SomeOtherChannel"]
     p = build_gantner_file(tmp_path / "bd.dat", other_names, data, t0_ns=0, rate_hz=rate_hz)
     grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=1)
 
@@ -141,7 +150,7 @@ def test_gt_channel_names_with_spaces_and_dots_round_trip_through_gantner_reader
 # gt_labels
 # ---------------------------------------------------------------------------
 
-RULES = GtRules()  # nominal=101.0 (measured, Task 13), speed_eps_frac=0.05, power_eps_mw=2.0,
+RULES = GtRules()  # nominal=378.832 (measured, Task 13b), speed_eps_frac=0.05, power_eps_mw=2.0,
 # ramp=1.0 MW/s, transition_buffer_s=10.0, n_load_bins=3
 WINDOW_S = 5.0  # matches the scenarios' hand-derivation (buffer=10s -> 2-window radius)
 
@@ -273,21 +282,23 @@ def test_gt_labels_pump_via_negative_power() -> None:
 
 
 def test_gt_labels_pump_mode_with_negative_speed_is_still_nominal() -> None:
-    # Task 13 real-data finding (Rodundwerk II, 2026-06-25 09:00 pump run): 1_Drehzahl_Ist is
-    # SIGNED by rotation direction at this plant -- positive during turbine operation, negative
-    # during pump operation (a reversible pump-turbine spins the opposite way in each mode).
-    # The base-state "nominal speed" check must use |speed|, exactly like the standstill check
-    # already does two lines above it in _base_state -- a negative-but-nominal-magnitude speed
-    # must not silently fail the nominal-speed gate and fall through to "transition" for the
-    # entire pump run (the bug this test guards against: is_nominal previously compared signed
-    # speed directly against a positive threshold, so it was never true when speed < 0).
+    # Task 13/13b real-data finding (Rodundwerk II, 2026-06-25 09:00 pump run):
+    # "1_Drehzahl UPM" (the genuine rpm channel -- see GT_CHANNELS) is SIGNED by
+    # rotation direction at this plant -- positive during turbine operation, negative
+    # during pump operation (a reversible pump-turbine spins the opposite way in each
+    # mode). The base-state "nominal speed" check must use |speed|, exactly like the
+    # standstill check already does two lines above it in _base_state -- a
+    # negative-but-nominal-magnitude speed must not silently fail the nominal-speed
+    # gate and fall through to "transition" for the entire pump run (the bug this
+    # test guards against: is_nominal previously compared signed speed directly
+    # against a positive threshold, so it was never true when speed < 0).
     #
     # Uses an explicit speed_nominal_rpm (independent of RULES' own default) so this test's
     # pass/fail is decoupled from whatever nominal-speed value GtRules ships with -- the
     # magnitude/sign behaviour under test is orthogonal to that number.
-    rules = dataclasses.replace(RULES, speed_nominal_rpm=101.0)
+    rules = dataclasses.replace(RULES, speed_nominal_rpm=378.832)
     power = [-281.0, -281.0, -281.0]
-    speed = [-100.8, -100.8, -100.8]  # measured PU-morning plateau magnitude, negated
+    speed = [-377.9, -377.9, -377.9]  # measured PU-morning UPM plateau magnitude, negated
     scada = _scada(power, speed)
 
     result = gt_labels(scada, rules, window_s=WINDOW_S)
@@ -354,8 +365,10 @@ def test_gt_labels_standstill_base_rule() -> None:
     # Speeds derived from RULES.speed_nominal_rpm (not a hardcoded magic number) so this test
     # keeps exercising "clearly below the standstill epsilon" regardless of what
     # speed_nominal_rpm is currently set to (Task 13 changed it from an unverified 375 to a
-    # measured 101.0 -- a hardcoded sub-threshold value here would have silently stopped being
-    # sub-threshold and turned this into a false green).
+    # measured-but-wrong-channel 101.0; Task 13b corrected the channel itself to "1_Drehzahl
+    # UPM" and remeasured the true value as 378.832 -- a hardcoded sub-threshold value here
+    # would have silently stopped being sub-threshold and turned this into a false green
+    # across either transition).
     standstill_eps = RULES.speed_eps_frac * RULES.speed_nominal_rpm
     power = [0.5, -1.5, 0.0]
     speed = [0.2 * standstill_eps, -0.4 * standstill_eps, 0.8 * standstill_eps]

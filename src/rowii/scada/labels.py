@@ -20,7 +20,15 @@ from rowii.signals.windows import WindowGrid, window_slices
 
 GT_CHANNELS: Mapping[str, str] = {
     "power": "1_P_Ist",
-    "speed": "1_Drehzahl_Ist",
+    # "1_Drehzahl UPM" ("Umdrehungen Pro Minute" = rpm) is the genuine rpm channel --
+    # verified against the real 2026-06-25 delivery (Task 13b): its plateau during
+    # full-power turbine generation is 378.832 rpm, vs. "1_Drehzahl_Ist"'s ~101 on the
+    # SAME file (ratio ~3.75x, consistent with a percent-of-nominal-ish quantity, not
+    # rpm). Task 13 originally wired GT_CHANNELS["speed"] to "1_Drehzahl_Ist" and
+    # measured ITS plateau (~101 rpm), silently taking the wrong channel's number as
+    # the machine's nominal speed -- see results/parameter_verification.md's Revision
+    # 2026-07-07 section for the corrected derivation.
+    "speed": "1_Drehzahl UPM",
     "guide_vane": "1_Leitapparat Stell.",
     "flow_tu": "Durchfluss TU",
     "flow_pu": "Durchfluss PU",
@@ -88,12 +96,13 @@ def _base_state(scada: pd.DataFrame, rules: GtRules) -> pd.Series:
     is_standstill = known & (np.abs(speed) < rules.speed_eps_frac * n_nom) & (
         np.abs(power) < rules.power_eps_mw
     )
-    # 1_Drehzahl_Ist is SIGNED by rotation direction at this plant (verified Task 13, real
-    # 2026-06-25 data): positive during turbine operation, negative during pump operation (a
-    # reversible pump-turbine spins the opposite way in each mode) -- the nominal-speed gate
-    # must compare the MAGNITUDE against the threshold, exactly like is_standstill already
-    # does above, or every pump-mode window fails this check and falls through to
-    # "transition" regardless of how the flow/power rules below would otherwise resolve it.
+    # "1_Drehzahl UPM" (GT_CHANNELS["speed"]) is SIGNED by rotation direction at this
+    # plant (verified Task 13/13b, real 2026-06-25 data): positive during turbine
+    # operation, negative during pump operation (a reversible pump-turbine spins the
+    # opposite way in each mode) -- the nominal-speed gate must compare the MAGNITUDE
+    # against the threshold, exactly like is_standstill already does above, or every
+    # pump-mode window fails this check and falls through to "transition" regardless
+    # of how the flow/power rules below would otherwise resolve it.
     is_nominal = known & (np.abs(speed) >= (1.0 - rules.speed_eps_frac) * n_nom)
 
     # Pump power may be logged POSITIVE at this plant (plant-specific SCADA convention) --
