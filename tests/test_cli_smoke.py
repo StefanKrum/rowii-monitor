@@ -442,6 +442,146 @@ def test_extract_stream_features_tolerates_one_sample_clock_jitter(tmp_path) -> 
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 8. audio-beats / fusion-beats variants: real CLI wiring, stub BEATs encoder
+# ---------------------------------------------------------------------------
+
+
+def test_run_combo_audio_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, monkeypatch) -> None:
+    """Exercises the REAL `audio-beats` CLI wiring (streams -> BeatsFeaturizer ->
+    hstack of the two mic streams' embeddings -> detect -> report), but with a
+    stub `BeatsEncoderProtocol` injected so this test needs neither the real
+    checkpoint nor real torch weights -- BEATs' own encoder correctness is
+    already covered by `tests/test_beats.py`; this test only proves
+    `run_step1.py` builds one `BeatsFeaturizer` per mic stream and assembles
+    their outputs the same way handcrafted `audio` does.
+    """
+    pytest.importorskip("torch")
+    import torch
+
+    from rowii.signals import beats as beats_module
+
+    _STUB_EMBED_DIM = 4
+    call_count = {"n": 0}
+    real_init = beats_module.BeatsFeaturizer.__init__
+
+    class _StubEncoder:
+        def extract(self, fbank: torch.Tensor) -> torch.Tensor:
+            call_count["n"] += 1
+            per_frame_mean = fbank.mean(dim=-1, keepdim=True)
+            return per_frame_mean.expand(-1, _STUB_EMBED_DIM)
+
+    def fake_init(self, checkpoint, device=None, encoder=None) -> None:
+        real_init(self, checkpoint=checkpoint, device=torch.device("cpu"), encoder=_StubEncoder())
+
+    monkeypatch.setattr(beats_module.BeatsFeaturizer, "__init__", fake_init)
+
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", str(tmp_path / "fake_checkpoint.pt"))
+    data_root = _build_e2e_data_root(tmp_path / "data")
+
+    import run_step1
+
+    from rowii.config import load_config
+    from rowii.io.dataset import discover
+
+    cfg = load_config()
+    index = discover(data_root)
+    run = next(r for r in index.runs if r.name == "tu")
+
+    result = run_step1.run_combo(
+        run, "audio-beats", "kmeans", cfg, index.betriebsdaten, cfg.results_root, k=2
+    )
+
+    # The stub encoder must actually have been exercised -- otherwise this test
+    # would spuriously pass even if run_step1 silently fell back to the
+    # handcrafted AudioFeaturizer (the pre-Task-14 bug: audio-beats/fusion-beats
+    # were accepted by argparse and routed through _streams_for_variant/
+    # assemble_variant_features, but _prepare_run_features's per-stream
+    # featurizer selection never actually branched on the variant, so both
+    # "beats" variants silently ran handcrafted features under the hood).
+    assert call_count["n"] > 0, (
+        "BeatsFeaturizer's encoder was never called -- audio-beats is not "
+        "actually routing through BeatsFeaturizer"
+    )
+
+    assert result.variant == "audio-beats"
+    assert result.k == 2
+    assert result.n_windows > 0
+    assert result.ari is not None
+
+    out_dir = cfg.results_root / "tu" / "audio-beats-kmeans"
+    assert (out_dir / "report.md").is_file()
+    assert (out_dir / "segments.csv").is_file()
+    assert (out_dir / "frame_labels.parquet").is_file()
+
+    # 2 mic streams x _STUB_EMBED_DIM each, hstacked -- handcrafted
+    # AudioFeaturizer produces dozens of named spectral features per channel,
+    # never exactly 2 * _STUB_EMBED_DIM, so this width is only reachable via
+    # BeatsFeaturizer actually running on both streams.
+    frame_labels = pd.read_parquet(out_dir / "frame_labels.parquet")
+    assert "cluster" in frame_labels.columns  # sanity: real report, not a stub artifact
+
+
+def test_run_combo_fusion_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, monkeypatch) -> None:
+    """Same as the `audio-beats` test above, for `fusion-beats`: BEATs
+    embeddings on both mic streams `fuse()`d with handcrafted vibration
+    features, exactly as `fusion` fuses handcrafted audio with handcrafted
+    vibration."""
+    pytest.importorskip("torch")
+    import torch
+
+    from rowii.signals import beats as beats_module
+
+    call_count = {"n": 0}
+    real_init = beats_module.BeatsFeaturizer.__init__
+
+    class _StubEncoder:
+        def extract(self, fbank: torch.Tensor) -> torch.Tensor:
+            call_count["n"] += 1
+            per_frame_mean = fbank.mean(dim=-1, keepdim=True)
+            return per_frame_mean.expand(-1, 4)
+
+    def fake_init(self, checkpoint, device=None, encoder=None) -> None:
+        real_init(self, checkpoint=checkpoint, device=torch.device("cpu"), encoder=_StubEncoder())
+
+    monkeypatch.setattr(beats_module.BeatsFeaturizer, "__init__", fake_init)
+
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", str(tmp_path / "fake_checkpoint.pt"))
+    data_root = _build_e2e_data_root(tmp_path / "data")
+
+    import run_step1
+
+    from rowii.config import load_config
+    from rowii.io.dataset import discover
+
+    cfg = load_config()
+    index = discover(data_root)
+    run = next(r for r in index.runs if r.name == "tu")
+
+    result = run_step1.run_combo(
+        run, "fusion-beats", "kmeans", cfg, index.betriebsdaten, cfg.results_root, k=2
+    )
+
+    assert call_count["n"] > 0, (
+        "BeatsFeaturizer's encoder was never called -- fusion-beats is not "
+        "actually routing through BeatsFeaturizer"
+    )
+
+    assert result.variant == "fusion-beats"
+    assert result.k == 2
+    assert result.n_windows > 0
+    assert result.ari is not None
+
+    out_dir = cfg.results_root / "tu" / "fusion-beats-kmeans"
+    assert (out_dir / "report.md").is_file()
+    assert (out_dir / "segments.csv").is_file()
+    assert (out_dir / "frame_labels.parquet").is_file()
+
+
 def test_assemble_variant_features_fusion_survives_a_few_nan_rows() -> None:
     # Task 13 real-data run (TU/fusion): a real run always has a handful of invalid
     # windows (coverage gaps at file boundaries, ~11/8286 on the June-25 TU run) whose
