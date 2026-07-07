@@ -35,7 +35,7 @@ import pandas as pd  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
-from rowii.eval.metrics import EvalResult  # noqa: E402
+from rowii.eval.metrics import EvalResult, load_alignment  # noqa: E402
 from rowii.state.detect import DetectionResult  # noqa: E402
 
 _STATE_COLORS = {
@@ -77,8 +77,52 @@ def _state_mapping_to_markdown(mapping: dict[int, str]) -> str:
     return "\n".join([header, separator, *rows])
 
 
+def _load_alignment_crosstab_to_markdown(crosstab: pd.DataFrame) -> str:
+    header = "| cluster \\ load_bin | " + " | ".join(str(c) for c in crosstab.columns) + " |"
+    separator = "|---" * (len(crosstab.columns) + 1) + "|"
+    rows = [
+        "| " + str(cluster_id) + " | " + " | ".join(str(v) for v in row) + " |"
+        for cluster_id, row in crosstab.iterrows()
+    ]
+    return "\n".join([header, separator, *rows])
+
+
+def _load_alignment_section(det: DetectionResult, gt: pd.DataFrame | None) -> list[str]:
+    """"Do sub-clusters track load levels?" section (Task 13b item 2).
+
+    Restricted to the run's turbine (or pump-fallback) windows via
+    `rowii.eval.metrics.load_alignment` -- `None` when `gt` was not supplied to
+    `write_report`, or when `load_alignment` itself finds fewer than 2 distinct
+    load bins to align clusters against (see its own docstring).
+    """
+    lines = [
+        "## Do sub-clusters track load levels?",
+        "",
+        "Cross-tabulates predicted cluster id against SCADA-derived `load_bin` on "
+        "this run's turbine (or pump, if no turbine windows exist) eval windows only "
+        "-- a high alignment means the detector's sub-clusters (the ones "
+        "`state_ari`/`state_macro_f1` above credit as \"still turbine\") correspond "
+        "to genuine load-level structure, not noise.",
+        "",
+    ]
+    alignment = load_alignment(det.frame_labels, gt) if gt is not None else None
+    if alignment is None:
+        lines.append("n/a (no GT provided, or fewer than 2 distinct load bins in this run).")
+    else:
+        lines.append(f"ARI(load_bin, cluster) = {alignment.attrs['ari']:.4f}")
+        lines.append("")
+        lines.append(_load_alignment_crosstab_to_markdown(alignment))
+    lines.append("")
+    return lines
+
+
 def _report_markdown(
-    run: str, variant: str, det: DetectionResult, ev: EvalResult, n_windows: int
+    run: str,
+    variant: str,
+    det: DetectionResult,
+    ev: EvalResult,
+    n_windows: int,
+    gt: pd.DataFrame | None = None,
 ) -> str:
     n_dropped = n_windows - ev.n_eval_windows
     boundary_str = (
@@ -125,6 +169,7 @@ def _report_markdown(
         _confusion_to_markdown(ev.confusion),
         "",
     ]
+    lines.extend(_load_alignment_section(det, gt))
     return "\n".join(lines)
 
 
@@ -240,12 +285,14 @@ def write_report(
             why this is needed and why it is not derivable from `ev` alone). When
             `None` (the default -- matching the exact base signature), the timeline's
             GT-states panel renders an explicit "no GT provided" placeholder instead
-            of per-window data.
+            of per-window data, and report.md's "Do sub-clusters track load levels?"
+            section (Task 13b item 2) reports "n/a" instead of a real crosstab/ARI
+            (both need `gt.load_bin`, which is not otherwise available here).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_windows = len(det.frame_labels)
-    (out_dir / "report.md").write_text(_report_markdown(run, variant, det, ev, n_windows))
+    (out_dir / "report.md").write_text(_report_markdown(run, variant, det, ev, n_windows, gt))
 
     det.segments.to_csv(out_dir / "segments.csv", index=False)
 
