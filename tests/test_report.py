@@ -293,3 +293,63 @@ def test_gt_states_panel_is_not_plotted_from_real_data_when_gt_is_omitted(
     # Only the predicted-states panel calls _plot_state_panel; the GT panel falls back
     # to the placeholder branch instead.
     assert spy_plot_panel.call_count == 1
+
+
+def test_report_md_contains_state_level_primary_section_above_strict_section(
+    tmp_path: Path,
+) -> None:
+    det, ev, grid, scada = _det_and_ev()
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    assert "State-level (mode) metrics" in text
+    assert "Strict (1:1 Hungarian) metrics" in text
+    # The state-level section must appear BEFORE the strict section in the file.
+    assert text.index("State-level (mode) metrics") < text.index(
+        "Strict (1:1 Hungarian) metrics"
+    )
+    assert f"{ev.state_accuracy:.4f}" in text
+    assert f"{ev.state_macro_f1:.4f}" in text
+    assert f"{ev.state_ari:.4f}" in text
+
+
+def test_report_md_state_mapping_table_reflects_state_mapping_not_strict_mapping(
+    tmp_path: Path,
+) -> None:
+    det, ev, grid, scada = _det_and_ev()
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    for cluster_id, state_name in ev.state_mapping.items():
+        assert f"| {cluster_id} | {state_name} |" in text
+
+
+def test_predicted_timeline_panel_uses_state_mapping_not_strict_mapping(
+    tmp_path: Path,
+) -> None:
+    # Construct a case where state_mapping and strict mapping actually DIFFER for at
+    # least one cluster, then assert the predicted-states panel (spied via
+    # _plot_state_panel) receives the state_mapping-derived sequence.
+    n_windows = 30
+    grid = _grid(n_windows)
+    states = ["standstill"] * 10 + ["turbine"] * 20
+    gt = _gt(states)
+    frame_labels = np.array([0] * 10 + [0] * 15 + [1] * 5, dtype=np.int64)
+    segments = to_segments(frame_labels, grid)
+    det = DetectionResult(frame_labels=frame_labels, segments=segments, k=2)
+    ev = evaluate(frame_labels, gt, grid)
+    scada = _scada(n_windows)
+    assert ev.state_mapping[0] == "turbine" and ev.state_mapping[1] == "turbine"
+    assert not (ev.mapping[0] == "turbine" and ev.mapping[1] == "turbine")
+
+    with patch("rowii.eval.report._plot_state_panel") as spy_plot_panel:
+        write_report(
+            tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada, gt=gt
+        )
+
+    # Second call (index 1, after the GT-panel call at index 0) is the predicted panel.
+    predicted_panel_states = spy_plot_panel.call_args_list[1].args[2]
+    expected = [ev.state_mapping[int(c)] for c in frame_labels]
+    assert predicted_panel_states == expected

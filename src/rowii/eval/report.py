@@ -5,7 +5,9 @@ combination (spec §8 deliverables): it renders the `EvalResult` produced by
 `rowii.eval.metrics.evaluate` into a human-readable `report.md`, a 3-panel
 `timeline.png` (power curve / GT states / predicted mapped states, all in hours since
 the grid start), and re-exports the machine-readable `segments.csv` /
-`frame_labels.parquet` artifacts spec §8 lists alongside it.
+`frame_labels.parquet` artifacts spec §8 lists alongside it. report.md now leads with a
+state-level (mode) metrics block using majority cluster->state mapping, with the
+original strict 1:1 Hungarian view retained below it as a secondary reference.
 
 Note on the optional `gt` parameter: `EvalResult` (by design -- see
 `rowii.eval.metrics`) carries only aggregate metrics (a GT-state x predicted-state
@@ -68,6 +70,13 @@ def _mapping_to_markdown(mapping: dict[int, str]) -> str:
     return "\n".join([header, separator, *rows])
 
 
+def _state_mapping_to_markdown(mapping: dict[int, str]) -> str:
+    header = "| cluster | state |"
+    separator = "|---|---|"
+    rows = [f"| {cluster_id} | {state} |" for cluster_id, state in sorted(mapping.items())]
+    return "\n".join([header, separator, *rows])
+
+
 def _report_markdown(
     run: str, variant: str, det: DetectionResult, ev: EvalResult, n_windows: int
 ) -> str:
@@ -78,7 +87,25 @@ def _report_markdown(
     lines = [
         f"# Run report: {run} / {variant}",
         "",
-        "## Metrics",
+        "## State-level (mode) metrics — primary",
+        "",
+        "Clusters are mapped independently to their majority GT state (no 1:1 "
+        "restriction), so legitimate load sub-clusters within one operating mode "
+        "(e.g. two turbine-phase clusters at different load levels) both correctly "
+        "collapse onto that mode instead of being penalized as a mismatch.",
+        "",
+        "| metric | value |",
+        "|---|---|",
+        f"| state accuracy | {ev.state_accuracy:.4f} |",
+        f"| state macro-F1 | {ev.state_macro_f1:.4f} |",
+        f"| state ARI | {ev.state_ari:.4f} |",
+        f"| n_eval_windows | {ev.n_eval_windows} |",
+        "",
+        "### Cluster -> state mapping (majority)",
+        "",
+        _state_mapping_to_markdown(ev.state_mapping),
+        "",
+        "## Strict (1:1 Hungarian) metrics — secondary",
         "",
         "| metric | value |",
         "|---|---|",
@@ -89,7 +116,7 @@ def _report_markdown(
         f"| k (clusters) | {det.k} |",
         f"| unknown/dropped windows | {n_dropped} out of {n_windows} |",
         "",
-        "## Cluster -> state mapping (Hungarian)",
+        "### Cluster -> state mapping (Hungarian)",
         "",
         _mapping_to_markdown(ev.mapping),
         "",
@@ -179,7 +206,7 @@ def _write_timeline_png(
             color="0.4",
         )
 
-    predicted_states = [ev.mapping.get(int(c), "unknown") for c in det.frame_labels]
+    predicted_states = [ev.state_mapping.get(int(c), "unknown") for c in det.frame_labels]
     _plot_state_panel(axes[2], hours, predicted_states)
     axes[2].set_title("Predicted (mapped) states")
     axes[2].set_xlabel("hours since grid start")
