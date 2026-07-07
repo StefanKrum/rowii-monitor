@@ -299,7 +299,7 @@ def _build_e2e_data_root(root: Path) -> Path:
     scada_data = np.stack([power, speed, guide_vane, flow_tu, flow_pu], axis=1)
     build_gantner_file(
         bd / "2026-06-25_08-00-00.dat",
-        ["1_P_Ist", "1_Drehzahl_Ist", "1_Leitapparat Stell.", "Durchfluss TU", "Durchfluss PU"],
+        ["1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU", "Durchfluss PU"],
         scada_data,
         t0_ns=_E2E_T0_NS,
         rate_hz=_E2E_SCADA_RATE_HZ,

@@ -8,7 +8,7 @@ Betriebsdaten / TU burst files and writes a permanent record of the derivation t
 other file under `results/`, it is not committed to the repo, only this script is).
 
 Five checks, matching the dispatch's Step 2 numbering:
-  1. Speed plateau (1_Drehzahl_Ist) during turbine generation vs GtRules.speed_nominal_rpm.
+  1. Speed plateau (GT_CHANNELS["speed"]) during turbine generation vs GtRules.speed_nominal_rpm.
   2. Welch-PSD spectral peaks near each MACHINE_HZ band vs the configured centre.
   3. Vibration-channel liveness (which of the 6 channels per stream actually carry signal).
   4. SCADA sign/flow conventions (turbine vs pump) vs the rules encoded in scada/labels.py.
@@ -52,6 +52,7 @@ _WELCH_SEGMENT_S = 60.0
 @dataclass(frozen=True)
 class SpeedPlateauResult:
     hour_file: str
+    channel_name: str
     n_samples: int
     n_samples_generating: int
     plateau_rpm: float
@@ -62,11 +63,12 @@ class SpeedPlateauResult:
 def measure_speed_plateau(
     cfg: Config, hour_file: str = "2026-06-25_05-00-00.dat"
 ) -> SpeedPlateauResult:
-    """Median 1_Drehzahl_Ist while power > threshold, for one Betriebsdaten hour."""
+    """Median GT_CHANNELS["speed"] while power > threshold, for one Betriebsdaten hour."""
     path = cfg.data_root / _BETRIEBSDATEN_DIR / hour_file
     gf = read_gantner(path)
+    channel_name = GT_CHANNELS["speed"]
     power_idx = gf.header.channel_names.index(GT_CHANNELS["power"])
-    speed_idx = gf.header.channel_names.index(GT_CHANNELS["speed"])
+    speed_idx = gf.header.channel_names.index(channel_name)
     power = gf.data[:, power_idx].astype(np.float64)
     speed = gf.data[:, speed_idx].astype(np.float64)
 
@@ -77,6 +79,7 @@ def measure_speed_plateau(
 
     return SpeedPlateauResult(
         hour_file=hour_file,
+        channel_name=channel_name,
         n_samples=len(power),
         n_samples_generating=int(mask.sum()),
         plateau_rpm=plateau,
@@ -311,7 +314,7 @@ def _render_report(
         if speed.deviation_pct > _SPEED_DEVIATION_CORRECTION_THRESHOLD_PCT
         else "confirmed"
     )
-    lines.append(f"- Source: `{speed.hour_file}`, median `1_Drehzahl_Ist` where "
+    lines.append(f"- Source: `{speed.hour_file}`, median `{speed.channel_name}` where "
                  f"`1_P_Ist > {_POWER_GENERATION_THRESHOLD_MW} MW` "
                  f"({speed.n_samples_generating}/{speed.n_samples} samples).")
     lines.append(f"- Measured plateau: **{speed.plateau_rpm:.3f} rpm**")
@@ -376,13 +379,13 @@ def _render_report(
     lines.append("")
     lines.append(
         "**Turbine convention** (05:00, 06:00 hours -- inside the TU run): power POSITIVE "
-        "(~127-290 MW), speed POSITIVE (~101 rpm), `flow_tu` dominant, `flow_pu` ~0. Matches "
+        "(~127-290 MW), speed POSITIVE (~379 rpm), `flow_tu` dominant, `flow_pu` ~0. Matches "
         "`_base_state`'s `turbine_by_power`/`turbine_by_flow` rules."
     )
     lines.append("")
     lines.append(
         "**Pump convention** (09:00 hour -- inside pu-morning): power NEGATIVE (~-282 to -45 "
-        "MW), speed NEGATIVE (~-101 rpm, opposite rotation direction), `flow_pu` dominant "
+        "MW), speed NEGATIVE (~-378 rpm, opposite rotation direction), `flow_pu` dominant "
         "(~81), `flow_tu` ~0. Power sign matches `pump_by_power`'s naive "
         "`power < -power_eps_mw` rule directly (no positive-power-pump case observed in "
         "this delivery's PU-morning window) -- BUT the signed, negative speed originally "

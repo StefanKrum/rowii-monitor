@@ -16,11 +16,16 @@ class WindowConfig:
 
 @dataclass(frozen=True)
 class GtRules:
-    # Measured plateau of 1_Drehzahl_Ist during full-power turbine generation (Task 13,
-    # 2026-06-25 05:00 Betriebsdaten hour: median while power > 50 MW). The pre-delivery
-    # "8-pole 50 Hz machine" 375 rpm hypothesis was off by 73% and is superseded by this
-    # measured value; see results/parameter_verification.md for the full derivation.
-    speed_nominal_rpm: float = 101.0
+    # Measured plateau of "1_Drehzahl UPM" (GT_CHANNELS["speed"]) during full-power
+    # turbine generation (Task 13b, 2026-06-25 05:00 Betriebsdaten hour: median while
+    # power > 50 MW). Task 13 originally measured this off "1_Drehzahl_Ist" instead
+    # (~101 rpm) -- that channel is NOT rpm (a percent-of-nominal-ish quantity, ~3.75x
+    # smaller than the true rpm channel on the same file); Task 13b corrected
+    # GT_CHANNELS["speed"] to the genuine rpm channel and remeasured, landing almost
+    # exactly on the pre-delivery "8-pole 50 Hz machine" 375 rpm hypothesis Task 13 had
+    # discarded. See results/parameter_verification.md's Revision 2026-07-07 section
+    # for the full derivation.
+    speed_nominal_rpm: float = 378.832
     speed_eps_frac: float = 0.05           # validated against data in Task 5/13
     power_eps_mw: float = 2.0
     ramp_mw_per_s: float = 1.0
