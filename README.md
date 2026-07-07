@@ -82,7 +82,7 @@ Results are written to `results/<run>/<variant>-<clusterer>/` (`segments.csv`,
 pytest tests/ -q            # unit tests (no real data required)
 pytest -m data -v           # real-data smoke tests (needs ROWII_DATA_ROOT)
 ruff check .
-mypy src
+mypy src scripts
 ```
 
 ## First real results (TU + PU-morning, 2026-06-25)
