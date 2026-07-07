@@ -310,3 +310,18 @@ def test_state_mapping_uses_majority_vote_not_hungarian_1to1() -> None:
     result = evaluate(pred, gt, grid)
 
     assert result.state_mapping == {0: "turbine"}
+
+
+def test_state_mapping_only_covers_eval_window_clusters_like_strict_mapping() -> None:
+    # Mirrors test_unknown_windows_are_dropped_before_all_metrics' garbage-cluster check,
+    # but for state_mapping: a cluster confined entirely to "unknown" windows must not
+    # appear in state_mapping either (state_mapping is computed on eval windows only,
+    # same restriction _hungarian_mapping already applies).
+    states = ["standstill"] * 5 + ["turbine"] * 5 + ["unknown"] * 5
+    gt = _gt(states)
+    pred = np.array([0] * 5 + [1] * 5 + [99] * 5, dtype=np.int64)
+    grid = _grid(15)
+
+    result = evaluate(pred, gt, grid)
+
+    assert 99 not in result.state_mapping
