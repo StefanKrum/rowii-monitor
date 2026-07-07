@@ -21,7 +21,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,14 @@ from rowii.signals.features import AudioFeaturizer, VibFeaturizer, fuse  # noqa:
 from rowii.signals.windows import WindowGrid, common_grid, coverage, window_slices  # noqa: E402
 from rowii.state.detect import DetectionResult, run_detection  # noqa: E402
 from rowii.state.segments import to_segments  # noqa: E402
+
+if TYPE_CHECKING:
+    # BeatsFeaturizer needs torch, an optional `[beats]` extra -- never import it
+    # unconditionally at module load time (would break the core package for
+    # anyone without the extra installed; see `_import_beats_or_exit`/
+    # `_featurizer_for_stream`, which import it lazily, only when an actual
+    # beats variant runs).
+    from rowii.signals.beats import BeatsFeaturizer
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +110,36 @@ def _streams_for_variant(variant: str) -> tuple[str, ...]:
 
 def _is_beats_variant(variant: str) -> bool:
     return variant in ("audio-beats", "fusion-beats")
+
+
+def _featurizer_for_stream(
+    stream: str, variant: str, cfg: Config
+) -> AudioFeaturizer | VibFeaturizer | BeatsFeaturizer:
+    """One featurizer instance for *stream*, given *variant*.
+
+    Vibration streams always get a fresh `VibFeaturizer` regardless of
+    variant (there is no "vib-beats" variant -- `BeatsFeaturizer` is
+    audio-branch only per the design). Audio streams get `BeatsFeaturizer`
+    for the two beats variants and `AudioFeaturizer` otherwise. One
+    `BeatsFeaturizer` (and therefore one loaded copy of the frozen
+    checkpoint) is constructed PER audio stream, not shared between the two
+    -- mirroring how handcrafted `audio`/`fusion` already construct one
+    `AudioFeaturizer` per stream, at the cost of loading the checkpoint
+    twice for a beats variant that uses both mic streams. This keeps the
+    per-stream featurizer lifecycle uniform across every variant rather than
+    special-casing beats to share a single loaded model.
+    """
+    if stream not in _AUDIO_STREAMS:
+        return VibFeaturizer()
+    if _is_beats_variant(variant):
+        from rowii.signals.beats import BeatsFeaturizer
+
+        if cfg.beats_checkpoint is None:
+            raise SystemExit(
+                f"variant {variant!r} needs ROWII_BEATS_CHECKPOINT set; {_BEATS_INSTALL_HINT}"
+            )
+        return BeatsFeaturizer(checkpoint=cfg.beats_checkpoint)
+    return AudioFeaturizer()
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +247,7 @@ class _StreamFeatureResult:
 def _extract_stream_features(
     files: list[BurstFile],
     grid: WindowGrid,
-    featurizer: AudioFeaturizer | VibFeaturizer,
+    featurizer: AudioFeaturizer | VibFeaturizer | BeatsFeaturizer,
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
 
@@ -495,8 +533,7 @@ def _prepare_run_features(
 
     stream_results: dict[str, _StreamFeatureResult] = {}
     for stream in streams:
-        featurizer: AudioFeaturizer | VibFeaturizer
-        featurizer = AudioFeaturizer() if stream in _AUDIO_STREAMS else VibFeaturizer()
+        featurizer = _featurizer_for_stream(stream, variant, cfg)
         stream_results[stream] = _extract_stream_features(run.files[stream], grid, featurizer)
 
     valid_mask = compute_validity_mask(list(stream_results.values()))
