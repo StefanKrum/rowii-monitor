@@ -6,6 +6,23 @@ output. Windows with `gt.state == "unknown"` (no SCADA coverage, or a rule genui
 could not decide) are dropped BEFORE every metric except the boundary deviation, which
 by construction runs on the full per-window timeline (see `_state_change_indices`).
 
+Two families of metrics, both computed by every `evaluate()` call:
+
+- **State-level (mode) metrics -- primary** (`state_mapping`, `state_accuracy`,
+  `state_macro_f1`, `state_ari`): each predicted cluster maps INDEPENDENTLY onto
+  whichever GT state is the majority vote among its own eval windows (no 1:1
+  constraint). This is the metric family that matches the thesis design (spec §5:
+  "load sub-structure appears as extra clusters ... or reported as sub-clusters") --
+  a machine operating mode (standstill/turbine/pump) can legitimately contain several
+  unsupervised load-level sub-clusters, and a detector that cleanly finds such
+  sub-clusters should NOT be penalized as if it had confused two different modes.
+- **Strict metrics -- secondary** (`ari`, `macro_f1`, `mapping`): a strict 1:1
+  Hungarian correspondence between clusters and GT states (see `_hungarian_mapping`
+  below). Kept unchanged for continuity with Task 13's baseline numbers and as a
+  diagnostic for genuine over-segmentation (a large gap between `state_macro_f1` and
+  `macro_f1` signals exactly the "extra clusters are sub-modes, not confusion"
+  pattern this module now also measures directly).
+
 Cluster ids are an arbitrary permutation with no inherent correspondence to GT state
 names (KMeans/GMM label ids are assigned by the clustering algorithm, not by this
 module) -- `_hungarian_mapping` recovers the best 1:1 correspondence via the Hungarian
@@ -15,7 +32,10 @@ predicted clusters than GT states (k > #states, e.g. load sub-structure appearin
 extra clusters -- spec §5), every cluster beyond the 1:1 assignment is left over; each
 such leftover cluster maps independently onto whichever GT state its own column in the
 contingency table maximizes (not restricted to already-matched states), so a k-sweep
-run never leaves a predicted cluster unmapped.
+run never leaves a predicted cluster unmapped. `_majority_mapping` (state-level) uses
+this same "own column argmax" rule for EVERY cluster, not just the 1:1 leftovers --
+i.e. it is what `_hungarian_mapping`'s fallback branch already does, applied
+universally.
 """
 from __future__ import annotations
 
@@ -24,7 +44,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
-from sklearn.metrics import adjusted_rand_score, f1_score
+from sklearn.metrics import accuracy_score, adjusted_rand_score, f1_score
 
 from rowii.signals.windows import WindowGrid
 
@@ -51,6 +71,20 @@ class EvalResult:
     mapping: dict[int, str]
     """Predicted cluster id -> GT state name, from Hungarian matching (see module
     docstring for the k > #states extra-cluster fallback)."""
+    state_mapping: dict[int, str]
+    """Predicted cluster id -> GT state name, from an INDEPENDENT per-cluster majority
+    vote (no 1:1 constraint) -- the primary, mode-level view (see module docstring)."""
+    state_accuracy: float
+    """Fraction of eval windows whose `state_mapping`-mapped prediction equals the
+    window's own GT state -- the primary, mode-level accuracy."""
+    state_macro_f1: float
+    """Macro-averaged F1 of `state_mapping`-mapped predictions vs GT states -- the
+    primary, mode-level counterpart to `macro_f1`."""
+    state_ari: float
+    """ARI between the GT state sequence and the `state_mapping`-collapsed predicted
+    sequence (cluster ids replaced by their mapped state NAME before scoring, unlike
+    `ari`, which compares raw cluster ids) -- rewards a detector for finding pure
+    sub-clusters of the correct state instead of penalizing the extra cluster count."""
 
 
 def _hungarian_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]:
@@ -84,6 +118,24 @@ def _hungarian_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]
             mapping[cluster_id] = str(column.idxmax())
 
     return mapping
+
+
+def _majority_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]:
+    """Cluster id -> GT state name, each cluster mapped INDEPENDENTLY to whichever GT
+    state is the majority among its own eval windows (no 1:1 constraint across
+    clusters -- see module docstring). Every cluster id present in *pred* gets an
+    entry; ties fall to `pandas.Series.idxmax`'s first-occurrence-in-index order
+    (deterministic given `gt_states.unique()`'s stable ordering), matching
+    `_hungarian_mapping`'s own extra-cluster fallback tie-break exactly.
+    """
+    state_names = sorted(gt_states.unique())
+    cluster_ids = sorted({int(c) for c in np.unique(pred)})
+
+    contingency = pd.DataFrame(0, index=state_names, columns=cluster_ids, dtype=np.int64)
+    for state, cluster in zip(gt_states, pred, strict=True):
+        contingency.loc[state, int(cluster)] += 1
+
+    return {cluster_id: str(contingency[cluster_id].idxmax()) for cluster_id in cluster_ids}
 
 
 def _state_change_indices(states: list[str]) -> list[int]:
@@ -142,13 +194,13 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
 
     gt_eval_states = gt.loc[eval_mask, "state"]
     pred_eval = pred[eval_mask]
+    state_names = sorted(gt_eval_states.unique())
 
     mapping = _hungarian_mapping(gt_eval_states, pred_eval)
 
     ari = float(adjusted_rand_score(gt_eval_states.to_numpy(), pred_eval))
 
     mapped_eval = np.array([mapping[int(c)] for c in pred_eval], dtype=object)
-    state_names = sorted(gt_eval_states.unique())
     macro_f1 = float(
         f1_score(
             gt_eval_states.to_numpy(),
@@ -163,6 +215,21 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
         pd.Series(gt_eval_states.to_numpy(), name="gt"),
         pd.Series(mapped_eval, name="predicted"),
     )
+
+    # State-level (mode) metrics -- primary view (see module docstring).
+    state_mapping = _majority_mapping(gt_eval_states, pred_eval)
+    state_mapped_eval = np.array([state_mapping[int(c)] for c in pred_eval], dtype=object)
+    state_accuracy = float(accuracy_score(gt_eval_states.to_numpy(), state_mapped_eval))
+    state_macro_f1 = float(
+        f1_score(
+            gt_eval_states.to_numpy(),
+            state_mapped_eval,
+            average="macro",
+            labels=state_names,
+            zero_division=0,
+        )
+    )
+    state_ari = float(adjusted_rand_score(gt_eval_states.to_numpy(), state_mapped_eval))
 
     # Boundary metric runs on the FULL timeline (all windows, including the ones
     # dropped above for every other metric) -- a cluster id outside `mapping` can only
@@ -182,4 +249,8 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
         boundary_median_abs_s=boundary_median_abs_s,
         n_eval_windows=n_eval,
         mapping=mapping,
+        state_mapping=state_mapping,
+        state_accuracy=state_accuracy,
+        state_macro_f1=state_macro_f1,
+        state_ari=state_ari,
     )
