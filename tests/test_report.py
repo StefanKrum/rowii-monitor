@@ -353,3 +353,72 @@ def test_predicted_timeline_panel_uses_state_mapping_not_strict_mapping(
     predicted_panel_states = spy_plot_panel.call_args_list[1].args[2]
     expected = [ev.state_mapping[int(c)] for c in frame_labels]
     assert predicted_panel_states == expected
+
+
+# ---------------------------------------------------------------------------
+# "Do sub-clusters track load levels?" section (Task 13b item 2)
+# ---------------------------------------------------------------------------
+
+
+def _gt_with_load_bin(states: list[str], load_bin: list[int]) -> pd.DataFrame:
+    assert len(states) == len(load_bin)
+    return pd.DataFrame(
+        {"state": states, "load_bin": np.array(load_bin, dtype=np.int64)},
+        index=pd.RangeIndex(len(states)),
+    )
+
+
+def test_report_md_contains_load_alignment_section_with_crosstab_and_ari_when_gt_given(
+    tmp_path: Path,
+) -> None:
+    n_windows = 20
+    grid = _grid(n_windows)
+    states = ["turbine"] * n_windows
+    load_bin = [0] * 10 + [1] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    frame_labels = np.array([0] * 10 + [1] * 10, dtype=np.int64)
+    segments = to_segments(frame_labels, grid)
+    det = DetectionResult(frame_labels=frame_labels, segments=segments, k=2)
+    ev = evaluate(frame_labels, gt, grid)
+    scada = _scada(n_windows)
+
+    write_report(
+        tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada, gt=gt
+    )
+
+    text = (tmp_path / "report.md").read_text()
+    assert "Do sub-clusters track load levels?" in text
+    assert "1.0000" in text  # perfect cluster<->load_bin alignment in this fixture
+
+
+def test_report_md_load_alignment_section_shows_na_when_gt_omitted(tmp_path: Path) -> None:
+    det, ev, grid, scada = _det_and_ev()
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    assert "Do sub-clusters track load levels?" in text
+    assert "n/a" in text.lower()
+
+
+def test_report_md_load_alignment_section_shows_na_when_fewer_than_two_load_bins(
+    tmp_path: Path,
+) -> None:
+    n_windows = 10
+    grid = _grid(n_windows)
+    states = ["turbine"] * n_windows
+    load_bin = [0] * n_windows  # single load bin -> load_alignment returns None
+    gt = _gt_with_load_bin(states, load_bin)
+    frame_labels = np.array([0] * 5 + [1] * 5, dtype=np.int64)
+    segments = to_segments(frame_labels, grid)
+    det = DetectionResult(frame_labels=frame_labels, segments=segments, k=2)
+    ev = evaluate(frame_labels, gt, grid)
+    scada = _scada(n_windows)
+
+    write_report(
+        tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada, gt=gt
+    )
+
+    text = (tmp_path / "report.md").read_text()
+    assert "Do sub-clusters track load levels?" in text
+    assert "n/a" in text.lower()

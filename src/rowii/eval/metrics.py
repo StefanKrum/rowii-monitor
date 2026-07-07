@@ -36,6 +36,13 @@ run never leaves a predicted cluster unmapped. `_majority_mapping` (state-level)
 this same "own column argmax" rule for EVERY cluster, not just the 1:1 leftovers --
 i.e. it is what `_hungarian_mapping`'s fallback branch already does, applied
 universally.
+
+`load_alignment` (Task 13b item 2) answers a narrower, orthogonal question: within the
+single dominant operating mode (turbine, or pump as a fallback -- see its own
+docstring), do the detector's sub-clusters track SCADA-derived load LEVEL rather than
+just "this is turbine"? This is independent of `evaluate`'s mode-vs-mode metrics above
+(which never look at `gt.load_bin` at all) and is scoped to whichever run actually has
+turbine/pump windows to analyze.
 """
 from __future__ import annotations
 
@@ -254,3 +261,54 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
         state_macro_f1=state_macro_f1,
         state_ari=state_ari,
     )
+
+
+_LOAD_ALIGNMENT_STATE = "turbine"
+_LOAD_ALIGNMENT_FALLBACK_STATE = "pump"
+_MIN_DISTINCT_LOAD_BINS = 2
+
+
+def load_alignment(pred: np.ndarray, gt: pd.DataFrame) -> pd.DataFrame | None:
+    """Do sub-clusters within one operating mode track SCADA load LEVEL?
+
+    Restricts to eval windows (`gt.state != "unknown"`) whose GT state is
+    `"turbine"` -- falling back to `"pump"` if this run has zero turbine windows
+    (e.g. a pump-only recording) -- and cross-tabulates predicted cluster id against
+    `gt.load_bin` on exactly that subset. A high alignment here means the detector's
+    extra sub-clusters (the ones that make `state_ari`/`macro_f1` diverge, see the
+    module docstring) are not noise: they correspond to genuine load-level
+    structure the unsupervised detector recovered without ever seeing SCADA.
+
+    Args:
+        pred: Per-window predicted cluster ids, shape matching `gt`'s row count.
+        gt: Ground-truth DataFrame (`rowii.scada.labels.gt_labels` output) with
+            `state` and `load_bin` columns.
+
+    Returns:
+        A cluster-id x load-bin crosstab DataFrame with the Adjusted Rand Index
+        between `load_bin` and cluster id (on this subset only) attached as
+        `df.attrs["ari"]`. `None` when the subset has fewer than 2 distinct load
+        bins to align against (an ARI would be undefined/degenerate), including
+        when the run has no turbine OR pump windows at all.
+    """
+    eval_mask = gt["state"].to_numpy() != _UNKNOWN
+    state_mask = (gt["state"].to_numpy() == _LOAD_ALIGNMENT_STATE) & eval_mask
+    if not state_mask.any():
+        state_mask = (gt["state"].to_numpy() == _LOAD_ALIGNMENT_FALLBACK_STATE) & eval_mask
+    if not state_mask.any():
+        return None
+
+    load_bin = gt.loc[state_mask, "load_bin"].to_numpy()
+    pred_subset = pred[state_mask]
+
+    if len(np.unique(load_bin)) < _MIN_DISTINCT_LOAD_BINS:
+        return None
+
+    ari = float(adjusted_rand_score(load_bin, pred_subset))
+
+    crosstab = pd.crosstab(
+        pd.Series(pred_subset, name="cluster"),
+        pd.Series(load_bin, name="load_bin"),
+    )
+    crosstab.attrs["ari"] = ari
+    return crosstab

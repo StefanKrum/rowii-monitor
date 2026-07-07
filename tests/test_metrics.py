@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rowii.eval.metrics import EvalResult, evaluate
+from rowii.eval.metrics import EvalResult, evaluate, load_alignment
 from rowii.signals.windows import WindowGrid
 
 
@@ -15,6 +15,14 @@ def _gt(states: list[str]) -> pd.DataFrame:
     return pd.DataFrame(
         {"state": states, "load_bin": np.full(n, -1, dtype=np.int64)},
         index=pd.RangeIndex(n),
+    )
+
+
+def _gt_with_load_bin(states: list[str], load_bin: list[int]) -> pd.DataFrame:
+    assert len(states) == len(load_bin)
+    return pd.DataFrame(
+        {"state": states, "load_bin": np.array(load_bin, dtype=np.int64)},
+        index=pd.RangeIndex(len(states)),
     )
 
 
@@ -325,3 +333,115 @@ def test_state_mapping_only_covers_eval_window_clusters_like_strict_mapping() ->
     result = evaluate(pred, gt, grid)
 
     assert 99 not in result.state_mapping
+
+
+# ---------------------------------------------------------------------------
+# load_alignment: sub-cluster vs load-bin analysis (Task 13b item 2)
+# ---------------------------------------------------------------------------
+
+
+def test_load_alignment_clusters_matching_load_bins_exactly_score_ari_one() -> None:
+    # 3 load bins within the turbine state, 3 predicted clusters that reproduce the
+    # bins exactly under an arbitrary id permutation -- ARI must be exactly 1.0.
+    states = ["turbine"] * 30
+    load_bin = [0] * 10 + [1] * 10 + [2] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([7] * 10 + [3] * 10 + [9] * 10, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is not None
+    assert result.attrs["ari"] == pytest.approx(1.0)
+
+
+def test_load_alignment_fewer_than_two_load_bins_returns_none() -> None:
+    # A single load bin within the turbine state gives nothing to align clusters
+    # against -- must return None rather than a degenerate ARI.
+    states = ["turbine"] * 10
+    load_bin = [0] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([0] * 5 + [1] * 5, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is None
+
+
+def test_load_alignment_excludes_unknown_windows() -> None:
+    # Unknown windows (no SCADA coverage) must never enter the crosstab or the ARI --
+    # here they carry a garbage load_bin/cluster id that would corrupt the alignment
+    # if not excluded.
+    states = ["unknown"] * 5 + ["turbine"] * 20
+    load_bin = [-1] * 5 + [0] * 10 + [1] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([99] * 5 + [0] * 10 + [1] * 10, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is not None
+    assert result.attrs["ari"] == pytest.approx(1.0)
+    assert result.to_numpy().sum() == 20
+    assert 99 not in result.index
+
+
+def test_load_alignment_restricts_to_turbine_state_only() -> None:
+    # Standstill/transition windows (load_bin == -1 by construction, per gt_labels)
+    # must not appear in the crosstab even though they are eval windows -- only
+    # "turbine" windows are in scope per the brief.
+    states = ["standstill"] * 5 + ["turbine"] * 10 + ["transition"] * 5
+    load_bin = [-1] * 5 + ([0] * 5 + [1] * 5) + [-1] * 5
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([9] * 5 + [0] * 5 + [1] * 5 + [9] * 5, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is not None
+    assert result.to_numpy().sum() == 10
+    assert 9 not in result.index
+
+
+def test_load_alignment_falls_back_to_pump_when_no_turbine_windows() -> None:
+    # No turbine windows at all in this run (e.g. a pump-only recording) -- the
+    # brief's documented fallback restricts to "pump" instead.
+    states = ["pump"] * 20
+    load_bin = [0] * 10 + [1] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([5] * 10 + [6] * 10, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is not None
+    assert result.attrs["ari"] == pytest.approx(1.0)
+    assert result.to_numpy().sum() == 20
+
+
+def test_load_alignment_returns_none_when_no_turbine_or_pump_windows_at_all() -> None:
+    # Neither turbine nor pump windows present (e.g. an all-standstill run) -- there
+    # is no subset to analyze at all, so this must return None like the
+    # too-few-load-bins case, not raise.
+    states = ["standstill"] * 10
+    load_bin = [-1] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([0] * 5 + [1] * 5, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is None
+
+
+def test_load_alignment_crosstab_shape_and_index_names() -> None:
+    # The crosstab's rows/cols must be cluster id x load_bin (order not asserted
+    # beyond containing exactly the right labels), and the returned object must be
+    # a real DataFrame so callers can render it directly.
+    states = ["turbine"] * 20
+    load_bin = [0] * 10 + [1] * 10
+    gt = _gt_with_load_bin(states, load_bin)
+    pred = np.array([0] * 10 + [1] * 10, dtype=np.int64)
+
+    result = load_alignment(pred, gt)
+
+    assert result is not None
+    assert isinstance(result, pd.DataFrame)
+    assert set(result.index) == {0, 1}
+    assert set(result.columns) == {0, 1}
+    assert "ari" in result.attrs
