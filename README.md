@@ -66,6 +66,15 @@ python scripts/run_step1.py --run tu --variant audio --clusterer kmeans
 python scripts/run_step1.py --run tu --variant fusion --clusterer kmeans
 ```
 
+`audio-beats` / `fusion-beats` need the `[beats]` extra installed and
+`ROWII_BEATS_CHECKPOINT` set to a BEATs `.pt` checkpoint (e.g.
+`BEATs_iter3_plus_AS2M.pt`):
+
+```bash
+python scripts/run_step1.py --run tu --variant audio-beats --clusterer kmeans
+python scripts/run_step1.py --run tu --variant fusion-beats --clusterer kmeans
+```
+
 Run the full grid (all recordings x all variants x both clusterers):
 
 ```bash
@@ -110,9 +119,12 @@ operating mode are not penalized as confusion -- see
 | tu | audio | 0.684 | 0.960 | 0.721 |
 | tu | vibration | 0.153 | 0.942 | 0.509 |
 | tu | fusion | 0.687 | 0.959 | 0.705 |
+| tu | audio-beats | 0.000 | 0.937 | 0.322 |
+| tu | fusion-beats | 0.000 | 0.937 | 0.322 |
 | pu-morning | audio | 1.000 | 1.000 | 1.000 |
 | pu-morning | vibration | 1.000 | 1.000 | 1.000 |
 | pu-morning | fusion | 1.000 | 1.000 | 1.000 |
+| pu-morning | audio-beats | 1.000 | 1.000 | 1.000 |
 
 PU-morning's 1.000 row is a degenerate case, not a detector triumph: this
 recording never leaves the pump state (all 719-1439 eval windows are GT
@@ -132,9 +144,12 @@ sub-modes, not confusion):
 | tu | audio | 4 | 0.144 | 0.721 | 40 | 0.470 |
 | tu | vibration | 4 | 0.128 | 0.658 | 135 | 0.316 |
 | tu | fusion | 4 | 0.153 | 0.705 | 58 | 0.399 |
+| tu | audio-beats | 4 | 0.064 | 0.430 | 39.5 | 0.162 |
+| tu | fusion-beats | 4 | 0.007 | 0.333 | 37 | 0.171 |
 | pu-morning | audio | 4 | 0.000 | 1.000 | None | 0.045 |
 | pu-morning | vibration | 4 | 0.000 | 1.000 | None | 0.023 |
 | pu-morning | fusion | 4 | 0.000 | 1.000 | None | 0.035 |
+| pu-morning | audio-beats | 4 | 0.000 | 1.000 | None | 0.011 |
 
 TU fusion k-sweep (state ARI now the headline column, strict ARI/macro-F1
 alongside for comparison; full detail per k in
@@ -151,14 +166,17 @@ alongside for comparison; full detail per k in
 predicted cluster id against SCADA `load_bin` on each run's turbine (TU) or
 pump (PU-morning) eval windows -- "do sub-clusters track load levels?" is
 answered *partially yes*: ARI(load_bin, cluster) is 0.457 (audio), 0.514
-(vibration), 0.465 (fusion) on TU, and 0.259 (audio), 0.204 (vibration),
-0.259 (fusion) on PU-morning. These are well above 0 (genuine, non-random
+(vibration), 0.465 (fusion), 0.567 (audio-beats), 0.620 (fusion-beats) on
+TU, and 0.259 (audio), 0.204 (vibration), 0.259 (fusion), 0.155
+(audio-beats) on PU-morning. These are well above 0 (genuine, non-random
 structure) but well below 1 (not a clean recovery of the 3 load bins) --
 the detector's turbine-phase sub-clusters correlate with load level more
 than chance but do not cleanly separate it, consistent with load level
 being one of several factors (alongside noise, transient dynamics, and
 whatever else drives the acoustic/vibration signature) the unsupervised
-clustering is picking up on.
+clustering is picking up on. Both BEATs variants' TU load-alignment ARI
+exceeds every handcrafted variant's -- the one metric family where BEATs
+embeddings are the clear winner, not just competitive.
 
 **Does fusion clear 0.9 on state-level ARI?** No, on either run in the
 "real detector recovering real structure" sense: TU fusion state ARI is
@@ -183,6 +201,50 @@ there -- the load-alignment ARIs (0.2-0.26) are PU-morning's only
 non-degenerate signal, and they show a similar "some real structure, not a
 clean recovery" pattern to TU. Neither run clears the ARI >= 0.9
 acceptance gate in any metric family that isn't degenerate.
+
+**Does frozen-BEATs beat handcrafted audio?** No -- on every headline
+metric it is worse, not better. TU audio-beats' state ARI is 0.000 versus
+handcrafted audio's 0.684, and its strict ARI (0.064) and macro-F1 (0.430)
+both trail handcrafted audio (0.144, 0.721) too; TU fusion-beats fares even
+worse on strict ARI (0.007 vs. handcrafted fusion's 0.153). The reason is
+visible directly in the standstill row of each confusion matrix:
+handcrafted audio catches 118/122 standstill windows, but audio-beats alone
+catches **0/122** -- every single standstill window lands in the same
+cluster as the transition phase, so KMeans on raw BEATs embeddings finds no
+separating structure between "machine off" and "machine ramping" at all.
+This is consistent with BEATs' AudioSet pretraining objective: it was never
+trained to represent "silence vs. quiet machinery," a distinction
+handcrafted `log_rms` and machine-frequency band energies capture directly
+by construction.
+
+**Does fusion-beats fix the standstill weakness?** In terms of the observed
+number, yes: fusion-beats' standstill row (118, 4, 0) exactly matches
+handcrafted audio's own row, a striking result given that audio-beats alone
+scores 0/122 on the same metric. What this repo's evaluation cannot cleanly
+attribute is *why* -- handcrafted fusion's standstill recall (47/122) is
+identical to handcrafted vibration alone's 47/122 (suggesting vibration,
+not handcrafted audio, already drove fusion's standstill recall before
+BEATs entered the picture), yet fusion-beats' 118/122 is far above that
+47/122 floor despite audio-beats itself contributing nothing to standstill
+recognition alone. The most defensible reading is that z-scored
+concatenation is not a simple sum of each branch's individual behavior --
+BEATs' very different embedding geometry changes what KMeans finds
+separable in the FUSED space, in a way that happens to recover the
+standstill/turbine split even though neither individual branch's isolated
+confusion-matrix number predicts that outcome. Confirming a precise
+mechanism would need per-branch ablations inside the fused feature matrix,
+out of scope here.
+
+BEATs' one genuine advantage across every metric measured here is
+load-alignment ARI (previous paragraph): both beats variants beat every
+handcrafted variant on TU, the only metric family where BEATs is a clear
+win rather than a regression. Runtime: audio-beats loads one frozen BEATs
+model (90.3M params) per mic stream, so TU/PU-morning audio-beats each
+construct two model copies; TU audio-beats ran in 4m32s, TU fusion-beats
+(two BEATs copies plus handcrafted vibration) in 6m07s, and PU-morning
+audio-beats (a ~9x smaller run) in 32s -- all three on Apple Silicon MPS
+via `best_device()`'s default priority, no `ROWII_FORCE_CPU` fallback
+needed.
 
 Genuine bugs surfaced and were fixed while getting real data through the
 pipeline for the first time (see commit history, one fix per commit):
