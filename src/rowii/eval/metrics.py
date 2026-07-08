@@ -9,15 +9,16 @@ by construction runs on the full per-window timeline (see `_state_change_indices
 Two families of metrics, both computed by every `evaluate()` call:
 
 - **State-level (mode) metrics -- primary** (`state_mapping`, `state_accuracy`,
-  `state_macro_f1`, `state_ari`): each predicted cluster maps INDEPENDENTLY onto
-  whichever GT state is the majority vote among its own eval windows (no 1:1
-  constraint). This is the metric family that matches the thesis design (spec §5:
-  "load sub-structure appears as extra clusters ... or reported as sub-clusters") --
-  a machine operating mode (standstill/turbine/pump) can legitimately contain several
-  unsupervised load-level sub-clusters, and a detector that cleanly finds such
-  sub-clusters should NOT be penalized as if it had confused two different modes.
-- **Strict metrics -- secondary** (`ari`, `macro_f1`, `mapping`): a strict 1:1
-  Hungarian correspondence between clusters and GT states (see `_hungarian_mapping`
+  `state_macro_f1`, `state_ari`, `state_confusion`): each predicted cluster maps
+  INDEPENDENTLY onto whichever GT state is the majority vote among its own eval
+  windows (no 1:1 constraint). This is the metric family that matches the thesis
+  design (spec §5: "load sub-structure appears as extra clusters ... or reported as
+  sub-clusters") -- a machine operating mode (standstill/turbine/pump) can
+  legitimately contain several unsupervised load-level sub-clusters, and a detector
+  that cleanly finds such sub-clusters should NOT be penalized as if it had confused
+  two different modes.
+- **Strict metrics -- secondary** (`ari`, `macro_f1`, `mapping`, `confusion`): a
+  strict 1:1 Hungarian correspondence between clusters and GT states (see `_hungarian_mapping`
   below). Kept unchanged for continuity with Task 13's baseline numbers and as a
   diagnostic for genuine over-segmentation (a large gap between `state_macro_f1` and
   `macro_f1` signals exactly the "extra clusters are sub-modes, not confusion"
@@ -67,7 +68,8 @@ class EvalResult:
     macro_f1: float
     """Macro-averaged F1 of Hungarian-mapped predicted states vs GT states."""
     confusion: pd.DataFrame
-    """Cross-tabulation: rows = GT states, columns = mapped predicted states."""
+    """Cross-tabulation: rows = GT states, columns named via the strict 1:1 Hungarian
+    mapping (`mapping`) -- the secondary, strict counterpart to `state_confusion`."""
     boundary_median_abs_s: float | None
     """Median |Δt| (seconds) from each GT state change to the nearest predicted state
     change, both found on the FULL per-window timeline (not eval-windows-only).
@@ -92,6 +94,12 @@ class EvalResult:
     sequence (cluster ids replaced by their mapped state NAME before scoring, unlike
     `ari`, which compares raw cluster ids) -- rewards a detector for finding pure
     sub-clusters of the correct state instead of penalizing the extra cluster count."""
+    state_confusion: pd.DataFrame
+    """Cross-tabulation: rows = GT states, columns named via the majority-vote mapping
+    (`state_mapping`) -- the primary, mode-level counterpart to `confusion`. A raw
+    cluster id can legitimately carry a DIFFERENT column name here than in `confusion`
+    (majority vote vs. the globally-optimized 1:1 Hungarian assignment can disagree on
+    the same cluster, see module docstring) -- callers must not conflate the two."""
 
 
 def _hungarian_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]:
@@ -238,6 +246,11 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
     )
     state_ari = float(adjusted_rand_score(gt_eval_states.to_numpy(), state_mapped_eval))
 
+    state_confusion = pd.crosstab(
+        pd.Series(gt_eval_states.to_numpy(), name="gt"),
+        pd.Series(state_mapped_eval, name="predicted"),
+    )
+
     # Boundary metric runs on the FULL timeline (all windows, including the ones
     # dropped above for every other metric) -- a cluster id outside `mapping` can only
     # occur here if it has zero eval-window presence at all (fully confined to
@@ -260,6 +273,7 @@ def evaluate(pred: np.ndarray, gt: pd.DataFrame, grid: WindowGrid) -> EvalResult
         state_accuracy=state_accuracy,
         state_macro_f1=state_macro_f1,
         state_ari=state_ari,
+        state_confusion=state_confusion,
     )
 
 

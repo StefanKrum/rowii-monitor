@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from rowii.eval.metrics import EvalResult, evaluate
-from rowii.eval.report import _window_s_from_segments, write_report
+from rowii.eval.report import _confusion_to_markdown, _window_s_from_segments, write_report
 from rowii.signals.windows import WindowGrid
 from rowii.state.detect import DetectionResult
 from rowii.state.segments import to_segments
@@ -312,6 +312,92 @@ def test_report_md_contains_state_level_primary_section_above_strict_section(
     assert f"{ev.state_accuracy:.4f}" in text
     assert f"{ev.state_macro_f1:.4f}" in text
     assert f"{ev.state_ari:.4f}" in text
+
+
+# ---------------------------------------------------------------------------
+# Per-family confusion matrices, each explicitly labeled with its own
+# mapping scheme (confusion-clarity fix): a raw cluster can be named
+# differently under Hungarian vs. majority mapping, so neither confusion
+# matrix may be rendered under an ambiguous or the wrong section's header.
+# ---------------------------------------------------------------------------
+
+
+def test_report_md_has_two_explicitly_labeled_confusion_matrix_headers(tmp_path: Path) -> None:
+    det, ev, grid, scada = _det_and_ev()
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    assert (
+        "## Confusion matrix — state-level / majority mapping "
+        "(rows = GT state, cols = majority-mapped prediction)"
+    ) in text
+    assert (
+        "## Confusion matrix — strict / Hungarian mapping "
+        "(rows = GT state, cols = Hungarian-mapped prediction)"
+    ) in text
+    # The old, scheme-less header must be gone -- no unlabeled confusion section
+    # may remain (the exact ambiguity this fix eliminates).
+    assert "## Confusion matrix (rows = GT state, cols = mapped predicted state)" not in text
+
+
+def test_report_md_each_confusion_matrix_appears_within_its_own_metric_family_section(
+    tmp_path: Path,
+) -> None:
+    det, ev, grid, scada = _det_and_ev()
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    state_level_header_idx = text.index("State-level (mode) metrics")
+    state_confusion_idx = text.index("## Confusion matrix — state-level / majority mapping")
+    strict_header_idx = text.index("Strict (1:1 Hungarian) metrics")
+    strict_confusion_idx = text.index("## Confusion matrix — strict / Hungarian mapping")
+
+    # Ordering: state-level section (metrics -> its own confusion matrix) fully
+    # precedes the strict section (metrics -> its own confusion matrix) -- each
+    # family owns its confusion matrix instead of both being deferred to one
+    # shared section at the end.
+    assert (
+        state_level_header_idx
+        < state_confusion_idx
+        < strict_header_idx
+        < strict_confusion_idx
+    )
+
+
+def test_report_md_renders_state_confusion_and_confusion_under_their_own_headers(
+    tmp_path: Path,
+) -> None:
+    # Divergence fixture (mirrors test_metrics.py's pinning test): cluster 1's
+    # Hungarian-mapped name ("standstill") differs from its majority-mapped name
+    # ("transition"), so `ev.confusion` and `ev.state_confusion` are genuinely
+    # DIFFERENT DataFrames here -- this test pins down that report.md renders each
+    # one under its OWN correctly labeled header, never the other's.
+    n_windows = 42
+    grid = _grid(n_windows)
+    states = ["transition"] * 20 + ["standstill"] * 10 + ["transition"] * 12
+    gt = _gt(states)
+    frame_labels = np.array([0] * 20 + [1] * 10 + [1] * 12, dtype=np.int64)
+    segments = to_segments(frame_labels, grid)
+    det = DetectionResult(frame_labels=frame_labels, segments=segments, k=2)
+    ev = evaluate(frame_labels, gt, grid)
+    scada = _scada(n_windows)
+    assert ev.mapping[1] == "standstill"
+    assert ev.state_mapping[1] == "transition"
+
+    write_report(tmp_path, run="tu", variant="audio-handcrafted", det=det, ev=ev, scada=scada)
+
+    text = (tmp_path / "report.md").read_text()
+    state_level_idx = text.index("## Confusion matrix — state-level / majority mapping")
+    strict_idx = text.index("## Confusion matrix — strict / Hungarian mapping")
+    state_level_section = text[state_level_idx:strict_idx]
+    strict_section = text[strict_idx:]
+
+    assert _confusion_to_markdown(ev.state_confusion) in state_level_section
+    assert _confusion_to_markdown(ev.state_confusion) not in strict_section
+    assert _confusion_to_markdown(ev.confusion) in strict_section
+    assert _confusion_to_markdown(ev.confusion) not in state_level_section
 
 
 def test_report_md_state_mapping_table_reflects_state_mapping_not_strict_mapping(
