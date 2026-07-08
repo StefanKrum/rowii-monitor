@@ -1,4 +1,4 @@
-"""Real-data smoke guards against the June-25 Rodundwerk II delivery.
+"""Real-data smoke guards against the full Illwerke campaign delivery.
 
 Every test here is `@pytest.mark.data`: skipped unless `ROWII_DATA_ROOT` (via
 `rowii.config.load_config`, the same `.env` + process-env resolution the rest
@@ -7,10 +7,19 @@ value or a missing `.env` must skip, not fail with a FileNotFoundError from
 deep inside `discover`).
 
 These are integration guards, not unit tests of new logic -- their purpose is
-to catch the moment reality (channel names, sample rates, channel counts)
-drifts from what the rest of the pipeline hard-codes or assumes. Task 13's
-no-legacy-assumptions constraint: every number asserted below is a property of
-THIS data, not carried over from an earlier delivery or exploratory deck.
+to catch the moment reality (channel names, sample rates, channel counts, day
+tree layout) drifts from what the rest of the pipeline hard-codes or assumes.
+Task 13's no-legacy-assumptions constraint: every number asserted below is a
+property of THIS data, not carried over from an earlier delivery or
+exploratory deck.
+
+`ROWII_DATA_ROOT` now points at the PARENT root (`data/`, containing every
+`illwerke-<dayid>` day tree -- spec: docs/superpowers/specs/2026-07-07-step1-
+multiday-phase-shifter-addendum.md §2), so every run name discovered here
+carries its day-id prefix (e.g. `"250526-tu"`, `"010726-tu_ph_tu"`) -- this
+file's own single-tree/legacy naming used unprefixed names before the
+addendum; that backward-compat behaviour is covered separately by
+`tests/test_dataset.py`'s synthetic fixtures, not against real data here.
 """
 from __future__ import annotations
 
@@ -40,10 +49,15 @@ def data_root() -> Path:
     return _DATA_ROOT
 
 
-def test_discover_finds_tu_run_with_four_streams_of_twelve_files_each(data_root: Path) -> None:
+def test_discover_finds_250526_tu_run_with_four_streams_of_twelve_files_each(
+    data_root: Path,
+) -> None:
     index = discover(data_root)
-    tu_runs = [r for r in index.runs if r.name == "tu"]
-    assert len(tu_runs) == 1, f"expected exactly one 'tu' run, found {len(tu_runs)}"
+    tu_runs = [r for r in index.runs if r.name == "250526-tu"]
+    assert len(tu_runs) == 1, (
+        f"expected exactly one '250526-tu' run, found {len(tu_runs)} "
+        f"(all runs: {sorted(r.name for r in index.runs)})"
+    )
 
     run = tu_runs[0]
     expected_streams = {
@@ -60,13 +74,56 @@ def test_discover_finds_tu_run_with_four_streams_of_twelve_files_each(data_root:
 
 def test_discover_finds_at_least_one_pu_run(data_root: Path) -> None:
     index = discover(data_root)
-    pu_runs = [r for r in index.runs if r.name.startswith("pu")]
-    assert len(pu_runs) >= 1, "expected at least one 'pu*' run in the discovered index"
+    pu_runs = [r for r in index.runs if "pu" in r.name]
+    assert len(pu_runs) >= 1, "expected at least one '*pu*' run in the discovered index"
+
+
+def test_discover_finds_every_day_tree_with_its_dayid_prefix(data_root: Path) -> None:
+    # Spec-named headline runs, verified directly against the campaign's own
+    # four day trees (each `illwerke-<dayid>` gets its own prefix -- see
+    # `rowii.io.dataset` module docstring): 25.06 (existing, legacy TU/PU
+    # session names), 29.06 (TU includes the ~37-min PH hold, still one
+    # continuous run -- no burst-file gap), 01.07 (ALL FOUR modes, including
+    # the day's own headline `TU_PH_TU` session). 27.06 has no Betriebsdaten
+    # at all (see the dedicated test below) but its burst session must still
+    # be discoverable.
+    index = discover(data_root)
+    names = {r.name for r in index.runs}
+
+    assert "250526-tu" in names
+    assert "290626-tu" in names
+    assert "010726-tu_ph_tu" in names
+    assert any(n.startswith("270626-pu_ph_pu_ph_pu_ph") for n in names), (
+        f"expected a 270626-pu_ph_pu_ph_pu_ph* run, found: {sorted(names)}"
+    )
+
+
+def test_discover_scopes_betriebsdaten_per_day_tree_on_real_data(data_root: Path) -> None:
+    # 27.06 has zero Betriebsdaten (spec §1: "none (photo only)") while the
+    # other three days each have their own full day's worth -- a day tree with
+    # no SCADA at all must have no entry (or an empty list), never silently
+    # inherit a sibling day's files.
+    index = discover(data_root)
+
+    day_270626 = next(
+        (r.day_root for r in index.runs if r.name.startswith("270626-")), None
+    )
+    assert day_270626 is not None, "expected at least one 270626-* run"
+    assert index.betriebsdaten_by_day.get(day_270626, []) == []
+
+    for prefix in ("250526-", "290626-", "010726-"):
+        day_root = next(
+            (r.day_root for r in index.runs if r.name.startswith(prefix)), None
+        )
+        assert day_root is not None, f"expected at least one {prefix}* run"
+        assert index.betriebsdaten_by_day.get(day_root, []), (
+            f"expected non-empty Betriebsdaten for day tree {day_root} ({prefix}*)"
+        )
 
 
 def test_tu_mic_file_header_reports_plausible_audio_rate_and_channels(data_root: Path) -> None:
     index = discover(data_root)
-    run = next(r for r in index.runs if r.name == "tu")
+    run = next(r for r in index.runs if r.name == "250526-tu")
     first_mic_file = sorted(
         run.files["RAWGeneratorMic__0"], key=lambda f: f.start_utc_hint
     )[0]
@@ -85,7 +142,7 @@ def test_tu_vib_file_header_reports_plausible_vibration_rate_and_six_channels(
     data_root: Path,
 ) -> None:
     index = discover(data_root)
-    run = next(r for r in index.runs if r.name == "tu")
+    run = next(r for r in index.runs if r.name == "250526-tu")
     first_vib_file = sorted(
         run.files["RAWGeneratorVib__2"], key=lambda f: f.start_utc_hint
     )[0]

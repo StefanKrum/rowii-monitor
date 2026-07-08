@@ -32,24 +32,39 @@ cp .env.example .env
 ## Data layout
 
 Sensor data is never committed to this repo. `ROWII_DATA_ROOT` (env var or
-`.env`) points at a local copy of the following tree, sourced from
-`~/Downloads/illwerke-250526-analysis`:
+`.env`) points at a local **parent root** containing one subdirectory per
+measurement day (`illwerke-<dayid>/`), each itself a full day tree:
 
 ```
 <ROWII_DATA_ROOT>/
-├── 20260626 Messung/
-│   ├── TU/                     # 48 files, 25 GB — turbine run, 2026-06-25 04:15-06:27 UTC,
-│   │                           #   12-min segments x 4 streams
-│   ├── PU/                     # 21 files, 9.6 GB — pump runs, 2026-06-25 morning + afternoon
-│   └── Betriebsdaten/          # hourly SCADA files, 2026-06-25 00:00-11:00, ~30 channels @ 10 Hz
-├── Sensor_Anordnung_15062026.xlsx   # stream index -> physical sensor mapping
-├── ROWII_Leistung_{PU,TU}.jpg       # power curve screenshots (backup ground truth)
-└── MANIFEST.md                      # provenance notes
+├── illwerke-250526/
+│   └── 20260626 Messung/
+│       ├── TU/                     # 48 files, 25 GB — turbine run, 2026-06-25 04:15-06:27 UTC,
+│       │                           #   12-min segments x 4 streams
+│       ├── PU/                     # 21 files, 9.6 GB — pump runs, 2026-06-25 morning + afternoon
+│       └── Betriebsdaten/          # hourly SCADA, 2026-06-25 00:00-11:00, ~30 channels @ 10 Hz
+├── illwerke-270626/
+│   └── 20260627 Messung/
+│       └── PU_PH_PU_PH_PU_PH/      # ~4h alternating pump / phase-shifter; NO Betriebsdaten
+├── illwerke-290626/
+│   └── 20260629 Messung/           # TU (incl. a ~37-min phase-shifter hold), PU, full-day SCADA
+└── illwerke-010726/
+    └── 20260701 Messung/           # PU, TU1, TU2, TU_PH_TU (all 4 operating modes), full-day SCADA
 ```
+
+`rowii.io.dataset.discover` also accepts a single day tree directly (e.g.
+`ROWII_DATA_ROOT=.../illwerke-250526`) for backward compatibility — run names
+then have no day-id prefix, matching the pre-multi-day behaviour exactly. Under
+the parent-root layout above, every discovered run is prefixed with its own
+day's 6-digit id (`250526-tu`, `010726-tu_ph_tu`, `270626-pu_ph_pu_ph_pu_ph`,
+...); each run's SCADA ground truth is scoped to its own day tree only (a run
+never sees a different day's Betriebsdaten).
 
 Each burst contributes four streams: `RAWGeneratorMic__0` / `RAWTurbineMic__1`
 (~50 kHz microphone rings) and `RAWGeneratorVib__2` / `RAWTurbineVib__3`
 (~10 kHz tri-axial accelerometers). All files are Gantner UDBF v1.07 binaries.
+Session folder names (`TU`, `PU`, `TU_PH_TU`, ...) are operator hints only —
+ground truth always comes from SCADA (or `unknown` on the one day with none).
 
 ## Quickstart
 
@@ -59,11 +74,12 @@ Copy the required subset of a source tree into `ROWII_DATA_ROOT`:
 python scripts/copy_data.py --source ~/Downloads/illwerke-250526-analysis
 ```
 
-Run state detection for one recording / input variant / clusterer:
+Run state detection for one recording / input variant / clusterer (run names
+are day-prefixed under a parent `ROWII_DATA_ROOT`, see "Data layout" above):
 
 ```bash
-python scripts/run_step1.py --run tu --variant audio --clusterer kmeans
-python scripts/run_step1.py --run tu --variant fusion --clusterer kmeans
+python scripts/run_step1.py --run 250526-tu --variant audio --clusterer kmeans
+python scripts/run_step1.py --run 250526-tu --variant fusion --clusterer kmeans
 ```
 
 `audio-beats` / `fusion-beats` need the `[beats]` extra installed and
@@ -71,8 +87,8 @@ python scripts/run_step1.py --run tu --variant fusion --clusterer kmeans
 `BEATs_iter3_plus_AS2M.pt`):
 
 ```bash
-python scripts/run_step1.py --run tu --variant audio-beats --clusterer kmeans
-python scripts/run_step1.py --run tu --variant fusion-beats --clusterer kmeans
+python scripts/run_step1.py --run 250526-tu --variant audio-beats --clusterer kmeans
+python scripts/run_step1.py --run 250526-tu --variant fusion-beats --clusterer kmeans
 ```
 
 Run the full grid (all recordings x all variants x both clusterers):
