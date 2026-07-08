@@ -631,3 +631,135 @@ def test_assemble_variant_features_fusion_survives_a_few_nan_rows() -> None:
         "expected every fused column to retain genuine variance on the valid rows, "
         f"but {int((valid_std <= 1e-6).sum())}/{len(valid_std)} columns are degenerate"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Multi-day parent root: Betriebsdaten must be scoped per day tree, not
+#    pooled flat across the whole discovered index (addendum spec §2/§4).
+# ---------------------------------------------------------------------------
+
+
+def _build_one_day_tree(
+    day_dir: Path, *, day_label: str, state: str
+) -> None:
+    """One day tree (`<day_dir>/<day_label> Messung/{TU,Betriebsdaten}`) with a
+    SINGLE burst run and a SINGLE, internally-homogeneous Betriebsdaten hour
+    whose GT state is entirely *state* ("standstill" or "turbine").
+
+    Deliberately reuses the exact SAME `_E2E_T0_NS` epoch for every day tree
+    built this way (unlike `_build_e2e_data_root`, which is free to use any
+    fixed epoch since it only ever builds one day) -- this makes every day's
+    burst/Betriebsdaten files overlap in absolute UTC time with every OTHER
+    day's, so `_betriebsdaten_for_grid`'s time-overlap filter alone could never
+    correctly disambiguate which Betriebsdaten file belongs to which run: the
+    only thing that can keep the days from cross-contaminating each other's GT
+    is `main()` actually scoping by `Run.day_root` via
+    `RecordingIndex.betriebsdaten_by_day`, not a lucky non-overlapping-time
+    coincidence.
+    """
+    from tests.fixtures.gantner_builder import build_gantner_file
+
+    meas = day_dir / f"{day_label} Messung"
+    tu = meas / "TU"
+    bd = meas / "Betriebsdaten"
+    tu.mkdir(parents=True, exist_ok=True)
+    bd.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(0)
+    n_mic = int(_E2E_MIC_RATE_HZ * _E2E_DURATION_S)
+    for stream_name in ("RAWGeneratorMic__0", "RAWTurbineMic__1"):
+        data = rng.normal(0.0, 0.5, size=(n_mic, 4)).astype(np.float32)
+        build_gantner_file(
+            tu / f"{stream_name}_2026-06-25_06-00-00_000000.dat",
+            ["ch0", "ch1", "ch2", "ch3"],
+            data,
+            t0_ns=_E2E_T0_NS,
+            rate_hz=_E2E_MIC_RATE_HZ,
+        )
+    n_vib = int(_E2E_VIB_RATE_HZ * _E2E_DURATION_S)
+    for stream_name in ("RAWGeneratorVib__2", "RAWTurbineVib__3"):
+        data = rng.normal(0.0, 0.2, size=(n_vib, 2)).astype(np.float32)
+        build_gantner_file(
+            tu / f"{stream_name}_2026-06-25_06-00-00_000000.dat",
+            ["chX", "chY"],
+            data,
+            t0_ns=_E2E_T0_NS,
+            rate_hz=_E2E_VIB_RATE_HZ,
+        )
+
+    n_scada = int(_E2E_SCADA_RATE_HZ * _E2E_DURATION_S)
+    if state == "standstill":
+        power = np.zeros(n_scada, dtype=np.float32)
+        speed = np.zeros(n_scada, dtype=np.float32)
+        flow_tu = np.zeros(n_scada, dtype=np.float32)
+    else:
+        power = np.full(n_scada, 10.0, dtype=np.float32)
+        speed = np.full(n_scada, 375.0, dtype=np.float32)
+        flow_tu = np.full(n_scada, 5.0, dtype=np.float32)
+    guide_vane = np.full(n_scada, 50.0, dtype=np.float32)
+    flow_pu = np.zeros(n_scada, dtype=np.float32)
+    scada_data = np.stack([power, speed, guide_vane, flow_tu, flow_pu], axis=1)
+    build_gantner_file(
+        bd / "2026-06-25_08-00-00.dat",
+        ["1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU", "Durchfluss PU"],
+        scada_data,
+        t0_ns=_E2E_T0_NS,
+        rate_hz=_E2E_SCADA_RATE_HZ,
+    )
+
+
+def test_main_scopes_betriebsdaten_per_day_tree_not_pooled_across_days(
+    tmp_path, monkeypatch
+) -> None:
+    # Two day trees under one PARENT root, same absolute UTC time base (see
+    # `_build_one_day_tree`'s docstring) -- illwerke-000001 is all-standstill,
+    # illwerke-000002 is all-turbine. If `main()` ever regresses to passing the
+    # pooled flat `index.betriebsdaten` list to every run instead of each run's
+    # own `index.betriebsdaten_by_day[run.day_root]`, `_betriebsdaten_for_grid`
+    # would match BOTH Betriebsdaten files for BOTH runs (they overlap in
+    # time), `load_scada_window_means` would average standstill (P=0) and
+    # turbine (P=10) samples together into every window, and NEITHER run's
+    # actual `report.md` confusion matrix would show a clean, homogeneous GT
+    # state anymore -- it would show the same corrupted (turbine/transition)
+    # mix for BOTH runs regardless of which day tree is which.
+    data_root = tmp_path / "data"
+    _build_one_day_tree(
+        data_root / "illwerke-000001", day_label="20260601", state="standstill"
+    )
+    _build_one_day_tree(
+        data_root / "illwerke-000002", day_label="20260602", state="turbine"
+    )
+
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+
+    import run_step1
+
+    exit_code = run_step1.main(["--run", "all", "--variant", "audio", "--clusterer", "kmeans"])
+    assert exit_code == 0
+
+    cfg_results_root = tmp_path / "results"
+    summary = pd.read_csv(cfg_results_root / "summary.csv")
+    assert sorted(summary["run"]) == ["000001-tu", "000002-tu"]
+
+    # The confusion matrix's GT row labels are the ground-truth read directly
+    # off the ACTUAL report.md main() wrote to disk -- the one artifact that
+    # can only be correct if main()'s own call to run_combo used this run's
+    # own day's Betriebsdaten, not a leaked pooled list.
+    for run_name, expected_gt_state, forbidden_gt_state in (
+        ("000001-tu", "standstill", "turbine"),
+        ("000002-tu", "turbine", "standstill"),
+    ):
+        report_path = cfg_results_root / run_name / "audio-kmeans" / "report.md"
+        assert report_path.is_file(), f"missing report for {run_name}"
+        report_text = report_path.read_text()
+        confusion_section = report_text.split("## Confusion matrix", 1)[1]
+        assert f"| {expected_gt_state} |" in confusion_section, (
+            f"{run_name}: expected GT row {expected_gt_state!r} in its own confusion "
+            f"matrix, got:\n{confusion_section}"
+        )
+        assert f"| {forbidden_gt_state} |" not in confusion_section, (
+            f"{run_name}: found sibling day's GT row {forbidden_gt_state!r} in its "
+            f"confusion matrix -- Betriebsdaten leaked across day trees:\n"
+            f"{confusion_section}"
+        )

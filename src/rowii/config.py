@@ -59,7 +59,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         merged = dict(env)
     ckpt = merged.get("ROWII_BEATS_CHECKPOINT") or None
     return Config(
-        data_root=Path(merged.get("ROWII_DATA_ROOT", "data/illwerke-250526")).expanduser(),
+        data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
         beats_checkpoint=Path(ckpt).expanduser() if ckpt else None,
     )

@@ -34,8 +34,17 @@ from rowii.io.gantner import GantnerHeader, read_gantner, read_header  # noqa: E
 from rowii.scada.labels import GT_CHANNELS  # noqa: E402
 from rowii.signals.features import MACHINE_HZ  # noqa: E402
 
+_DAY_ROOT = "illwerke-250526"
+"""ROWII_DATA_ROOT now points at the PARENT root (spec: docs/superpowers/specs/
+2026-07-07-step1-multiday-phase-shifter-addendum.md §2) containing every
+`illwerke-<dayid>` day tree -- checks 1-5 below are specific to the original
+2026-06-25 delivery, so they resolve their own Betriebsdaten hour under THIS
+day tree explicitly rather than assuming `cfg.data_root` itself is a single
+day root (the pre-addendum behaviour)."""
 _MESSUNG_DIR = "20260626 Messung"
-_BETRIEBSDATEN_DIR = f"{_MESSUNG_DIR}/Betriebsdaten"
+_BETRIEBSDATEN_DIR = f"{_DAY_ROOT}/{_MESSUNG_DIR}/Betriebsdaten"
+_RUN_NAME_TU = "250526-tu"
+_RUN_NAME_PU_AFTERNOON = "250526-pu-afternoon"
 _POWER_GENERATION_THRESHOLD_MW = 50.0
 _SPEED_DEVIATION_CORRECTION_THRESHOLD_PCT = 2.0
 _MACHINE_HZ_LOCAL_WINDOW_HZ = 3.0
@@ -131,7 +140,7 @@ def measure_machine_band_peaks(
     channel: int = 0,
 ) -> SpectralVerificationResult:
     """Welch PSD on a 60-s mid-file segment of one TU generator-mic channel during generation."""
-    run = next(r for r in index.runs if r.name == "tu")
+    run = next(r for r in index.runs if r.name == _RUN_NAME_TU)
     files = sorted(run.files["RAWGeneratorMic__0"], key=lambda f: f.start_utc_hint)
     # Any file at/after the 05:00 local burst is well inside the generation phase (turbine run
     # spans 04:15-06:27 local per MANIFEST.md; standstill/ramp-up is confined to the first ~17
@@ -178,7 +187,7 @@ class VibLivenessResult:
 
 
 def measure_vib_liveness(cfg: Config, index: RecordingIndex, stream: str) -> VibLivenessResult:
-    run = next(r for r in index.runs if r.name == "tu")
+    run = next(r for r in index.runs if r.name == _RUN_NAME_TU)
     files = sorted(run.files[stream], key=lambda f: f.start_utc_hint)
     target = files[0]
     gf = read_gantner(target.path)
@@ -254,11 +263,15 @@ def _wall_clock_hms(t0_ns: int) -> str:
 
 
 def measure_pu_afternoon_coverage(cfg: Config, index: RecordingIndex) -> PuAfternoonCoverageResult:
-    last_bd_path = sorted(index.betriebsdaten)[-1]
+    pu_afternoon = next(r for r in index.runs if r.name == _RUN_NAME_PU_AFTERNOON)
+    # Scoped to pu-afternoon's OWN day tree (see `Run.day_root`) -- the pooled,
+    # flat `index.betriebsdaten` now spans every day in the parent root, so its
+    # own last-sorted entry is no longer necessarily 250526's own last hour.
+    day_betriebsdaten = index.betriebsdaten_by_day[pu_afternoon.day_root]
+    last_bd_path = sorted(day_betriebsdaten)[-1]
     h_bd = read_header(last_bd_path)
     bd_end_ns = h_bd.t0_ns + round(h_bd.n_frames / h_bd.sample_rate_hz * 1e9)
 
-    pu_afternoon = next(r for r in index.runs if r.name == "pu-afternoon")
     earliest: tuple[str, GantnerHeader] | None = None
     for _stream, files in pu_afternoon.files.items():
         first = sorted(files, key=lambda f: f.start_utc_hint)[0]

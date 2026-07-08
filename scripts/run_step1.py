@@ -746,17 +746,26 @@ def main(argv: list[str] | None = None) -> int:
 
     n_rows = 0
     for run in runs:
+        # A run must only ever be evaluated against its OWN day tree's
+        # Betriebsdaten (spec: docs/superpowers/specs/2026-07-07-step1-
+        # multiday-phase-shifter-addendum.md §2) -- passing the flat, pooled
+        # `index.betriebsdaten` here would let `_betriebsdaten_for_grid`'s
+        # time-overlap filter match a DIFFERENT day's SCADA file whenever two
+        # days' burst/Betriebsdaten timestamps happen to overlap (every day
+        # tree in this delivery shares the same device-clock convention, so
+        # this is a real risk, not a hypothetical one).
+        run_betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
         for variant in variants:
             for clusterer in clusterers:
                 if args.k_sweep:
                     n_rows += len(
                         run_combo_k_sweep(
-                            run, variant, clusterer, cfg, index.betriebsdaten, cfg.results_root
+                            run, variant, clusterer, cfg, run_betriebsdaten, cfg.results_root
                         )
                     )
                 else:
                     run_combo(
-                        run, variant, clusterer, cfg, index.betriebsdaten,
+                        run, variant, clusterer, cfg, run_betriebsdaten,
                         cfg.results_root, k=args.k,
                     )
                     n_rows += 1
