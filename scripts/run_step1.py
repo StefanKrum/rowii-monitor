@@ -58,7 +58,6 @@ ClustererName = Literal["kmeans", "gmm"]
 `clusterer` parameter type -- used everywhere a clusterer choice flows into it, so no
 `type: ignore` is needed at the `run_detection` call site."""
 
-_RUN_CHOICES: tuple[str, ...] = ("tu", "pu-morning", "pu-afternoon", "all")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio",
     "audio-beats",
@@ -154,7 +153,17 @@ def build_parser() -> argparse.ArgumentParser:
             "(run, variant, clusterer) combinations."
         )
     )
-    parser.add_argument("--run", choices=_RUN_CHOICES, default="all")
+    parser.add_argument(
+        "--run",
+        default="all",
+        help=(
+            "Run name to process, or 'all' for every discovered run. Run names are "
+            "dynamically discovered from ROWII_DATA_ROOT (day-prefixed under a "
+            "parent root, e.g. '010726-tu_ph_tu') -- not a fixed enumeration, so any "
+            "string is accepted here; an unmatched name warns and processes zero "
+            "combinations rather than failing argparse validation."
+        ),
+    )
     parser.add_argument("--variant", choices=_VARIANT_CHOICES, default="audio")
     parser.add_argument("--clusterer", choices=_CLUSTERER_CHOICES, default="kmeans")
     parser.add_argument(

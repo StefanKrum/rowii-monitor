@@ -196,6 +196,21 @@ def test_run_step1_help_exits_zero(capsys) -> None:
     assert "--k-sweep" in out
 
 
+def test_run_step1_parser_accepts_arbitrary_day_prefixed_run_names() -> None:
+    # Run names are now dynamically discovered per data root (day-prefixed under a
+    # parent root, e.g. "010726-tu_ph_tu", "270626-pu_ph_pu_ph_pu_ph") -- --run must
+    # NOT be constrained to a hardcoded, pre-addendum choices= enumeration
+    # ("tu"/"pu-morning"/"pu-afternoon"/"all"), which would reject every real
+    # multi-day run name with an argparse "invalid choice" SystemExit before
+    # _resolve_runs (which already handles an arbitrary string + warns if unmatched)
+    # ever gets a chance to run.
+    import run_step1
+
+    parser = run_step1.build_parser()
+    args = parser.parse_args(["--run", "010726-tu_ph_tu", "--variant", "audio"])
+    assert args.run == "010726-tu_ph_tu"
+
+
 # ---------------------------------------------------------------------------
 # 4. beats variant without the extra installed -> SystemExit with install hint
 # ---------------------------------------------------------------------------
