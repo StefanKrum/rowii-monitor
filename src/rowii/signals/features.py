@@ -317,7 +317,19 @@ class VibFeaturizer:
 
         live_channels: list[int] = []
         for ch in range(n_channels):
-            std = float(windows[:, :, ch].std())
+            # float64, NOT the input's own float32: float32 pairwise summation
+            # injects rounding noise of ~|c| * eps/2 into the std of a channel
+            # exactly constant at c, and the noise's magnitude depends on the
+            # batch's total element count -- measured on real data (2026-07-01
+            # TU1 RAWTurbineVib__3, channels constant at -7.0): 4.77e-07 for some
+            # per-file batch shapes, exactly 0.0 for others, i.e. ABOVE the 1e-9
+            # dead threshold for some files of a stream and below it for the
+            # rest, flip-flopping the same physically-dead channel live/dead
+            # across files and changing the feature-row width mid-stream (which
+            # crashes _extract_stream_features' preallocated-matrix assignment).
+            # In float64 a constant channel's std is exactly 0.0 for every batch
+            # shape at any realistic batch size.
+            std = float(windows[:, :, ch].astype(np.float64).std())
             if std < _DEAD_CHANNEL_STD:
                 logger.warning(
                     "VibFeaturizer: channel %d is dead (std=%.3e < %.1e over the full "
