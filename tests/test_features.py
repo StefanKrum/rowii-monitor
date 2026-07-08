@@ -337,6 +337,41 @@ def test_vib_featurizer_dead_channel_dropped_with_warning_and_feature_count_shri
     assert any(n.startswith("ch0_") for n in names)
 
 
+def test_vib_featurizer_dead_channel_detection_immune_to_float32_summation_noise() -> None:
+    # Real-data crash (2026-07-01 TU1, RAWTurbineVib__3, addendum Item 5): channels
+    # 0-2 are exactly constant at -7.0 in every sample of every file, but computing
+    # the batch std in float32 picks up pairwise-summation ROUNDING NOISE whose
+    # magnitude depends on the batch's total element count -- ~4.77e-07 (= |c|*eps/2
+    # for c=-7.0) for some counts, exactly 0.0 for others. 4.77e-07 > the 1e-9 dead
+    # threshold, so the SAME physically-dead channel flip-flopped live/dead across
+    # FILES of one stream purely by batch shape, changing the feature-row width
+    # mid-stream and crashing _extract_stream_features' matrix assignment
+    # ("could not broadcast input array from shape (36,) into shape (72,)").
+    #
+    # 2_511_087 elements is a count measured to produce the nonzero float32 std for
+    # the real channel constant (-7.0); the dead-channel std must be computed in
+    # float64, where a constant channel is exactly 0.0 for EVERY batch shape.
+    n = 2_511_087
+    dead = np.full((1, n), np.float32(-7.0), dtype=np.float32)
+    assert float(dead.std()) > 1e-9, (
+        "precondition: this exact element count must exhibit the float32 summation "
+        "noise the fix guards against (if numpy's pairwise summation changes, pick "
+        "a new count with np.full(n, np.float32(-7.0)).std() > 1e-9)"
+    )
+    rng = np.random.default_rng(0)
+    live = rng.normal(0.0, 1.0, size=(1, n)).astype(np.float32)
+    windows = np.stack([dead[0], live[0]], axis=1)[np.newaxis, :, :]
+    assert windows.shape == (1, n, 2)
+
+    feat = VibFeaturizer()
+    feat.transform(windows, rate_hz=10_000.0)
+
+    assert feat.live_channels_ == [1], (
+        f"expected the exactly-constant channel 0 to be detected dead regardless of "
+        f"batch shape, got live_channels_={feat.live_channels_}"
+    )
+
+
 def test_vib_featurizer_feature_names_before_transform_raises_or_is_empty_until_called() -> (
     None
 ):
