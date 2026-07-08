@@ -517,18 +517,22 @@ def test_gt_labels_5min_unloaded_spinning_run_stays_transition() -> None:
 
 
 def test_gt_labels_ph_promotion_disabled_ks_gate_ignores_ks_value() -> None:
-    # ph_requires_ks_closed=False (the shipped default): a qualifying 15-window
-    # run is promoted to phase-shifter regardless of the KS valve reading, even
-    # when it reads fully OPEN (well above ks_closed_max) throughout.
+    # ph_requires_ks_closed=False (explicitly disabled here -- the shipped default
+    # flipped to True on 2026-07-08 once verify_parameters.py confirmed the
+    # separation on real 2026-07-01 data, see GtRules.ph_requires_ks_closed's own
+    # docstring): with the gate off, a qualifying 15-window run is promoted to
+    # phase-shifter regardless of the KS valve reading, even when it reads fully
+    # OPEN (well above ks_closed_max) throughout.
+    rules = dataclasses.replace(PH_RULES, ph_requires_ks_closed=False)
     n_nom = RULES.speed_nominal_rpm
     n = 15
     power = [0.0] * n
     speed = [n_nom] * n
-    ks_open = [PH_RULES.ks_closed_max * 10.0] * n  # far above the closed threshold
+    ks_open = [rules.ks_closed_max * 10.0] * n  # far above the closed threshold
     scada = _scada(power, speed, ks_valve=ks_open)
-    assert PH_RULES.ph_requires_ks_closed is False
+    assert rules.ph_requires_ks_closed is False
 
-    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+    result = gt_labels(scada, rules, window_s=PH_WINDOW_S)
 
     assert set(result["state"]) == {"phase-shifter"}
 
@@ -593,6 +597,28 @@ def test_gt_labels_ph_promotion_enabled_nan_ks_falls_back_to_promoting_with_warn
     assert any("ks" in msg.lower() for msg in warnings), (
         f"expected a KS-gate warning, got: {warnings}"
     )
+
+
+def test_gt_labels_ph_promotion_uses_dedicated_ph_power_eps_not_the_general_one() -> None:
+    # Real-data finding (2026-07-01 TU_PH_TU day, ~98 min of confirmed phase-shifter
+    # operation measured directly): active power sits at a stable ~-3.5 MW median
+    # (range -4.3 to -2.9 MW) during genuine PH operation -- well OUTSIDE the general
+    # power_eps_mw=2.0 threshold (calibrated for standstill/loaded turbine-pump
+    # discrimination, not PH idling losses). ph_power_eps_mw is a DEDICATED,
+    # separately-configurable threshold specifically for the PH candidate check, so
+    # a run at this realistic ~3.5 MW magnitude is still promoted while the general
+    # power_eps_mw (used everywhere else in _base_state) stays untouched.
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [-3.5] * n  # exceeds RULES.power_eps_mw (2.0) but not ph_power_eps_mw
+    speed = [n_nom] * n
+    scada = _scada(power, speed)
+    assert abs(power[0]) > RULES.power_eps_mw
+    assert abs(power[0]) <= PH_RULES.ph_power_eps_mw
+
+    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"phase-shifter"}
 
 
 def test_gt_labels_ramp_rule_never_demotes_phase_shifter_interior() -> None:
