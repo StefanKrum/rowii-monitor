@@ -470,11 +470,11 @@ def _render_phase_shifter_channels_section(
         lines.append("")
         if separated:
             lines.append(
-                f"Clean separation confirmed on our own data: "
-                f"`ph_requires_ks_closed=True`, `ks_closed_max={closed_states_max:.1f}` "
-                f"(measured phase-shifter/standstill p95 + margin below the measured "
-                f"turbine/pump p5 of {open_states_min:.3f}) recorded in "
-                "`GtRules` with this section as the verification provenance."
+                f"Clean separation confirmed on our own data: measured closed-state p95 "
+                f"(phase-shifter {ks_ph.p95:.3f}, standstill {ks_ss.p95:.3f}) vs. "
+                f"open-state p5 (turbine {ks_tu.p5:.3f}, pump {ks_pu.p5:.3f}). "
+                f"`ph_requires_ks_closed=True` and `ks_closed_max={rules.ks_closed_max}` "
+                f"recorded in `GtRules` with this section as verification provenance."
             )
         else:
             lines.append(
