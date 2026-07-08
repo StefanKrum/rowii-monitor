@@ -7,7 +7,12 @@ combination (spec §8 deliverables): it renders the `EvalResult` produced by
 the grid start), and re-exports the machine-readable `segments.csv` /
 `frame_labels.parquet` artifacts spec §8 lists alongside it. report.md now leads with a
 state-level (mode) metrics block using majority cluster->state mapping, with the
-original strict 1:1 Hungarian view retained below it as a secondary reference.
+original strict 1:1 Hungarian view retained below it as a secondary reference. Each
+block owns its own confusion matrix (`EvalResult.state_confusion` / `.confusion`
+respectively) under a header that names its mapping scheme explicitly -- a raw
+cluster id can be named differently by majority vote than by the 1:1 Hungarian
+assignment (see `rowii.eval.metrics` module docstring), so the two matrices must
+never be rendered under one shared, scheme-less heading.
 
 Note on the optional `gt` parameter: `EvalResult` (by design -- see
 `rowii.eval.metrics`) carries only aggregate metrics (a GT-state x predicted-state
@@ -150,6 +155,11 @@ def _report_markdown(
         "",
         _state_mapping_to_markdown(ev.state_mapping),
         "",
+        "## Confusion matrix — state-level / majority mapping "
+        "(rows = GT state, cols = majority-mapped prediction)",
+        "",
+        _confusion_to_markdown(ev.state_confusion),
+        "",
         "## Strict (1:1 Hungarian) metrics — secondary",
         "",
         "| metric | value |",
@@ -165,7 +175,8 @@ def _report_markdown(
         "",
         _mapping_to_markdown(ev.mapping),
         "",
-        "## Confusion matrix (rows = GT state, cols = mapped predicted state)",
+        "## Confusion matrix — strict / Hungarian mapping "
+        "(rows = GT state, cols = Hungarian-mapped prediction)",
         "",
         _confusion_to_markdown(ev.confusion),
         "",

@@ -336,6 +336,91 @@ def test_state_mapping_only_covers_eval_window_clusters_like_strict_mapping() ->
 
 
 # ---------------------------------------------------------------------------
+# state_confusion: majority-mapped confusion matrix, the state-level (primary)
+# counterpart to the strict/Hungarian-mapped `confusion` (report-clarity fix).
+# ---------------------------------------------------------------------------
+
+
+def test_state_confusion_is_dataframe_with_gt_states_as_rows() -> None:
+    states = ["standstill"] * 3 + ["turbine"] * 3 + ["pump"] * 3
+    gt = _gt(states)
+    pred = np.array([0] * 3 + [1] * 3 + [2] * 3, dtype=np.int64)
+    grid = _grid(9)
+
+    result = evaluate(pred, gt, grid)
+
+    assert isinstance(result.state_confusion, pd.DataFrame)
+    assert set(result.state_confusion.index) == {"standstill", "turbine", "pump"}
+
+
+def test_perfect_prediction_state_confusion_matrix_is_diagonal() -> None:
+    # Majority and Hungarian mappings coincide on a perfect, unambiguous prediction
+    # (every cluster pure), so state_confusion must be diagonal exactly like confusion.
+    states = ["standstill"] * 5 + ["turbine"] * 5
+    gt = _gt(states)
+    pred = np.array([7] * 5 + [3] * 5, dtype=np.int64)
+    grid = _grid(10)
+
+    result = evaluate(pred, gt, grid)
+
+    assert result.state_confusion.loc["standstill", "standstill"] == 5
+    assert result.state_confusion.loc["turbine", "turbine"] == 5
+    assert result.state_confusion.to_numpy().sum() == 10
+    non_diagonal_cells = [
+        result.state_confusion.loc[row, col]
+        for row in result.state_confusion.index
+        for col in result.state_confusion.columns
+        if row != col
+    ]
+    assert sum(non_diagonal_cells) == 0
+
+
+def test_state_confusion_diverges_from_confusion_when_majority_disagrees_hungarian() -> None:
+    # Reproduces the exact real-world divergence these two fields exist to make
+    # legible (see `results/010726-tu_ph_tu/vibration-kmeans/report.md`, cluster 3):
+    # one predicted cluster's OWN majority GT state differs from the GT state the
+    # global 1:1 Hungarian assignment forces onto it.
+    #
+    # Cluster 0 is pure "transition" (20 windows) -- unambiguous either way.
+    # Cluster 1 mixes 10 "standstill" + 12 "transition" windows: taken alone, its
+    # own majority is "transition" (12 > 10). But Hungarian's 1:1 assignment
+    # maximizes the GLOBAL matched-window count across BOTH clusters at once, and
+    # pairing (standstill -> cluster1, transition -> cluster0) matches 10 + 20 = 30
+    # windows, beating the alternative (standstill -> cluster0, transition ->
+    # cluster1)'s 0 + 12 = 12 -- so Hungarian forces cluster1 onto "standstill" even
+    # though "transition" is its own majority.
+    states = ["transition"] * 20 + ["standstill"] * 10 + ["transition"] * 12
+    gt = _gt(states)
+    pred = np.array([0] * 20 + [1] * 10 + [1] * 12, dtype=np.int64)
+    grid = _grid(42)
+
+    result = evaluate(pred, gt, grid)
+
+    # Premise: the two schemes must actually disagree on cluster 1, or this test
+    # would not be pinning down a real divergence.
+    assert result.mapping[1] == "standstill"
+    assert result.state_mapping[1] == "transition"
+
+    # `confusion` (strict/Hungarian): cluster 1 is named "standstill" throughout --
+    # its own 10 GT-standstill windows land on the diagonal, but its 12 GT-transition
+    # windows are misattributed to the "standstill" predicted column.
+    assert result.confusion.loc["standstill", "standstill"] == 10
+    assert result.confusion.loc["transition", "standstill"] == 12
+    assert result.confusion.loc["transition", "transition"] == 20
+    assert result.confusion.to_numpy().sum() == 42
+
+    # `state_confusion` (majority): cluster 1 is named "transition" instead -- its
+    # 10 GT-standstill windows now land under the "transition" predicted column
+    # (the divergent cluster's windows following majority, not Hungarian), and
+    # "standstill" never appears as a predicted column at all, because NEITHER
+    # cluster's own majority is "standstill".
+    assert "standstill" not in result.state_confusion.columns
+    assert result.state_confusion.loc["standstill", "transition"] == 10
+    assert result.state_confusion.loc["transition", "transition"] == 32
+    assert result.state_confusion.to_numpy().sum() == 42
+
+
+# ---------------------------------------------------------------------------
 # load_alignment: sub-cluster vs load-bin analysis (Task 13b item 2)
 # ---------------------------------------------------------------------------
 
