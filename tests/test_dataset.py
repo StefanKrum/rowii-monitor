@@ -213,3 +213,121 @@ def test_burst_filename_with_unparseable_date_is_excluded_and_logs_warning(
 
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any(bad_name in msg for msg in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Session discovery generalization (no TU/PU whitelist) + multi-day parent root
+# ---------------------------------------------------------------------------
+
+
+def test_session_folder_not_named_tu_or_pu_is_still_discovered(tmp_path):
+    # Drops the hardcoded ("TU", "PU") folder-name whitelist: a session is any
+    # DIRECT subfolder of a "* Messung" dir that contains burst-pattern files,
+    # named however the operator chose (real example: "TU_PH_TU").
+    meas = tmp_path / "20260701 Messung"
+    session = meas / "TU_PH_TU"
+    for t in ("15-45-00", "15-57-00"):
+        _touch(session / f"RAWGeneratorMic__0_2026-07-01_{t}_000000.dat")
+
+    index = discover(tmp_path)
+
+    assert [r.name for r in index.runs] == ["tu_ph_tu"]
+    assert len(index.runs[0].files["RAWGeneratorMic__0"]) == 2
+
+
+def test_single_tree_root_keeps_legacy_unprefixed_run_names(tmp_path):
+    # Backward compat: a data_root that IS a day root (contains "* Messung"
+    # directly, no illwerke-<day> parent layer) must keep producing exactly the
+    # unprefixed run names the pre-addendum pipeline/tests already depend on.
+    _make_tu_pu_tree(tmp_path)
+
+    index = discover(tmp_path)
+
+    assert sorted(r.name for r in index.runs) == ["pu-afternoon", "pu-morning", "tu"]
+
+
+def _make_parent_root_with_two_days(root):
+    day1 = root / "illwerke-010726" / "20260701 Messung"
+    day2 = root / "illwerke-270626" / "20260627 Messung"
+    for t in ("15-45-00", "15-57-00"):
+        _touch(day1 / "TU_PH_TU" / f"RAWGeneratorMic__0_2026-07-01_{t}_000000.dat")
+    for t in ("06-41-00", "06-53-00"):
+        _touch(
+            day2
+            / "PU_PH_PU_PH_PU_PH"
+            / f"RAWGeneratorMic__0_2026-06-27_{t}_000000.dat"
+        )
+    _touch(day1 / "Betriebsdaten" / "2026-07-01_15-00-00.dat")
+    _touch(day2 / "Betriebsdaten" / "2026-06-27_06-00-00.dat")
+    return root
+
+
+def test_parent_root_with_multiple_day_trees_prefixes_run_names_with_dayid(tmp_path):
+    # A PARENT root containing multiple illwerke-<dayid>/<...Messung> trees (the new
+    # ROWII_DATA_ROOT layout) must discover every day's sessions, each prefixed with
+    # the 6-digit dayid token taken from its own "illwerke-<dayid>" directory name.
+    _make_parent_root_with_two_days(tmp_path)
+
+    index = discover(tmp_path)
+
+    assert sorted(r.name for r in index.runs) == [
+        "010726-tu_ph_tu",
+        "270626-pu_ph_pu_ph_pu_ph",
+    ]
+
+
+def test_parent_root_betriebsdaten_is_scoped_per_day_tree(tmp_path):
+    # Spec requirement: "a run only sees its own day's Betriebsdaten" -- each day
+    # tree's Betriebsdaten files must be retrievable independently, not just pooled
+    # into one flat list a caller could accidentally apply to the wrong day's run.
+    _make_parent_root_with_two_days(tmp_path)
+
+    index = discover(tmp_path)
+
+    day1_root = tmp_path / "illwerke-010726"
+    day2_root = tmp_path / "illwerke-270626"
+    assert set(index.betriebsdaten_by_day.keys()) == {day1_root, day2_root}
+    assert [p.name for p in index.betriebsdaten_by_day[day1_root]] == [
+        "2026-07-01_15-00-00.dat"
+    ]
+    assert [p.name for p in index.betriebsdaten_by_day[day2_root]] == [
+        "2026-06-27_06-00-00.dat"
+    ]
+
+    run_010726 = next(r for r in index.runs if r.name == "010726-tu_ph_tu")
+    run_270626 = next(r for r in index.runs if r.name == "270626-pu_ph_pu_ph_pu_ph")
+    assert run_010726.day_root == day1_root
+    assert run_270626.day_root == day2_root
+
+    # The flat, pooled field stays available (pre-addendum callers/tests keep
+    # working unchanged) -- it is simply the union of every day tree's files.
+    assert len(index.betriebsdaten) == 2
+
+
+def test_single_tree_root_day_root_equals_data_root_itself(tmp_path):
+    # In legacy single-tree mode there is no illwerke-<day> layer to read a dayid
+    # from -- day_root must be data_root itself, and betriebsdaten_by_day must key
+    # on exactly that path (so per-day-tree lookups work uniformly in both modes).
+    _make_tu_pu_tree(tmp_path)
+    _touch(tmp_path / "20260626 Messung" / "Betriebsdaten" / "2026-06-25_08-00-00.dat")
+
+    index = discover(tmp_path)
+
+    assert set(index.betriebsdaten_by_day.keys()) == {tmp_path}
+    for run in index.runs:
+        assert run.day_root == tmp_path
+
+
+def test_parent_root_with_no_scada_day_has_empty_betriebsdaten_for_that_day(tmp_path):
+    # 27.06 (real delivery): PU_PH_PU_PH_PU_PH session, NO Betriebsdaten folder at
+    # all -- that day tree must simply have no entry (or an empty list), never
+    # borrow another day's Betriebsdaten files by falling through to the pooled list.
+    day_root = tmp_path / "illwerke-270626"
+    meas = day_root / "20260627 Messung"
+    for t in ("06-41-00", "06-53-00"):
+        _touch(meas / "PU_PH_PU_PH_PU_PH" / f"RAWGeneratorMic__0_2026-06-27_{t}_000000.dat")
+
+    index = discover(tmp_path)
+
+    assert index.betriebsdaten_by_day.get(day_root, []) == []
+    assert index.betriebsdaten == []
