@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 
 import numpy as np
 import pandas as pd
@@ -16,26 +17,32 @@ GT_CHANNEL_NAMES = [
     "1_Leitapparat Stell.",
     "Durchfluss TU",
     "Durchfluss PU",
+    "1_Q_Ist",
+    "1_KS Stellung",
 ]
 
 
-def test_gt_channels_constant_matches_the_five_real_betriebsdaten_channel_names() -> None:
+def test_gt_channels_constant_matches_the_seven_real_betriebsdaten_channel_names() -> None:
     # Task 13b real-data finding: "1_Drehzahl_Ist" is NOT rpm -- it is a
     # percent-of-nominal-ish quantity (measured ratio ~3.75x smaller than the true rpm
     # channel on the same file). "1_Drehzahl UPM" ("Umdrehungen Pro Minute" = rpm) is
     # the genuine rpm channel and is what GtRules.speed_nominal_rpm must be compared
-    # against.
+    # against. "reactive"/"ks_valve" added by the multi-day/phase-shifter addendum
+    # (spec §3) -- both verified present (real names, exact spelling) in every
+    # SCADA-bearing day's Betriebsdaten during Task 13b/addendum work.
     assert dict(GT_CHANNELS) == {
         "power": "1_P_Ist",
         "speed": "1_Drehzahl UPM",
         "guide_vane": "1_Leitapparat Stell.",
         "flow_tu": "Durchfluss TU",
         "flow_pu": "Durchfluss PU",
+        "reactive": "1_Q_Ist",
+        "ks_valve": "1_KS Stellung",
     }
 
 
-def test_states_constant_matches_the_four_documented_states() -> None:
-    assert STATES == ("standstill", "turbine", "pump", "transition")
+def test_states_constant_matches_the_five_documented_states() -> None:
+    assert STATES == ("standstill", "turbine", "pump", "transition", "phase-shifter")
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +60,9 @@ def test_load_scada_window_means_computes_per_window_column_means(tmp_path) -> N
     guide_vane = np.full(n_samples, 50.0, dtype=np.float32)
     flow_tu = np.full(n_samples, 5.0, dtype=np.float32)
     flow_pu = np.full(n_samples, 0.0, dtype=np.float32)
-    data = np.stack([power, speed, guide_vane, flow_tu, flow_pu], axis=1)
+    reactive = np.full(n_samples, 20.0, dtype=np.float32)
+    ks_valve = np.full(n_samples, 3.0, dtype=np.float32)
+    data = np.stack([power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1)
     p = build_gantner_file(
         tmp_path / "bd.dat", GT_CHANNEL_NAMES, data, t0_ns=0, rate_hz=rate_hz
     )
@@ -61,7 +70,9 @@ def test_load_scada_window_means_computes_per_window_column_means(tmp_path) -> N
 
     scada = load_scada_window_means([p], grid)
 
-    assert list(scada.columns) == ["power", "speed", "guide_vane", "flow_tu", "flow_pu"]
+    assert list(scada.columns) == [
+        "power", "speed", "guide_vane", "flow_tu", "flow_pu", "reactive", "ks_valve",
+    ]
     assert list(scada.index) == [0, 1]
     assert scada.loc[0, "power"] == pytest.approx(4.5)
     assert scada.loc[1, "power"] == pytest.approx(100.0)
@@ -69,6 +80,8 @@ def test_load_scada_window_means_computes_per_window_column_means(tmp_path) -> N
     assert scada.loc[0, "guide_vane"] == pytest.approx(50.0)
     assert scada.loc[0, "flow_tu"] == pytest.approx(5.0)
     assert scada.loc[0, "flow_pu"] == pytest.approx(0.0)
+    assert scada.loc[0, "reactive"] == pytest.approx(20.0)
+    assert scada.loc[0, "ks_valve"] == pytest.approx(3.0)
 
 
 def test_load_scada_window_means_concatenates_hourly_files_in_order(tmp_path) -> None:
@@ -77,9 +90,9 @@ def test_load_scada_window_means_concatenates_hourly_files_in_order(tmp_path) ->
     # or missing concat would be caught by the exact mean).
     rate_hz = 10.0
     window_ns = 1_000_000_000
-    data1 = np.zeros((10, 5), dtype=np.float32)
+    data1 = np.zeros((10, 7), dtype=np.float32)
     data1[:, 0] = 1.0  # power = 1 for the whole first file (t = [0, 1s))
-    data2 = np.zeros((10, 5), dtype=np.float32)
+    data2 = np.zeros((10, 7), dtype=np.float32)
     data2[:, 0] = 3.0  # power = 3 for the whole second file (t = [1s, 2s))
     p1 = build_gantner_file(tmp_path / "h1.dat", GT_CHANNEL_NAMES, data1, t0_ns=0, rate_hz=rate_hz)
     p2 = build_gantner_file(
@@ -98,7 +111,7 @@ def test_load_scada_window_means_nan_for_window_with_no_scada_samples(tmp_path) 
     # in every column (zero-coverage), not zero or dropped.
     rate_hz = 10.0
     window_ns = 1_000_000_000
-    data = np.ones((10, 5), dtype=np.float32) * 7.0
+    data = np.ones((10, 7), dtype=np.float32) * 7.0
     p = build_gantner_file(tmp_path / "bd.dat", GT_CHANNEL_NAMES, data, t0_ns=0, rate_hz=rate_hz)
     grid = WindowGrid(t0_ns=0, window_ns=window_ns, n_windows=3)
 
@@ -113,10 +126,12 @@ def test_load_scada_window_means_nan_for_window_with_no_scada_samples(tmp_path) 
 def test_load_scada_window_means_missing_channel_raises_key_error_listing_available(
     tmp_path,
 ) -> None:
-    # "1_Leitapparat Stell." (guide_vane) is the ONLY GT_CHANNELS entry missing from
-    # this file -- "power" and "speed" are both present under their real names, so the
-    # KeyError must specifically name guide_vane, not fire early on an unrelated
-    # missing channel.
+    # "1_Leitapparat Stell." (guide_vane) is the FIRST GT_CHANNELS entry missing from
+    # this file, in GT_CHANNELS' own key order (power, speed, guide_vane, flow_tu,
+    # flow_pu, reactive, ks_valve) -- "power" and "speed" are both present under their
+    # real names, so the KeyError must specifically name guide_vane, not fire early on
+    # an unrelated missing channel (this file is also missing flow_tu/flow_pu/reactive/
+    # ks_valve, but guide_vane's the one that raises first).
     rate_hz = 10.0
     data = np.zeros((10, 3), dtype=np.float32)
     other_names = ["1_P_Ist", "1_Drehzahl UPM", "SomeOtherChannel"]
@@ -133,11 +148,12 @@ def test_load_scada_window_means_missing_channel_raises_key_error_listing_availa
 
 
 def test_gt_channel_names_with_spaces_and_dots_round_trip_through_gantner_reader(tmp_path) -> None:
-    # Regression coverage for the reader's name tokenizer: two of the five real GT channel
-    # names contain a space ("1_Leitapparat Stell.") -- confirm the fixture/reader pair
-    # preserves them exactly end to end (build -> read -> select by exact name).
+    # Regression coverage for the reader's name tokenizer: two of the seven real GT channel
+    # names contain a space ("1_Leitapparat Stell.", "1_KS Stellung") -- confirm the
+    # fixture/reader pair preserves them exactly end to end (build -> read -> select by
+    # exact name).
     rate_hz = 10.0
-    data = np.arange(50, dtype=np.float32).reshape(10, 5)
+    data = np.arange(70, dtype=np.float32).reshape(10, 7)
     p = build_gantner_file(tmp_path / "bd.dat", GT_CHANNEL_NAMES, data, t0_ns=0, rate_hz=rate_hz)
     grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=1)
 
@@ -155,7 +171,9 @@ RULES = GtRules()  # nominal=378.832 (measured, Task 13b), speed_eps_frac=0.05, 
 WINDOW_S = 5.0  # matches the scenarios' hand-derivation (buffer=10s -> 2-window radius)
 
 
-def _scada(power, speed, guide_vane=None, flow_tu=None, flow_pu=None) -> pd.DataFrame:
+def _scada(
+    power, speed, guide_vane=None, flow_tu=None, flow_pu=None, reactive=None, ks_valve=None
+) -> pd.DataFrame:
     n = len(power)
     return pd.DataFrame(
         {
@@ -164,6 +182,8 @@ def _scada(power, speed, guide_vane=None, flow_tu=None, flow_pu=None) -> pd.Data
             "guide_vane": guide_vane if guide_vane is not None else [0.0] * n,
             "flow_tu": flow_tu if flow_tu is not None else [0.0] * n,
             "flow_pu": flow_pu if flow_pu is not None else [0.0] * n,
+            "reactive": reactive if reactive is not None else [0.0] * n,
+            "ks_valve": ks_valve if ks_valve is not None else [np.nan] * n,
         }
     )
 
@@ -424,10 +444,181 @@ def test_gantner_name_tokenizer_handles_space_containing_channel_names(tmp_path)
 
 def test_load_scada_window_means_smoke_does_not_raise_gantner_format_error(tmp_path) -> None:
     # Guards against silently swallowing a real reader error inside load_scada_window_means.
-    data = np.zeros((10, 5), dtype=np.float32)
+    data = np.zeros((10, 7), dtype=np.float32)
     p = build_gantner_file(tmp_path / "bd.dat", GT_CHANNEL_NAMES, data, t0_ns=0, rate_hz=10.0)
     grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=1)
     try:
         load_scada_window_means([p], grid)
     except GantnerFormatError:
         pytest.fail("load_scada_window_means raised GantnerFormatError on a well-formed file")
+
+
+# ---------------------------------------------------------------------------
+# Phase-shifter ground truth (addendum spec §3)
+# ---------------------------------------------------------------------------
+
+# 1-minute windows here (not the 5.0s WINDOW_S above) so the real
+# ph_min_dwell_s=600.0 default and 15-/5-min test scenarios stay hand-writable
+# (10 windows for the dwell threshold, 15/5 windows for the two scenarios)
+# without artificially shrinking the dwell threshold itself.
+PH_WINDOW_S = 60.0
+# transition_buffer_s=60.0 (not RULES' own 10.0 default) so the buffer radius
+# is exactly 1 whole window at this window_s -- RULES' own 10.0s default would
+# round to 0 windows here (round(10.0/60.0) == 0), producing no buffer edge at
+# all and defeating the "transition edges" half of these scenarios.
+PH_RULES = dataclasses.replace(RULES, transition_buffer_s=60.0)
+
+
+def test_gt_labels_15min_unloaded_spinning_run_becomes_phase_shifter_with_transition_edges() -> (
+    None
+):
+    # 2 standstill -> 15 nominal-speed/unloaded (candidate PH run, well over the
+    # 10-window dwell threshold at window_s=60.0) -> 2 standstill. The transition
+    # buffer's existing, unchanged, SYMMETRIC radius (1 window at
+    # transition_buffer_s=60.0 -> round(60.0/60.0)=1) touches 1 window on EACH SIDE
+    # of the standstill<->phase-shifter change point (matching the pre-existing
+    # buffer contract already exercised by
+    # test_gt_labels_abrupt_state_change_gets_buffer_transition_without_ramp) --
+    # index 1 (the standstill window immediately before the change) and index 2
+    # (the PH run's own first window) both become "transition"; symmetrically at
+    # the far end. The 13 windows strictly inside those buffered edges stay
+    # "phase-shifter".
+    n_nom = RULES.speed_nominal_rpm
+    power = [0.0] * 2 + [0.0] * 15 + [0.0] * 2
+    speed = [0.0] * 2 + [n_nom] * 15 + [0.0] * 2
+    scada = _scada(power, speed)
+
+    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+
+    expected_state = (
+        ["standstill", "transition", "transition"]
+        + ["phase-shifter"] * 13
+        + ["transition", "transition", "standstill"]
+    )
+    assert list(result["state"]) == expected_state
+    assert set(result["state"]).issubset(set(STATES))
+
+
+def test_gt_labels_5min_unloaded_spinning_run_stays_transition() -> None:
+    # Same shape as the 15-min scenario but only 5 candidate windows -- well
+    # under the 10-window (600s / 60s) dwell threshold, so the whole run must
+    # remain "transition" (never promoted to phase-shifter).
+    n_nom = RULES.speed_nominal_rpm
+    power = [0.0] * 2 + [0.0] * 5 + [0.0] * 2
+    speed = [0.0] * 2 + [n_nom] * 5 + [0.0] * 2
+    scada = _scada(power, speed)
+
+    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+
+    assert list(result["state"]) == (
+        ["standstill", "standstill"] + ["transition"] * 5 + ["standstill", "standstill"]
+    )
+    assert "phase-shifter" not in set(result["state"])
+
+
+def test_gt_labels_ph_promotion_disabled_ks_gate_ignores_ks_value() -> None:
+    # ph_requires_ks_closed=False (the shipped default): a qualifying 15-window
+    # run is promoted to phase-shifter regardless of the KS valve reading, even
+    # when it reads fully OPEN (well above ks_closed_max) throughout.
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [0.0] * n
+    speed = [n_nom] * n
+    ks_open = [PH_RULES.ks_closed_max * 10.0] * n  # far above the closed threshold
+    scada = _scada(power, speed, ks_valve=ks_open)
+    assert PH_RULES.ph_requires_ks_closed is False
+
+    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"phase-shifter"}
+
+
+def test_gt_labels_ph_promotion_enabled_ks_gate_blocks_open_valve() -> None:
+    # ph_requires_ks_closed=True + KS reading OPEN throughout (above
+    # ks_closed_max): the speed/power/dwell criteria alone are satisfied, but
+    # the conjunctive KS gate must block promotion -- the run stays
+    # "transition" exactly as the under-dwell scenario does.
+    rules = dataclasses.replace(PH_RULES, ph_requires_ks_closed=True)
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [0.0] * n
+    speed = [n_nom] * n
+    ks_open = [rules.ks_closed_max * 10.0] * n
+
+    scada = _scada(power, speed, ks_valve=ks_open)
+    result = gt_labels(scada, rules, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"transition"}
+
+
+def test_gt_labels_ph_promotion_enabled_ks_gate_allows_closed_valve() -> None:
+    # ph_requires_ks_closed=True + KS reading CLOSED throughout (at/under
+    # ks_closed_max): the conjunctive gate is satisfied, so the run is promoted
+    # exactly as in the gate-disabled case.
+    rules = dataclasses.replace(PH_RULES, ph_requires_ks_closed=True)
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [0.0] * n
+    speed = [n_nom] * n
+    ks_closed = [rules.ks_closed_max * 0.5] * n
+
+    scada = _scada(power, speed, ks_valve=ks_closed)
+    result = gt_labels(scada, rules, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"phase-shifter"}
+
+
+def test_gt_labels_ph_promotion_enabled_nan_ks_falls_back_to_promoting_with_warning(
+    caplog,
+) -> None:
+    # ph_requires_ks_closed=True but the KS channel is entirely NaN for this
+    # run (e.g. a day tree without that channel populated) -- the gate cannot
+    # be evaluated and must be IGNORED (not silently treated as "closed" nor
+    # as "open"): the run is promoted purely on speed/power/dwell, same as the
+    # gate-disabled case, but a warning documents that the gate was skipped.
+    rules = dataclasses.replace(PH_RULES, ph_requires_ks_closed=True)
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [0.0] * n
+    speed = [n_nom] * n
+    ks_nan = [np.nan] * n
+
+    scada = _scada(power, speed, ks_valve=ks_nan)
+
+    with caplog.at_level(logging.WARNING):
+        result = gt_labels(scada, rules, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"phase-shifter"}
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("ks" in msg.lower() for msg in warnings), (
+        f"expected a KS-gate warning, got: {warnings}"
+    )
+
+
+def test_gt_labels_ramp_rule_never_demotes_phase_shifter_interior() -> None:
+    # A tiny power blip inside an otherwise-qualifying PH run (dP/dt exceeding
+    # ramp_mw_per_s at one interior window) must NOT flip that window back to
+    # "transition" -- the ramp rule must explicitly skip windows the PH
+    # promotion already claimed, per the spec's stage-ordering requirement
+    # ("ramp rule ... never demotes PH interiors").
+    n_nom = RULES.speed_nominal_rpm
+    n = 15
+    power = [0.0] * n
+    # A brief, single-window power blip (still within power_eps_mw so the base
+    # state stays a PH candidate) large enough to trip the ramp rule via its
+    # centered-difference neighbors -- windows 6,7,8 form a 0 -> ~1.9 -> 0
+    # spike whose centered dP/dt at window 7 is nonzero relative to its
+    # immediate neighbors, but the RAW values everywhere stay under
+    # power_eps_mw=2.0 so the whole 15-window run is still a valid PH
+    # candidate at the base-state stage.
+    blip_idx = 7
+    power[blip_idx] = 1.9
+    speed = [n_nom] * n
+    scada = _scada(power, speed)
+
+    result = gt_labels(scada, PH_RULES, window_s=PH_WINDOW_S)
+
+    assert set(result["state"]) == {"phase-shifter"}, (
+        f"expected the whole run to stay phase-shifter despite the interior power "
+        f"blip, got: {list(result['state'])}"
+    )

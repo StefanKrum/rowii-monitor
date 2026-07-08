@@ -300,10 +300,17 @@ def _build_e2e_data_root(root: Path) -> Path:
         [np.zeros(half_scada, dtype=np.float32), np.full(n_scada - half_scada, 5.0, np.float32)]
     )
     flow_pu = np.zeros(n_scada, dtype=np.float32)
-    scada_data = np.stack([power, speed, guide_vane, flow_tu, flow_pu], axis=1)
+    reactive = np.zeros(n_scada, dtype=np.float32)
+    ks_valve = np.full(n_scada, 3.0, dtype=np.float32)
+    scada_data = np.stack(
+        [power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1
+    )
     build_gantner_file(
         bd / "2026-06-25_08-00-00.dat",
-        ["1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU", "Durchfluss PU"],
+        [
+            "1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU",
+            "Durchfluss PU", "1_Q_Ist", "1_KS Stellung",
+        ],
         scada_data,
         t0_ns=_E2E_T0_NS,
         rate_hz=_E2E_SCADA_RATE_HZ,
@@ -698,10 +705,17 @@ def _build_one_day_tree(
         flow_tu = np.full(n_scada, 5.0, dtype=np.float32)
     guide_vane = np.full(n_scada, 50.0, dtype=np.float32)
     flow_pu = np.zeros(n_scada, dtype=np.float32)
-    scada_data = np.stack([power, speed, guide_vane, flow_tu, flow_pu], axis=1)
+    reactive = np.zeros(n_scada, dtype=np.float32)
+    ks_valve = np.full(n_scada, 3.0, dtype=np.float32)
+    scada_data = np.stack(
+        [power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1
+    )
     build_gantner_file(
         bd / "2026-06-25_08-00-00.dat",
-        ["1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU", "Durchfluss PU"],
+        [
+            "1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU",
+            "Durchfluss PU", "1_Q_Ist", "1_KS Stellung",
+        ],
         scada_data,
         t0_ns=_E2E_T0_NS,
         rate_hz=_E2E_SCADA_RATE_HZ,
