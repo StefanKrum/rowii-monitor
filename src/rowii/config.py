@@ -45,10 +45,11 @@ class GtRules:
     # "Phase-shifter channels, 2026-07-08" section) -- active power sits at a stable
     # ~-3.5 MW median (range -4.3 to -2.9 MW, real motoring/idling losses, not noise),
     # well outside power_eps_mw=2.0. 5.0 MW is a round threshold comfortably above the
-    # measured 4.34 MW max magnitude, with a wide margin below both standstill (~0 MW)
-    # and the lowest observed loaded-turbine power in the same delivery (~206 MW) --
-    # reusing the general power_eps_mw here would have silently made PH promotion
-    # unreachable on real data (the spec's own literal text ties the PH rule to
+    # measured 4.34 MW max magnitude. Steady turbine operation sits far above this band,
+    # but brief ramp transients can dip low or negative (observed min −41 MW on 2026-07-01);
+    # such transients are excluded from PH promotion by the 600 s dwell requirement
+    # (ph_min_dwell_s). Reusing the general power_eps_mw here would have silently made PH
+    # promotion unreachable on real data (the spec's own literal text ties the PH rule to
     # power_eps_mw; this dedicated field is a deliberate, documented deviation to make
     # the rule actually fire on real data without loosening standstill/turbine/pump
     # discrimination elsewhere).

@@ -34,6 +34,10 @@ strict = true
 ignore_missing_imports = true
 exclude = ["src/rowii/vendor"]
 
+[[tool.mypy.overrides]]
+module = "rowii.vendor.*"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["data: needs ROWII_DATA_ROOT with real recordings"]
