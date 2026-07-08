@@ -346,3 +346,133 @@ pipeline for the first time (see commit history, one fix per commit):
    end-to-end throughout Task 13 without any test catching the mismatch.
    Corrected to `"1_Drehzahl UPM"`; `speed_nominal_rpm` remeasured as
    378.832 rpm (was 101.0).
+
+## Multi-day results (2026-07-08)
+
+The full Illwerke campaign re-release (four day trees, see "Data layout")
+went through the pipeline with the phase-shifter GT state enabled
+(`ph_min_dwell_s = 600 s`, `ph_power_eps_mw = 5.0` measured from the real
+2026-07-01 phase-shifter interval's stable ~-3.5 MW idling draw, and the
+`1_KS Stellung` gate enabled after independent verification -- see
+`results/parameter_verification.md`, "Phase-shifter channels, 2026-07-08":
+phase-shifter/standstill KS median 3.2/3.0 vs. turbine/pump 104.28/104.28,
+cleanly separated). All runs KMeans, `k = 4` unless noted, per-day SCADA
+scoping (a run never sees another day's Betriebsdaten).
+
+Run-name note: sessions split on >15-min burst gaps exactly as before
+(`250526-pu` morning/afternoon precedent), so the operator session `TU1`
+becomes `010726-tu1-morning` (04:14-07:26, 64 files) + `010726-tu1-afternoon`
+(two stray 07:45/07:46 files), and `PU_PH_PU_PH_PU_PH` becomes
+`270626-pu_ph_pu_ph_pu_ph-1` (06:41-12:05 bulk, 106 files) + `-2`/`-3`
+(single-timestamp stragglers at 14:41 and 16:33). The substantive `-morning`
+/ `-1` splits are what ran below.
+
+**State-level metrics** (primary; majority cluster->state mapping):
+
+| run | variant | k | state ARI | state accuracy | state macro-F1 | n_eval | load-align ARI |
+|---|---|---|---|---|---|---|---|
+| 010726-tu_ph_tu | audio | 4 | 0.929 | 0.973 | 0.394 | 27821 | 0.436 |
+| 010726-tu_ph_tu | vibration | 4 | 0.941 | 0.975 | 0.454 | 28045 | 0.491 |
+| 010726-tu_ph_tu | fusion | 4 | 0.930 | 0.973 | 0.394 | 27821 | 0.439 |
+| 010726-tu1-morning | fusion | 4 | 0.749 | 0.971 | 0.509 | 11039 | 0.182 |
+| 290626-tu | fusion | 4 | 0.894 | 0.951 | 0.509 | 15564 | 0.122 |
+| 270626-pu_ph_pu_ph_pu_ph-1 | fusion | 4 | — | — | — | 0 | — |
+
+`270626-pu_ph_pu_ph_pu_ph-1` (the day with no Betriebsdaten at all) took the
+documented reduced-report path end-to-end: 18716 windows detected, GT
+entirely `unknown`, `summary.csv` row carries `notes = "no SCADA coverage"`
+with every GT metric empty -- the ~4 h alternating pump/phase-shifter session
+is processed but unevaluable until SCADA (or the power-curve photo) provides
+labels.
+
+**The 4-state day (`010726-tu_ph_tu`, 15:45-24:00: standstill ->
+phase-shifter 15:52-17:35 -> turbine generation).** GT eval windows: 20926
+turbine / 6139 phase-shifter / 635 transition / 117 standstill / 4 pump
+(pump is vestigial -- SCADA before the session start). State-level
+(majority-mapped) confusion, fusion-KMeans k=4:
+
+| GT \ predicted | phase-shifter | turbine |
+|---|---|---|
+| phase-shifter | 6139 | 0 |
+| pump | 1 | 3 |
+| standstill | 114 | 3 |
+| transition | 101 | 534 |
+| turbine | 0 | 20926 |
+
+Audio's confusion is identical up to a couple of transition windows;
+vibration differs in structure (its non-PH quiet cluster maps to
+transition, catching all 117 standstill windows there and leaking 83
+phase-shifter windows into it -- audio and fusion instead absorb standstill
+INTO the phase-shifter cluster).
+
+**Does the detector separate phase-shifter?** From **turbine: yes,
+perfectly, in every variant** -- 6139/6139 phase-shifter windows in their
+own cluster with zero turbine cross-leakage (audio and fusion; vibration
+6056/6139 with the 83-window leak going to its transition cluster, still
+zero turbine confusion). This is the cleanest state separation the detector
+has produced on any real recording so far, and it drives the first >= 0.9
+state ARI on a genuinely multi-state day (0.929-0.941 across variants vs.
+0.687-0.704 on the June-25 TU day). From **standstill: no** -- audio and
+fusion put 114/117 standstill windows into the phase-shifter-majority
+cluster (both are "machine quiet-ish" regimes; at 117 vs. 6139 windows the
+majority vote can never go standstill's way), and vibration collapses
+standstill into its transition cluster instead. The honest caveat on the
+headline: this day's class balance (75% turbine, 22% phase-shifter, ~2.7%
+everything else) plus the huge acoustic distance between "generating
+200-290 MW" and "motoring unloaded at -3.5 MW" make it an easier clustering
+problem than June-25's standstill/transition/turbine discrimination; state
+macro-F1 (0.39-0.45) is the number that keeps the standstill/transition
+misses visible.
+
+**k-sweep (fusion, KMeans; state ARI / strict ARI / silhouette):**
+
+| k | state ARI | strict ARI | silhouette |
+|---|---|---|---|
+| 3 | 0.929 | 0.453 | 0.460 |
+| 4 | 0.930 | 0.386 | 0.384 |
+| 5 | 0.930 | 0.246 | 0.276 |
+| 6 | 0.907 | 0.250 | 0.264 |
+
+What does the sweep prefer on a 4-state day? Mode-level: nothing --
+state ARI is flat at 0.929-0.930 for k = 3..5 (every k allocates exactly ONE
+phase-shifter-majority cluster and spends the rest on turbine load
+sub-structure; k=6 dips slightly). Internal cohesion (silhouette) prefers
+k=3, and strict ARI decays monotonically past it -- consistent with the day
+effectively containing two acoustically dominant regimes (phase-shifter vs.
+turbine) plus load substructure, not four separable ones. There is no
+evidence here that k must grow to match the nominal state count; the
+detector's mode-level output is insensitive to k in the swept range.
+
+**290626-tu -- the phase-shifter hold inside a TU session** (the hard
+boundary case: a ~39-min converter-assisted-start PH hold before
+generation, plus a shorter post-generation unloaded spin-down that also
+exceeds the 600-s dwell; 3071 PH windows total in GT). Fusion-KMeans k=4:
+state ARI 0.894, accuracy 0.951, macro-F1 0.509 -- and the PH hold is
+separated **perfectly**: 3071/3071 phase-shifter windows in their own
+cluster, zero leakage in either direction against turbine (11667/11667
+turbine windows also perfectly clustered at the mode level). This day even
+allocates a genuine majority-standstill cluster (66/148 standstill windows
+caught; the other 82 fall into the PH cluster -- same standstill/PH
+adjacency as on 01.07). The 0.894 headline is dragged below 0.9 by
+transition scatter (266 transition windows in the PH cluster from the
+ramp edges), not by any mode confusion.
+
+**010726-tu1-morning -- plain 3-state control.** A TU-only session on the
+same day/hardware as the 4-state headline run: state ARI 0.749 (accuracy
+0.971, macro-F1 0.509), i.e. noticeably better than June-25 TU fusion
+(0.687) but nowhere near the phase-shifter days -- reinforcing that the
+0.9+ results above are driven by phase-shifter's acoustic distinctness, not
+by a general leap in detector quality. Standstill recall at the state level
+is again 0 (all 130 standstill windows in a transition-majority cluster).
+Load alignment is modest everywhere this cycle (0.12-0.49), best on the
+4-state day's vibration variant (0.491).
+
+**Reality fixes shipped during these runs** (one commit each, see git
+history): the CLI's `--run` argparse whitelist predated dynamic multi-day
+run names and rejected every new run; and `VibFeaturizer`'s dead-channel
+std, computed in float32, picked up pairwise-summation rounding noise
+(~4.77e-07 for channels exactly constant at -7.0 on `RAWTurbineVib__3`,
+2026-07-01) that flip-flopped the same dead channel live/dead across files
+of one stream and crashed feature extraction with a width mismatch; the
+std is now computed in float64, where a constant channel is exactly 0.0
+for every batch shape.
