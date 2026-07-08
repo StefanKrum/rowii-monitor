@@ -31,6 +31,27 @@ class GtRules:
     ramp_mw_per_s: float = 1.0
     transition_buffer_s: float = 10.0
     n_load_bins: int = 3
+    # Phase-shifter GT (multi-day/phase-shifter addendum, spec §3): a contiguous run
+    # of nominal-speed, near-zero-power windows must dwell at least this long before
+    # being promoted from "transition" (unloaded spinning during a start/stop ramp) to
+    # "phase-shifter" (a genuine, sustained synchronous-condenser operating mode).
+    # 600s (10 min) is the addendum's own conservative default -- shorter unloaded-
+    # spinning runs are ramp artifacts, not phase-shifter operation.
+    ph_min_dwell_s: float = 600.0
+    # Optional conjunctive gate: "1_KS Stellung" (spherical inlet valve position,
+    # GT_CHANNELS["ks_valve"]) must also read <= ks_closed_max for a candidate run to
+    # be promoted. Ships DISABLED (per the addendum's verify-before-trusting mandate --
+    # the ~3=closed/~104=open hypothesis is Bruno's SCADA-audit finding, not yet
+    # confirmed against our own data) -- flip to True only after
+    # scripts/verify_parameters.py's own measurement on the 2026-07-01 delivery
+    # confirms the separation directly (see results/parameter_verification.md's
+    # "Phase-shifter channels" section once written).
+    ph_requires_ks_closed: bool = False
+    ks_closed_max: float = 10.0
+    """Threshold on GT_CHANNELS["ks_valve"] ("1_KS Stellung") below which the valve
+    counts as closed, used only when `ph_requires_ks_closed` is True. Placeholder
+    value pending the addendum's own verification against the 2026-07-01 delivery
+    (see `ph_requires_ks_closed`'s docstring) -- NOT yet measured from real data."""
 
 
 @dataclass(frozen=True)

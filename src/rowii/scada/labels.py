@@ -2,12 +2,27 @@
 
 SCADA is never fed to the detector at run time; this module only produces the labels used
 to evaluate unsupervised state detection (spec: docs/superpowers/specs/2026-07-05-step1-
-state-detection-design.md). Two stages: (1) `load_scada_window_means` reduces raw
-Betriebsdaten samples to one row per detection window, (2) `gt_labels` turns those window
-means into a discrete state + load bin per the plant's operating rules.
+state-detection-design.md, extended by docs/superpowers/specs/2026-07-07-step1-multiday-
+phase-shifter-addendum.md §3 for the "phase-shifter" state). Two stages: (1)
+`load_scada_window_means` reduces raw Betriebsdaten samples to one row per detection
+window, (2) `gt_labels` turns those window means into a discrete state + load bin per the
+plant's operating rules.
+
+Rule ordering inside `gt_labels` (addendum spec §3, exact order matters):
+`_base_state` -> `_apply_ph_promotion` -> `_apply_ramp` -> `_apply_transition_buffer`.
+Phase-shifter promotion runs BEFORE the ramp rule so the ramp rule can explicitly protect
+already-promoted windows (a phase-shifter run's own near-zero power should rarely trip the
+ramp threshold, but the rule must still never demote a promoted window even if it does);
+the transition buffer runs LAST and is deliberately unaware of phase-shifter as anything
+special -- it treats a standstill/turbine/pump/phase-shifter boundary uniformly, so only a
+promoted run's own EDGE windows (within the buffer radius of a boundary) can ever become
+"transition" again, never its interior (in practice never possible in practice at any
+sane parameter setting, since `ph_min_dwell_s` is two orders of magnitude larger than
+`transition_buffer_s`).
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -17,6 +32,8 @@ import pandas as pd
 from rowii.config import GtRules
 from rowii.io.gantner import read_gantner
 from rowii.signals.windows import WindowGrid, window_slices
+
+logger = logging.getLogger(__name__)
 
 GT_CHANNELS: Mapping[str, str] = {
     "power": "1_P_Ist",
@@ -32,11 +49,21 @@ GT_CHANNELS: Mapping[str, str] = {
     "guide_vane": "1_Leitapparat Stell.",
     "flow_tu": "Durchfluss TU",
     "flow_pu": "Durchfluss PU",
+    # Multi-day/phase-shifter addendum (spec §3): loaded for verification/reporting --
+    # the phase-shifter promotion rule itself uses speed+power+dwell (± the ks_valve
+    # gate below when enabled), never reactive power directly.
+    "reactive": "1_Q_Ist",
+    # Spherical inlet valve position -- optional conjunctive gate for phase-shifter
+    # promotion (see `GtRules.ph_requires_ks_closed`). Verified present (exact name) in
+    # every SCADA-bearing day's Betriebsdaten during the addendum's own data audit.
+    "ks_valve": "1_KS Stellung",
 }
 
-STATES: tuple[str, ...] = ("standstill", "turbine", "pump", "transition")
+STATES: tuple[str, ...] = ("standstill", "turbine", "pump", "transition", "phase-shifter")
 
-_KNOWN_STATES = frozenset({"standstill", "turbine", "pump"})
+_KNOWN_STATES = frozenset({"standstill", "turbine", "pump", "phase-shifter"})
+_PH_STATE = "phase-shifter"
+_TRANSITION_STATE = "transition"
 
 
 def load_scada_window_means(
@@ -122,6 +149,88 @@ def _base_state(scada: pd.DataFrame, rules: GtRules) -> pd.Series:
     return pd.Series(state, index=scada.index)
 
 
+def _ph_candidate_mask(scada: pd.DataFrame, rules: GtRules) -> np.ndarray:
+    """Windows satisfying the phase-shifter BASE criteria: nominal speed, |P| <= eps.
+
+    This is intentionally computed directly from `power`/`speed` rather than as
+    "`_base_state` says transition" -- a sub-nominal ramp-up/down window also falls
+    through `_base_state` to `"transition"`, but must NOT be a phase-shifter
+    candidate (only the unloaded-but-AT-nominal-speed sub-case is a genuine phase-
+    shifter candidate; addendum spec §3).
+    """
+    power = scada["power"].to_numpy(dtype=np.float64)
+    speed = scada["speed"].to_numpy(dtype=np.float64)
+    known = ~(np.isnan(power) | np.isnan(speed))
+    n_nom = rules.speed_nominal_rpm
+    is_nominal = np.abs(speed) >= (1.0 - rules.speed_eps_frac) * n_nom
+    is_unloaded = np.abs(power) <= rules.power_eps_mw
+    result: np.ndarray = known & is_nominal & is_unloaded
+    return result
+
+
+def _ph_ks_gate_mask(scada: pd.DataFrame, rules: GtRules) -> np.ndarray:
+    """True where the optional KS-valve gate does NOT block promotion.
+
+    Always all-True when `rules.ph_requires_ks_closed` is False (the gate is
+    disabled). When enabled: a window passes if `ks_valve <= ks_closed_max`, OR if
+    `ks_valve` is NaN for that window -- a NaN reading means the gate cannot be
+    evaluated, so it is IGNORED for that window (falls back to promoting purely on
+    speed/power/dwell) rather than silently treated as either closed or open; a
+    warning is logged once per call when this fallback is exercised at all.
+    """
+    if not rules.ph_requires_ks_closed:
+        return np.ones(len(scada), dtype=bool)
+
+    ks_valve = scada["ks_valve"].to_numpy(dtype=np.float64)
+    is_nan = np.isnan(ks_valve)
+    if is_nan.any():
+        logger.warning(
+            "ph_requires_ks_closed is True but ks_valve (%r) is NaN for %d/%d window(s); "
+            "the KS gate is ignored for those windows (falls back to speed/power/dwell "
+            "criteria alone)",
+            GT_CHANNELS["ks_valve"], int(is_nan.sum()), len(scada),
+        )
+    result: np.ndarray = is_nan | (ks_valve <= rules.ks_closed_max)
+    return result
+
+
+def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """[start, stop) index pairs of every maximal contiguous run of True in *mask*."""
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, value in enumerate(mask):
+        if value and start is None:
+            start = i
+        elif not value and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask)))
+    return runs
+
+
+def _apply_ph_promotion(
+    state: pd.Series, scada: pd.DataFrame, rules: GtRules, window_s: float
+) -> pd.Series:
+    """Promote contiguous nominal-speed/unloaded runs >= `ph_min_dwell_s` to phase-shifter.
+
+    Runs on the OUTPUT of `_base_state` -- every window in a promoted run currently
+    reads "transition" (the base rule's fallthrough for nominal-but-unloaded, per
+    `_ph_candidate_mask`'s own docstring), so promotion only ever replaces
+    "transition" with "phase-shifter", never touches any other state. Shorter
+    candidate runs (below the dwell threshold) are left untouched (stay
+    "transition"), matching a start/stop ramp's unloaded-spinning phase.
+    """
+    candidate = _ph_candidate_mask(scada, rules) & _ph_ks_gate_mask(scada, rules)
+    min_windows = rules.ph_min_dwell_s / window_s
+
+    out = state.to_numpy(copy=True)
+    for start, stop in _contiguous_true_runs(candidate):
+        if (stop - start) >= min_windows:
+            out[start:stop] = _PH_STATE
+    return pd.Series(out, index=state.index)
+
+
 def _apply_ramp(
     state: pd.Series, scada: pd.DataFrame, rules: GtRules, window_s: float
 ) -> pd.Series:
@@ -136,7 +245,11 @@ def _apply_ramp(
 
     out = state.to_numpy(copy=True)
     ramp_hit = ~np.isnan(dpdt) & (np.abs(dpdt) > rules.ramp_mw_per_s)
-    out[(out != "unknown") & ramp_hit] = "transition"
+    # Phase-shifter windows are never demoted by the ramp rule (addendum spec §3:
+    # "ramp rule ... never demotes PH interiors") -- a promoted run's own near-zero
+    # power rarely trips this threshold anyway, but this guard makes the invariant
+    # explicit rather than relying on that coincidence.
+    out[(out != "unknown") & (out != _PH_STATE) & ramp_hit] = _TRANSITION_STATE
     return pd.Series(out, index=state.index)
 
 
@@ -189,10 +302,19 @@ def gt_labels(scada: pd.DataFrame, rules: GtRules, *, window_s: float) -> pd.Dat
     window count and to compute dP/dt for the ramp rule; it is not itself a `GtRules`
     field (that dataclass is a fixed, already-committed interface) nor derivable from
     *scada* alone (its index carries no timestamps).
+
+    Rule ordering (addendum spec §3, see module docstring): base -> PH promotion ->
+    ramp -> transition buffer. The transition buffer's own change-point detection uses
+    the POST-promotion base (`ph_promoted`, not the pre-promotion `base`) -- a
+    phase-shifter run's own edges are a genuine base-state boundary (e.g.
+    standstill<->phase-shifter) that the buffer must be able to see and react to;
+    the pre-promotion base would still read "transition" there, which is not in
+    `_KNOWN_STATES` and would never register as a change point at all.
     """
     base = _base_state(scada, rules)
-    state = _apply_ramp(base, scada, rules, window_s)
-    state = _apply_transition_buffer(state, base, rules, window_s)
+    ph_promoted = _apply_ph_promotion(base, scada, rules, window_s)
+    state = _apply_ramp(ph_promoted, scada, rules, window_s)
+    state = _apply_transition_buffer(state, ph_promoted, rules, window_s)
 
     load_bin = pd.Series(np.full(len(scada), -1, dtype=np.int64), index=scada.index)
     for st in ("turbine", "pump"):

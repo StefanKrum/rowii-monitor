@@ -43,9 +43,10 @@ _STATE_COLORS = {
     "turbine": "tab:blue",
     "pump": "tab:orange",
     "transition": "tab:green",
+    "phase-shifter": "tab:purple",
     "unknown": "tab:red",
 }
-_FALLBACK_COLOR = "tab:purple"
+_FALLBACK_COLOR = "tab:brown"
 _NO_GT_COLOR = "0.9"
 
 
