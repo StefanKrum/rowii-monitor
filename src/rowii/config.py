@@ -38,20 +38,40 @@ class GtRules:
     # 600s (10 min) is the addendum's own conservative default -- shorter unloaded-
     # spinning runs are ramp artifacts, not phase-shifter operation.
     ph_min_dwell_s: float = 600.0
+    # DEDICATED power threshold for the PH candidate check (deliberately separate from
+    # power_eps_mw, which is calibrated for standstill/loaded turbine-pump
+    # discrimination): measured directly from ~98 min of confirmed 2026-07-01
+    # phase-shifter operation (TU_PH_TU day, results/parameter_verification.md's
+    # "Phase-shifter channels, 2026-07-08" section) -- active power sits at a stable
+    # ~-3.5 MW median (range -4.3 to -2.9 MW, real motoring/idling losses, not noise),
+    # well outside power_eps_mw=2.0. 5.0 MW is a round threshold comfortably above the
+    # measured 4.34 MW max magnitude, with a wide margin below both standstill (~0 MW)
+    # and the lowest observed loaded-turbine power in the same delivery (~206 MW) --
+    # reusing the general power_eps_mw here would have silently made PH promotion
+    # unreachable on real data (the spec's own literal text ties the PH rule to
+    # power_eps_mw; this dedicated field is a deliberate, documented deviation to make
+    # the rule actually fire on real data without loosening standstill/turbine/pump
+    # discrimination elsewhere).
+    ph_power_eps_mw: float = 5.0
     # Optional conjunctive gate: "1_KS Stellung" (spherical inlet valve position,
     # GT_CHANNELS["ks_valve"]) must also read <= ks_closed_max for a candidate run to
-    # be promoted. Ships DISABLED (per the addendum's verify-before-trusting mandate --
-    # the ~3=closed/~104=open hypothesis is Bruno's SCADA-audit finding, not yet
-    # confirmed against our own data) -- flip to True only after
-    # scripts/verify_parameters.py's own measurement on the 2026-07-01 delivery
-    # confirms the separation directly (see results/parameter_verification.md's
-    # "Phase-shifter channels" section once written).
-    ph_requires_ks_closed: bool = False
+    # be promoted. VERIFIED and ENABLED (2026-07-08, scripts/verify_parameters.py's
+    # "Phase-shifter channels" section, run against the 2026-07-01 delivery,
+    # results/parameter_verification.md): per-GT-state ks_valve distribution (computed
+    # WITHOUT this gate, i.e. purely from the speed+power+dwell rule) shows a clean,
+    # wide separation -- phase-shifter median 3.208 (p95 3.213, n=6148) and standstill
+    # median 3.015 (p95 3.112, n=36938) vs. turbine median 104.278 (p5 104.274,
+    # n=35719) and pump median 104.277 (p5 104.276, n=4309). Provenance: the ~3=closed/
+    # ~104=open hypothesis itself originates from the partner's (Bruno's) SCADA channel
+    # audit, relayed pre-verification -- this confirmation is independently derived
+    # from OUR OWN 2026-07-01 data, not carried over from that audit's numbers.
+    ph_requires_ks_closed: bool = True
     ks_closed_max: float = 10.0
     """Threshold on GT_CHANNELS["ks_valve"] ("1_KS Stellung") below which the valve
-    counts as closed, used only when `ph_requires_ks_closed` is True. Placeholder
-    value pending the addendum's own verification against the 2026-07-01 delivery
-    (see `ph_requires_ks_closed`'s docstring) -- NOT yet measured from real data."""
+    counts as closed, used only when `ph_requires_ks_closed` is True. 10.0 sits
+    comfortably above the measured closed-state p95 (phase-shifter 3.213, standstill
+    3.112) with a wide margin below the measured open-state p5 (~104.27) -- see
+    `ph_requires_ks_closed`'s docstring for the full measurement provenance."""
 
 
 @dataclass(frozen=True)

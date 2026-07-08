@@ -18,6 +18,7 @@ Run with `python scripts/verify_parameters.py` from the repo root (needs ROWII_D
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import sys
 from dataclasses import dataclass
@@ -28,11 +29,12 @@ from scipy import signal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rowii.config import Config, load_config  # noqa: E402
+from rowii.config import Config, GtRules, load_config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, discover  # noqa: E402
 from rowii.io.gantner import GantnerHeader, read_gantner, read_header  # noqa: E402
-from rowii.scada.labels import GT_CHANNELS  # noqa: E402
+from rowii.scada.labels import GT_CHANNELS, gt_labels, load_scada_window_means  # noqa: E402
 from rowii.signals.features import MACHINE_HZ  # noqa: E402
+from rowii.signals.windows import WindowGrid  # noqa: E402
 
 _DAY_ROOT = "illwerke-250526"
 """ROWII_DATA_ROOT now points at the PARENT root (spec: docs/superpowers/specs/
@@ -45,6 +47,11 @@ _MESSUNG_DIR = "20260626 Messung"
 _BETRIEBSDATEN_DIR = f"{_DAY_ROOT}/{_MESSUNG_DIR}/Betriebsdaten"
 _RUN_NAME_TU = "250526-tu"
 _RUN_NAME_PU_AFTERNOON = "250526-pu-afternoon"
+_PH_VERIFICATION_RUN_NAME = "010726-tu_ph_tu"
+"""Day tree used for the phase-shifter channel verification (addendum spec §3/
+Item 4): 2026-07-01 is the campaign's only day with ALL FOUR operating modes
+in one full-SCADA-covered day, including a confirmed, sustained phase-shifter
+interval."""
 _POWER_GENERATION_THRESHOLD_MW = 50.0
 _SPEED_DEVIATION_CORRECTION_THRESHOLD_PCT = 2.0
 _MACHINE_HZ_LOCAL_WINDOW_HZ = 3.0
@@ -300,8 +307,203 @@ def measure_pu_afternoon_coverage(cfg: Config, index: RecordingIndex) -> PuAfter
 
 
 # ---------------------------------------------------------------------------
+# 6. Phase-shifter channels (multi-day/phase-shifter addendum, Item 4): per-GT-state
+#    distribution of ks_valve ("1_KS Stellung") and reactive ("1_Q_Ist") on the
+#    2026-07-01 delivery, GT ALWAYS computed with the KS gate forced off
+#    (dataclasses.replace(cfg.gt, ph_requires_ks_closed=False)) -- verification
+#    must observe the gate's OWN hypothesis, never have an already-adopted
+#    verdict circularly baked into the GT it is checking.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChannelDistribution:
+    median: float
+    p5: float
+    p95: float
+    n: int
+
+
+@dataclass(frozen=True)
+class PhaseShifterChannelStats:
+    day_root: str
+    n_windows_total: int
+    ks_valve_by_state: dict[str, ChannelDistribution]
+    reactive_by_state: dict[str, ChannelDistribution]
+
+
+def _build_whole_day_grid(betriebsdaten: list[Path], window_s: float) -> WindowGrid:
+    """A grid spanning one day tree's FULL Betriebsdaten coverage (first file's start
+    to last file's end), not the stream-INTERSECTION `common_grid` computes (which is
+    empty by construction for a sequence of back-to-back, non-overlapping hourly
+    files -- `common_grid` is designed for OVERLAPPING burst streams, not consecutive
+    SCADA hours).
+    """
+    sorted_files = sorted(betriebsdaten)
+    first_h = read_header(sorted_files[0])
+    last_h = read_header(sorted_files[-1])
+    last_end_ns = last_h.t0_ns + round(last_h.n_frames / last_h.sample_rate_hz * 1e9)
+    window_ns = round(window_s * 1e9)
+    n_windows = (last_end_ns - first_h.t0_ns) // window_ns
+    return WindowGrid(t0_ns=first_h.t0_ns, window_ns=window_ns, n_windows=n_windows)
+
+
+def _channel_distribution(values: np.ndarray) -> ChannelDistribution:
+    finite = values[~np.isnan(values)]
+    if len(finite) == 0:
+        return ChannelDistribution(median=float("nan"), p5=float("nan"), p95=float("nan"), n=0)
+    return ChannelDistribution(
+        median=float(np.median(finite)),
+        p5=float(np.percentile(finite, 5)),
+        p95=float(np.percentile(finite, 95)),
+        n=len(finite),
+    )
+
+
+def measure_phase_shifter_channels(
+    cfg: Config, index: RecordingIndex, run_name: str = _PH_VERIFICATION_RUN_NAME
+) -> PhaseShifterChannelStats:
+    """Per-GT-state ks_valve/reactive distributions for *run_name*'s own day tree.
+
+    GT is ALWAYS computed with the KS gate FORCED OFF (`dataclasses.replace(cfg.gt,
+    ph_requires_ks_closed=False)`), regardless of what `cfg.gt.ph_requires_ks_closed`
+    itself currently is -- this measurement's entire purpose is to check whether
+    ks_valve separates cleanly ACROSS the states the speed+power+dwell rule alone
+    produces, so it must never let a previously-adopted verdict (the gate now ships
+    ENABLED by default, per this very section's own 2026-07-08 finding) circularly
+    feed back into the states being re-measured on a later re-run of this script.
+    """
+    run = next(r for r in index.runs if r.name == run_name)
+    day_betriebsdaten = index.betriebsdaten_by_day[run.day_root]
+
+    grid = _build_whole_day_grid(day_betriebsdaten, cfg.window.window_s)
+    scada = load_scada_window_means(sorted(day_betriebsdaten), grid)
+    rules_without_gate = dataclasses.replace(cfg.gt, ph_requires_ks_closed=False)
+    gt = gt_labels(scada, rules_without_gate, window_s=cfg.window.window_s)
+
+    ks_valve = scada["ks_valve"].to_numpy(dtype=np.float64)
+    reactive = scada["reactive"].to_numpy(dtype=np.float64)
+    states = gt["state"].to_numpy()
+
+    ks_by_state: dict[str, ChannelDistribution] = {}
+    reactive_by_state: dict[str, ChannelDistribution] = {}
+    for state in sorted(set(states)):
+        mask = states == state
+        ks_by_state[state] = _channel_distribution(ks_valve[mask])
+        reactive_by_state[state] = _channel_distribution(reactive[mask])
+
+    return PhaseShifterChannelStats(
+        day_root=run.day_root.name,
+        n_windows_total=grid.n_windows,
+        ks_valve_by_state=ks_by_state,
+        reactive_by_state=reactive_by_state,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report rendering
 # ---------------------------------------------------------------------------
+
+
+def _render_ph_channel_table(
+    title: str, by_state: dict[str, ChannelDistribution]
+) -> list[str]:
+    lines = [
+        f"**{title}**",
+        "",
+        "| GT state | n | median | p5 | p95 |",
+        "|---|---|---|---|---|",
+    ]
+    for state, dist in sorted(by_state.items()):
+        lines.append(
+            f"| {state} | {dist.n} | {dist.median:.3f} | {dist.p5:.3f} | {dist.p95:.3f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _render_phase_shifter_channels_section(
+    ph_stats: PhaseShifterChannelStats, rules: GtRules
+) -> list[str]:
+    ks_ph = ph_stats.ks_valve_by_state.get("phase-shifter")
+    ks_ss = ph_stats.ks_valve_by_state.get("standstill")
+    ks_tu = ph_stats.ks_valve_by_state.get("turbine")
+    ks_pu = ph_stats.ks_valve_by_state.get("pump")
+
+    lines: list[str] = []
+    lines.append("## Phase-shifter channels, 2026-07-08")
+    lines.append("")
+    lines.append(
+        f"Source: day tree `{ph_stats.day_root}` (2026-07-01, ALL FOUR operating "
+        f"modes -- addendum spec §1), whole-day grid ({ph_stats.n_windows_total} "
+        f"windows at {1.0:.0f}-s resolution assumed from `cfg.window.window_s`). GT "
+        "computed with the KS gate FORCED OFF regardless of the current config "
+        "(`measure_phase_shifter_channels` always uses "
+        "`dataclasses.replace(cfg.gt, ph_requires_ks_closed=False)`) -- this "
+        "section's own purpose is to check whether the gate's hypothesis holds, so "
+        "it must never let an already-adopted verdict circularly feed back into the "
+        "states being re-measured on a later re-run of this script."
+    )
+    lines.append("")
+    lines.extend(_render_ph_channel_table("1_KS Stellung (ks_valve)", ph_stats.ks_valve_by_state))
+    lines.extend(_render_ph_channel_table("1_Q_Ist (reactive)", ph_stats.reactive_by_state))
+
+    lines.append(
+        "**Hypothesis under test** (provenance: partner/Bruno's SCADA channel audit, "
+        "relayed pre-verification -- NOT an internally-derived number): "
+        "`1_KS Stellung` (spherical inlet valve) reads ~3 when closed (standstill, "
+        "phase-shifter) and ~104 when open (turbine, pump); independent confirmation "
+        "required on our own 2026-07-01 data before use (addendum spec §3)."
+    )
+    lines.append("")
+
+    if ks_ph is not None and ks_ss is not None and ks_tu is not None and ks_pu is not None:
+        closed_states_max = max(ks_ph.p95, ks_ss.p95)
+        open_states_min = min(ks_tu.p5, ks_pu.p5)
+        separated = closed_states_max < open_states_min
+        verdict = "CONFIRMED" if separated else "AMBIGUOUS"
+        lines.append(
+            f"**Verdict: {verdict}** -- phase-shifter/standstill ks_valve "
+            f"(p95: {ks_ph.p95:.3f} / {ks_ss.p95:.3f}) vs. turbine/pump ks_valve "
+            f"(p5: {ks_tu.p5:.3f} / {ks_pu.p5:.3f})."
+        )
+        lines.append("")
+        if separated:
+            lines.append(
+                f"Clean separation confirmed on our own data: "
+                f"`ph_requires_ks_closed=True`, `ks_closed_max={closed_states_max:.1f}` "
+                f"(measured phase-shifter/standstill p95 + margin below the measured "
+                f"turbine/pump p5 of {open_states_min:.3f}) recorded in "
+                "`GtRules` with this section as the verification provenance."
+            )
+        else:
+            lines.append(
+                "Separation is NOT clean on our own data -- `ph_requires_ks_closed` "
+                "stays `False` (unverified hypothesis not adopted); see the per-state "
+                "tables above for the actual measured overlap."
+            )
+    else:
+        missing = [
+            name
+            for name, dist in (
+                ("phase-shifter", ks_ph), ("standstill", ks_ss),
+                ("turbine", ks_tu), ("pump", ks_pu),
+            )
+            if dist is None
+        ]
+        lines.append(
+            f"**Verdict: AMBIGUOUS** -- one or more GT states have zero eval windows "
+            f"on this day tree ({', '.join(missing)}), so the separation cannot be "
+            "checked; `ph_requires_ks_closed` stays `False`."
+        )
+    lines.append("")
+    lines.append(
+        f"Current config: `ph_requires_ks_closed={rules.ph_requires_ks_closed}`, "
+        f"`ks_closed_max={rules.ks_closed_max}`."
+    )
+    lines.append("")
+
+    return lines
 
 
 def _render_report(
@@ -310,6 +512,8 @@ def _render_report(
     liveness: list[VibLivenessResult],
     scada_hours: list[ScadaHourStats],
     pu_coverage: PuAfternoonCoverageResult,
+    ph_stats: PhaseShifterChannelStats,
+    gt_rules: GtRules,
 ) -> str:
     lines: list[str] = []
     lines.append("# Task 13 parameter verification (2026-06-25 Rodundwerk II delivery)")
@@ -430,6 +634,8 @@ def _render_report(
     )
     lines.append("")
 
+    lines.extend(_render_phase_shifter_channels_section(ph_stats, gt_rules))
+
     lines.append("## Note: burst-file / Betriebsdaten clock convention")
     lines.append("")
     lines.append(
@@ -469,8 +675,11 @@ def main() -> int:
         measure_scada_hour(cfg, "2026-06-25_09-00-00.dat"),
     ]
     pu_coverage = measure_pu_afternoon_coverage(cfg, index)
+    ph_stats = measure_phase_shifter_channels(cfg, index)
 
-    report = _render_report(speed, spectral, liveness, scada_hours, pu_coverage)
+    report = _render_report(
+        speed, spectral, liveness, scada_hours, pu_coverage, ph_stats, cfg.gt
+    )
 
     out_path = cfg.results_root / "parameter_verification.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -480,6 +689,11 @@ def main() -> int:
     print(f"  speed plateau: {speed.plateau_rpm:.3f} rpm "
           f"(configured {speed.configured_rpm:.1f}, deviation {speed.deviation_pct:.1f}%)")
     print(f"  pu-afternoon SCADA coverage: {'COVERED' if pu_coverage.covered else 'NOT COVERED'}")
+    ks_ph = ph_stats.ks_valve_by_state.get("phase-shifter")
+    ks_tu = ph_stats.ks_valve_by_state.get("turbine")
+    if ks_ph is not None and ks_tu is not None:
+        print(f"  phase-shifter ks_valve median: {ks_ph.median:.3f} "
+              f"(vs turbine median: {ks_tu.median:.3f})")
     return 0
 
 

@@ -157,13 +157,18 @@ def _ph_candidate_mask(scada: pd.DataFrame, rules: GtRules) -> np.ndarray:
     through `_base_state` to `"transition"`, but must NOT be a phase-shifter
     candidate (only the unloaded-but-AT-nominal-speed sub-case is a genuine phase-
     shifter candidate; addendum spec §3).
+
+    Uses `rules.ph_power_eps_mw` (a DEDICATED threshold), not `rules.power_eps_mw` --
+    see `GtRules.ph_power_eps_mw`'s own docstring for why: real phase-shifter idling
+    power (measured on 2026-07-01) sits at a stable ~3.5 MW magnitude, well outside
+    the tighter power_eps_mw used for standstill/loaded turbine-pump discrimination.
     """
     power = scada["power"].to_numpy(dtype=np.float64)
     speed = scada["speed"].to_numpy(dtype=np.float64)
     known = ~(np.isnan(power) | np.isnan(speed))
     n_nom = rules.speed_nominal_rpm
     is_nominal = np.abs(speed) >= (1.0 - rules.speed_eps_frac) * n_nom
-    is_unloaded = np.abs(power) <= rules.power_eps_mw
+    is_unloaded = np.abs(power) <= rules.ph_power_eps_mw
     result: np.ndarray = known & is_nominal & is_unloaded
     return result
 
@@ -214,12 +219,18 @@ def _apply_ph_promotion(
 ) -> pd.Series:
     """Promote contiguous nominal-speed/unloaded runs >= `ph_min_dwell_s` to phase-shifter.
 
-    Runs on the OUTPUT of `_base_state` -- every window in a promoted run currently
-    reads "transition" (the base rule's fallthrough for nominal-but-unloaded, per
-    `_ph_candidate_mask`'s own docstring), so promotion only ever replaces
-    "transition" with "phase-shifter", never touches any other state. Shorter
-    candidate runs (below the dwell threshold) are left untouched (stay
-    "transition"), matching a start/stop ramp's unloaded-spinning phase.
+    Runs on the OUTPUT of `_base_state`. Because `ph_power_eps_mw` is deliberately
+    WIDER than `power_eps_mw` (see `GtRules.ph_power_eps_mw`), a qualifying window can
+    have been base-classified as "transition" (the |P| <= power_eps_mw fallthrough) OR
+    as "pump" (real-data finding, 2026-07-01: `_base_state`'s `pump_by_power` fires on
+    ANY power < -power_eps_mw regardless of actual water flow -- a motoring window with
+    zero flow_pu/flow_tu but power in the (power_eps_mw, ph_power_eps_mw] range is
+    genuinely NOT pumping, just spinning at nominal speed drawing a small amount of
+    grid power, which `_base_state` alone cannot distinguish from real pumping).
+    Promotion intentionally overrides either base classification for a long enough
+    dwell -- this is the correction mechanism, not a bug. Shorter candidate runs
+    (below the dwell threshold) are left completely untouched (whatever `_base_state`
+    decided stands), matching a start/stop ramp's unloaded-spinning phase.
     """
     candidate = _ph_candidate_mask(scada, rules) & _ph_ks_gate_mask(scada, rules)
     min_windows = rules.ph_min_dwell_s / window_s
