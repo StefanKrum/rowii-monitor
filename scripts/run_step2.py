@@ -109,8 +109,10 @@ import dataclasses
 import itertools
 import logging
 import math
+import os
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -573,11 +575,36 @@ def _candidates_markdown(
 def _write_sweep_outputs(
     out_dir: Path, result: SweepResult, grid: WindowGrid, scada: pd.DataFrame | None, top_k: int
 ) -> None:
+    """Write `far_table.csv`, `scores.parquet`, `candidates.md` for one combo.
+
+    Convention (S6 review finding): labels are strings in ALL THREE persisted
+    artifacts, coerced right here before anything hits disk. `conditioning="per-
+    state"` sweeps carry `run_sweep`'s own aggregate `label="pooled"` row (`rowii.
+    anomaly.sweep` module docstring point 4) alongside int cluster-id rows, which makes
+    the raw `far_table["label"]` column an OBJECT column mixing Python `int` and `str`
+    -- `to_csv`/`read_csv` then round-trips that column as all-string (pandas cannot
+    partially infer a numeric dtype once any one value fails conversion), while
+    `scores["label"]` (whose rows never include the "pooled" aggregate) round-trips
+    `scores.parquet` at its ORIGINAL int64 dtype, unchanged. Left alone, a caller who
+    re-loads both files and does `pd.merge(scores, far_table, on="label")` hits a dtype
+    mismatch even though the two files describe exactly the same labels. Coercing all
+    three DataFrames' label columns to `str` before writing keeps every persisted
+    artifact mutually consistent regardless of round-trip -- the "pooled" row makes
+    mixed dtypes unavoidable otherwise, since a real label is an int (detected cluster
+    id) or a str (GT state name) but "pooled" is always a str.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    result.far_table.to_csv(out_dir / "far_table.csv", index=False)
-    result.scores.to_parquet(out_dir / "scores.parquet", engine="pyarrow", index=False)
+    far_table = result.far_table.copy()
+    far_table["label"] = far_table["label"].astype(str)
+    scores_df = result.scores.copy()
+    scores_df["label"] = scores_df["label"].astype(str)
+    candidates_df = result.candidates.copy()
+    candidates_df["label"] = candidates_df["label"].astype(str)
+
+    far_table.to_csv(out_dir / "far_table.csv", index=False)
+    scores_df.to_parquet(out_dir / "scores.parquet", engine="pyarrow", index=False)
     (out_dir / "candidates.md").write_text(
-        _candidates_markdown(result.candidates, grid, scada, top_k)
+        _candidates_markdown(candidates_df, grid, scada, top_k)
     )
 
 
@@ -604,6 +631,36 @@ verified independently against our own sweeps where possible (design spec
 ## Our sweeps
 
 """
+
+_REGISTER_HEADER_FIRST_LINE = _REGISTER_HEADER.splitlines()[0]
+"""`_REGISTER_HEADER`'s first line -- `_append_candidate_register`'s repair guard reads
+just this one line back to confirm a previous header write actually completed (S6
+review finding), rather than trusting `path.exists()` alone, which stays `True` even
+for a file truncated mid-write of the header itself."""
+
+
+# ---------------------------------------------------------------------------
+# Shared crash-safety helper for append-only artifacts (candidate register +
+# summary.csv, below)
+# ---------------------------------------------------------------------------
+
+
+def _quarantine_corrupt_file(path: Path, reason: str) -> None:
+    """Rename *path* aside to `<name>.corrupt-<UTC-timestamp>` (NEVER delete) and log a
+    warning -- shared recovery step for `_append_candidate_register`/
+    `_append_summary_row` when a previously-written shared artifact turns out to be
+    unreadable or fails its own schema/header check (crash mid-write from a killed
+    prior invocation, disk full, ...). The caller treats *path* as absent afterwards,
+    same as if this were the very first invocation to touch it.
+    """
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    corrupt_path = path.with_name(f"{path.name}.corrupt-{timestamp}")
+    logger.warning(
+        "run_step2: %s appears corrupt (%s) -- moving aside to %s and continuing as if "
+        "absent (never deleted)",
+        path, reason, corrupt_path,
+    )
+    path.rename(corrupt_path)
 
 
 def _register_path(results_root: Path) -> Path:
@@ -647,6 +704,33 @@ def _register_section_markdown(
     return "\n".join(lines) + "\n"
 
 
+def _register_has_intact_header(path: Path) -> bool:
+    """Whether *path* starts with `_REGISTER_HEADER_FIRST_LINE` -- cheap enough to check
+    on every append (one `readline()`) and the signal `_append_candidate_register` uses
+    instead of `path.exists()` alone: a header truncated mid-write (crash, disk full, a
+    killed prior invocation) still makes `path.exists()` `True`, but its first line
+    would then be a truncated prefix of (or otherwise not equal to) the real header's
+    first line. Any read failure (missing file, undecodable bytes) also counts as "not
+    intact" -- the caller's next step either way is to (re)write a fresh header.
+    """
+    try:
+        with path.open(encoding="utf-8") as f:
+            first_line = f.readline().rstrip("\n")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return first_line == _REGISTER_HEADER_FIRST_LINE
+
+
+def _write_register_header(path: Path) -> None:
+    """Atomic-ish header write: build the full header in a `.tmp` sibling, then
+    `os.replace` it into place, so a crash mid-write never leaves a PARTIAL header
+    under the real path (same tmp-then-replace pattern `_append_summary_row` uses for
+    `summary.csv`, S6 review finding)."""
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(_REGISTER_HEADER, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def _append_candidate_register(
     results_root: Path, run_name: str, variant: str, labels_mode: str,
     conditioning: str, scorer: str, alpha: float, candidates: pd.DataFrame,
@@ -655,7 +739,10 @@ def _append_candidate_register(
     path = _register_path(results_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_text(_REGISTER_HEADER)
+        _write_register_header(path)
+    elif not _register_has_intact_header(path):
+        _quarantine_corrupt_file(path, "candidate_register.md header missing or truncated")
+        _write_register_header(path)
     section = _register_section_markdown(
         run_name, variant, labels_mode, conditioning, scorer, alpha, candidates, grid, scada
     )
@@ -761,16 +848,54 @@ def _cross_day_summary_row(
     )
 
 
+def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
+    """`pd.read_csv(summary_path)`, or `None` if the file does not exist, fails to
+    parse, or parses to the wrong column schema (S6 review finding: `summary.csv` is a
+    shared, append-only artifact a killed prior invocation can leave mid-write). A
+    corrupt file is quarantined via `_quarantine_corrupt_file` (never deleted, never
+    silently overwritten); the caller then treats this exactly like "does not exist
+    yet".
+
+    Deliberately narrow on which parse failures count as "corrupt, recover":
+    `pd.errors.ParserError` (malformed CSV token stream, e.g. an unbalanced quote),
+    `pd.errors.EmptyDataError` (zero-byte file), `UnicodeDecodeError` (binary garbage /
+    wrong encoding from a mid-write crash). A truncated write does not always raise one
+    of these, though: losing only the LAST data row's trailing columns parses silently
+    (pandas fills missing trailing fields with NaN), and losing part of the HEADER line
+    itself instead changes which columns get parsed at all, again with no exception.
+    Neither is caught by the exceptions above, so the parsed result's columns are also
+    checked against `_SUMMARY_COLUMNS` explicitly: any mismatch is treated as corrupt
+    too, rather than attempting to salvage a partial row.
+    """
+    if not summary_path.exists():
+        return None
+    try:
+        existing = pd.read_csv(summary_path)
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
+        _quarantine_corrupt_file(summary_path, f"{type(exc).__name__}: {exc}")
+        return None
+    if list(existing.columns) != list(_SUMMARY_COLUMNS):
+        _quarantine_corrupt_file(
+            summary_path, f"unexpected columns {list(existing.columns)!r} (truncated write?)"
+        )
+        return None
+    return existing
+
+
 def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
+    """Append one row to `summary.csv`, recovering from a corrupt prior write
+    (`_read_summary_csv_or_none`) and writing crash-safely itself: the combined frame
+    goes to a `summary.csv.tmp` sibling first, then `os.replace`s the real path, so a
+    crash mid-write of THIS call can never leave a partially-written `summary.csv`
+    behind either (S6 review finding)."""
     summary_path = results_root / "step2" / "summary.csv"
     row_df = pd.DataFrame([vars(row)], columns=_SUMMARY_COLUMNS)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    if summary_path.exists():
-        existing = pd.read_csv(summary_path)
-        combined = pd.concat([existing, row_df], ignore_index=True)
-    else:
-        combined = row_df
-    combined.to_csv(summary_path, index=False)
+    existing = _read_summary_csv_or_none(summary_path)
+    combined = pd.concat([existing, row_df], ignore_index=True) if existing is not None else row_df
+    tmp_path = summary_path.with_name(summary_path.name + ".tmp")
+    combined.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, summary_path)
 
 
 # ---------------------------------------------------------------------------
