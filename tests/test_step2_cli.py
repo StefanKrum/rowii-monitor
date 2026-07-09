@@ -535,3 +535,201 @@ def test_within_day_summary_deterministic_across_invocations(tmp_path, monkeypat
             assert isinstance(v2, float) and math.isnan(v2), f"{col}: {v1!r} != {v2!r}"
         else:
             assert v1 == v2, f"{col}: {v1!r} != {v2!r}"
+
+
+# ---------------------------------------------------------------------------
+# 6. far_table.csv / scores.parquet label-dtype consistency (round-trip merge)
+# ---------------------------------------------------------------------------
+
+
+def test_per_state_far_table_and_scores_label_dtypes_merge_cleanly(tmp_path, monkeypatch) -> None:
+    """`conditioning="per-state"` detected-labels sweeps carry `run_sweep`'s own
+    aggregate `label="pooled"` row (`rowii.anomaly.sweep` module docstring point 4)
+    alongside int cluster-id rows -- an OBJECT `far_table["label"]` column mixing
+    Python `int` and `str` that `to_csv`/`read_csv` round-trips as all-string (pandas
+    cannot partially infer a numeric dtype once any one value fails conversion), while
+    `scores.parquet`'s own label column never contains the "pooled" row and so
+    preserves the ORIGINAL int64 dtype unchanged. Before this fix, `pd.merge(scores,
+    far_table, on="label")` on the two re-loaded artifacts raised a `ValueError` for a
+    label-dtype mismatch (pandas: "You are trying to merge on int64 and object/str
+    columns") even though both files describe exactly the same labels (S6 review
+    finding).
+    """
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    from rowii.config import load_config
+    from rowii.io.dataset import discover
+
+    cfg = load_config()
+    index = discover(tmp_path / "data")
+    run = next(r for r in index.runs if r.name == "tu")
+
+    n_written = run_step2._run_within_day_for_run(
+        run, "fusion", cfg, index, ("knn",), ("per-state",), "detected", 0.05, 20,
+        use_cache=True,
+    )
+    assert n_written == 1
+
+    combo_dir = (
+        tmp_path / "results" / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "per-state-knn"
+    )
+    far_table = pd.read_csv(combo_dir / "far_table.csv")
+    scores = pd.read_parquet(combo_dir / "scores.parquet")
+
+    # Sanity: the fixture must genuinely exercise the mixed-source aggregate row and a
+    # non-empty scores table, else the regression this test guards against can't occur.
+    assert "pooled" in set(far_table["label"])
+    assert len(scores) > 0
+
+    # (pandas >= 2.x may back a string column with its own dedicated `StringDtype`
+    # rather than legacy `object` -- `is_string_dtype` recognizes both.)
+    assert pd.api.types.is_string_dtype(far_table["label"])
+    assert all(isinstance(v, str) for v in far_table["label"])
+    assert pd.api.types.is_string_dtype(scores["label"])
+    assert all(isinstance(v, str) for v in scores["label"])
+
+    merged = pd.merge(scores, far_table, on="label", how="inner", suffixes=("", "_far"))
+    assert len(merged) == len(scores)
+
+
+# ---------------------------------------------------------------------------
+# 7. summary.csv crash-safety: corrupt-file recovery + atomic write
+# ---------------------------------------------------------------------------
+
+
+def test_append_summary_row_recovers_from_unbalanced_quote(tmp_path, monkeypatch, caplog) -> None:
+    """A `summary.csv` left behind by a crashed/killed prior invocation mid-write can be
+    malformed CSV (e.g. an unbalanced quote from a partially flushed field) --
+    `pd.read_csv` then raises `pandas.errors.ParserError`. Before this fix,
+    `_append_summary_row` let that exception propagate uncaught, losing every prior
+    invocation's rows and crashing the CURRENT one on a shared, append-only artifact
+    (S6 review finding). The corrupt file must be quarantined, never deleted.
+    """
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    import run_step2
+
+    step2_dir = tmp_path / "results" / "step2"
+    step2_dir.mkdir(parents=True)
+    summary_path = step2_dir / "summary.csv"
+    corrupt_content = (
+        'run,variant,labels,conditioning,scorer,alpha\n"tu,fusion,detected,pooled,knn,0.05\n'
+    )
+    summary_path.write_text(corrupt_content)
+
+    row = run_step2._SummaryRow(
+        run="tu", variant="fusion", labels="detected", conditioning="pooled",
+        scorer="knn", alpha=0.05, per_label_count=1, pooled_realized_far=0.1,
+        mean_per_state_far=0.1, n_low_confidence=0, notes="",
+    )
+    with caplog.at_level(logging.WARNING):
+        run_step2._append_summary_row(tmp_path / "results", row)
+
+    corrupt_files = list(step2_dir.glob("summary.csv.corrupt-*"))
+    assert len(corrupt_files) == 1, corrupt_files
+    assert corrupt_files[0].read_text() == corrupt_content  # never deleted, byte-identical
+    assert not (step2_dir / "summary.csv.tmp").exists()  # tmp write cleaned up via os.replace
+
+    new_summary = pd.read_csv(summary_path)
+    assert list(new_summary.columns) == list(run_step2._SUMMARY_COLUMNS)
+    assert len(new_summary) == 1
+    assert new_summary.iloc[0]["run"] == "tu"
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(str(summary_path) in w for w in warnings), warnings
+
+
+def test_append_summary_row_recovers_from_truncated_header(tmp_path, monkeypatch, caplog) -> None:
+    """A `summary.csv` truncated mid-write can lose part of the HEADER line itself (as
+    opposed to a data row) -- `pd.read_csv` then parses SILENTLY (no exception raised),
+    just with the wrong, truncated set of columns, since pandas has nothing of its own
+    to compare against. `_append_summary_row` must catch this via an explicit
+    columns-match check rather than relying on `pd.read_csv` to raise (S6 review
+    finding).
+    """
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    import run_step2
+
+    step2_dir = tmp_path / "results" / "step2"
+    step2_dir.mkdir(parents=True)
+    summary_path = step2_dir / "summary.csv"
+    truncated_content = "run,variant,labels,condit"  # header itself cut off mid-write
+    summary_path.write_text(truncated_content)
+
+    # Confirm the premise: this parses without raising, just with the wrong columns --
+    # else this test would not actually exercise the "parses silently" case.
+    silently_parsed = pd.read_csv(summary_path)
+    assert list(silently_parsed.columns) != list(run_step2._SUMMARY_COLUMNS)
+
+    row = run_step2._SummaryRow(
+        run="tu", variant="fusion", labels="detected", conditioning="pooled",
+        scorer="knn", alpha=0.05, per_label_count=1, pooled_realized_far=0.1,
+        mean_per_state_far=0.1, n_low_confidence=0, notes="",
+    )
+    with caplog.at_level(logging.WARNING):
+        run_step2._append_summary_row(tmp_path / "results", row)
+
+    corrupt_files = list(step2_dir.glob("summary.csv.corrupt-*"))
+    assert len(corrupt_files) == 1, corrupt_files
+    assert corrupt_files[0].read_text() == truncated_content  # never deleted
+
+    new_summary = pd.read_csv(summary_path)
+    assert list(new_summary.columns) == list(run_step2._SUMMARY_COLUMNS)
+    assert len(new_summary) == 1
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(str(summary_path) in w for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# 8. candidate_register.md crash-safety: truncated-header repair
+# ---------------------------------------------------------------------------
+
+
+def test_append_candidate_register_repairs_truncated_header(tmp_path, monkeypatch, caplog) -> None:
+    """A `candidate_register.md` left behind by a crashed/killed prior invocation can
+    have its HEADER itself cut off mid-write (OS writes are not atomic at arbitrary
+    byte offsets) -- `path.exists()` is still `True`, so the old `not path.exists()`
+    header-once guard never notices and would silently append a new section onto a
+    header-less/garbled file. `_append_candidate_register` must instead check whether
+    the file actually STARTS WITH the header's first line, and repair (quarantine +
+    rewrite fresh) if not (S6 review finding).
+    """
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    import run_step2
+
+    step2_dir = tmp_path / "results" / "step2"
+    step2_dir.mkdir(parents=True)
+    register_path = step2_dir / "candidate_register.md"
+    first_line = run_step2._REGISTER_HEADER.splitlines()[0]
+    # Truncated mid-write of the header LINE itself (OS writes are not atomic at
+    # arbitrary byte offsets) -- the realistic crash scenario the first-line check
+    # targets; a truncation landing anywhere past the first line is out of this
+    # check's scope (helper docstring's documented gap).
+    truncated_content = first_line[: len(first_line) // 2]
+    register_path.write_text(truncated_content)
+
+    candidates = pd.DataFrame(columns=["window", "label", "score", "p_value", "rank"])
+    grid = run_step2.WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=1)
+
+    with caplog.at_level(logging.WARNING):
+        run_step2._append_candidate_register(
+            tmp_path / "results", "tu", "fusion", "detected", "per-state", "knn", 0.05,
+            candidates, grid, None,
+        )
+
+    corrupt_files = list(step2_dir.glob("candidate_register.md.corrupt-*"))
+    assert len(corrupt_files) == 1, corrupt_files
+    assert corrupt_files[0].read_text() == truncated_content  # never deleted
+    assert not (step2_dir / "candidate_register.md.tmp").exists()
+
+    text = register_path.read_text()
+    assert text.count("Fuelldüse") == 1  # header rewritten fresh, exactly once
+    assert "tu / fusion-detected / per-state-knn" in text
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(str(register_path) in w for w in warnings), warnings
