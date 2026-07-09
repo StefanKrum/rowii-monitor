@@ -194,6 +194,7 @@ def test_run_step1_help_exits_zero(capsys) -> None:
     assert "--clusterer" in out
     assert "--k" in out
     assert "--k-sweep" in out
+    assert "--no-cache" in out
 
 
 def test_run_step1_parser_accepts_arbitrary_day_prefixed_run_names() -> None:

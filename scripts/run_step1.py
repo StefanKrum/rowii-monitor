@@ -134,6 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Sweep k in {3,4,5,6} for the given combination instead of a single k.",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help=(
+            "Disable rowii.pipeline.prepare_run's on-disk feature cache "
+            "(results/cache/<run>--<variant>.npz): always recompute features and "
+            "never write a cache entry for this invocation."
+        ),
+    )
     return parser
 
 
@@ -299,18 +308,21 @@ class _RunFeatures:
 
 
 def _prepare_run_features(
-    run: Run, variant: str, cfg: Config, betriebsdaten: list[Path]
+    run: Run, variant: str, cfg: Config, betriebsdaten: list[Path], *, use_cache: bool = True
 ) -> _RunFeatures:
     """Grid + chunked featurize + validity mask + SCADA/GT for one (run, variant).
 
     This is the expensive, k/clusterer-independent half of the pipeline (spec
     Task 12 steps 1-3, 6): `rowii.pipeline.prepare_run` does the run-level-grid/
     chunked-featurize/validity-mask work (Step-2 Task S1 extraction -- see that
-    module for the memory-bounded per-file extraction); SCADA-derived ground
-    truth loading stays here (`load_run_gt`), since `rowii.pipeline` deliberately
-    does not own it (see that module's docstring for why).
+    module for the memory-bounded per-file extraction and its optional on-disk
+    feature cache); SCADA-derived ground truth loading stays here (`load_run_gt`),
+    since `rowii.pipeline` deliberately does not own it (see that module's
+    docstring for why).
     """
-    prepared: PreparedRun = prepare_run(run, variant, cfg, betriebsdaten=betriebsdaten)
+    prepared: PreparedRun = prepare_run(
+        run, variant, cfg, betriebsdaten=betriebsdaten, use_cache=use_cache
+    )
     scada, gt = load_run_gt(betriebsdaten, prepared.grid, cfg, prepared.valid_mask)
 
     return _RunFeatures(
@@ -419,6 +431,7 @@ def run_combo(
     results_root: Path,
     *,
     k: int | None = None,
+    use_cache: bool = True,
 ) -> ComboResult:
     """Execute the full pipeline for one (run, variant, clusterer) combination and
     append its row to `results/summary.csv` immediately (spec Task 12 step 8: the
@@ -429,11 +442,13 @@ def run_combo(
     discover (already done by the caller) -> grid -> chunked featurize ->
     validity mask -> assemble variant features -> SCADA/GT -> run_detection ->
     evaluate (or the no-GT fallback) -> write_report -> ComboResult.
+
+    *use_cache* is forwarded to `rowii.pipeline.prepare_run` (see `--no-cache`).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
 
-    prepared = _prepare_run_features(run, variant, cfg, betriebsdaten)
+    prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     result = _detect_and_report(
         run.name, variant, clusterer, cfg, prepared, results_root, k=k
     )
@@ -448,16 +463,21 @@ def run_combo_k_sweep(
     cfg: Config,
     betriebsdaten: list[Path],
     results_root: Path,
+    *,
+    use_cache: bool = True,
 ) -> list[ComboResult]:
     """Run k in {3,4,5,6} for one (run, variant, clusterer), reusing the same
     (expensive) extracted features across all four k values -- only detection,
     evaluation, and reporting differ per k. Each row is annotated "k-sweep" and
     appended to `results/summary.csv` as it completes (same per-combo append
-    contract as `run_combo`)."""
+    contract as `run_combo`).
+
+    *use_cache* is forwarded to `rowii.pipeline.prepare_run` (see `--no-cache`).
+    """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
 
-    prepared = _prepare_run_features(run, variant, cfg, betriebsdaten)
+    prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     rows = []
     for k in _K_SWEEP_VALUES:
         result = _detect_and_report(
@@ -512,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     runs = _resolve_runs(args.run, index)
     variants = _resolve_choice(args.variant, "all", _CONCRETE_VARIANTS)
     clusterers = _resolve_clusterers(args.clusterer)
+    use_cache = not args.no_cache
 
     n_rows = 0
     for run in runs:
@@ -529,13 +550,14 @@ def main(argv: list[str] | None = None) -> int:
                 if args.k_sweep:
                     n_rows += len(
                         run_combo_k_sweep(
-                            run, variant, clusterer, cfg, run_betriebsdaten, cfg.results_root
+                            run, variant, clusterer, cfg, run_betriebsdaten, cfg.results_root,
+                            use_cache=use_cache,
                         )
                     )
                 else:
                     run_combo(
                         run, variant, clusterer, cfg, run_betriebsdaten,
-                        cfg.results_root, k=args.k,
+                        cfg.results_root, k=args.k, use_cache=use_cache,
                     )
                     n_rows += 1
 

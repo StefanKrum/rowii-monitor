@@ -23,11 +23,21 @@ own docstring) -- Step 2's per-state references are built from DETECTED cluster 
 not GT (design spec §2: GT enters only evaluation views), and Step-1's own GT loading
 stays a CLI-layer concern (`scripts/run_step1.py`'s `load_run_gt`), called separately
 using this module's `PreparedRun.grid`/`valid_mask`.
+
+On-disk feature cache (Step-2 Task S1): `prepare_run(..., use_cache=True)` (the default)
+persists its result to `results/cache/<run.name>--<variant>.npz`, keyed by a sha256
+fingerprint of everything that determines the output (variant, window duration, every
+burst file's name+size, and the beats-checkpoint path) -- see `_cache_fingerprint`. A
+fingerprint mismatch (or a missing/corrupt cache file) is treated as a plain cache miss:
+recompute, then overwrite. `use_cache=False` bypasses the cache entirely (never reads,
+never writes) -- wired to `scripts/run_step1.py --no-cache`.
 """
 from __future__ import annotations
 
 import gc
+import hashlib
 import logging
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -404,6 +414,104 @@ class PreparedRun:
 
 
 # ---------------------------------------------------------------------------
+# On-disk feature cache (Step-2 Task S1)
+# ---------------------------------------------------------------------------
+
+_CACHE_SUBDIR = "cache"
+# npz archive member names, shared verbatim (as literal strings, not indirected through
+# constants) between `_write_cached_prepared_run`'s explicit `np.savez(..., name=value)`
+# keywords and `_load_cached_prepared_run`'s `data["name"]` lookups -- `np.savez`'s own
+# stub declares a distinct `allow_pickle: bool` keyword alongside `**kwds: ArrayLike`,
+# so passing these names through a `**{...}` dict (which WOULD allow a single shared
+# constant) makes mypy widen every value's type to satisfy `bool` too; spelling them out
+# as ordinary keyword arguments here avoids that entirely, at the cost of the two
+# function bodies needing to agree on the member names by inspection rather than a
+# shared symbol (verified in both directions by `tests/test_pipeline.py`'s cache
+# round-trip tests).
+
+
+def _cache_npz_path(results_root: Path, run_name: str, variant: str) -> Path:
+    """`results/cache/<run_name>--<variant>.npz` -- one (run, variant)'s cache entry."""
+    return results_root / _CACHE_SUBDIR / f"{run_name}--{variant}.npz"
+
+
+def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
+    """sha256 hex digest of everything that determines `prepare_run`'s output for one
+    (run, variant, cfg): the variant string itself, the window duration, every burst
+    file in the run (name + byte size, sorted -- catches both a file being swapped for
+    different content, most likely to change size, and files being added/removed;
+    scoped to the whole run rather than just the variant's own streams so this stays
+    correct even if `_streams_for_variant`'s mapping ever changes), and the one `cfg`
+    field that changes what a featurizer computes (`cfg.beats_checkpoint`'s path,
+    included unconditionally so a handcrafted-variant cache is never silently reused
+    after switching to/from a beats checkpoint). `cfg.detect`/`cfg.gt` are deliberately
+    excluded: they govern clustering/GT labeling, never feature EXTRACTION, so
+    changing them must not invalidate this cache.
+    """
+    file_entries = sorted(
+        f"{bf.path.name}:{bf.path.stat().st_size}"
+        for files in run.files.values()
+        for bf in files
+    )
+    payload = "\n".join(
+        [
+            f"variant={variant}",
+            f"window_s={cfg.window.window_s!r}",
+            f"beats_checkpoint={cfg.beats_checkpoint or ''}",
+            *file_entries,
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_cached_prepared_run(cache_path: Path, fingerprint: str) -> PreparedRun | None:
+    """`PreparedRun` from *cache_path* iff it exists, is readable, and its stored
+    fingerprint equals *fingerprint*; `None` otherwise (cache miss -- caller
+    recomputes and overwrites). A corrupt or partially-written cache file (e.g. from
+    an interrupted previous run) is treated as a miss, not a crash: logged as a
+    warning, never raised.
+    """
+    if not cache_path.is_file():
+        return None
+    try:
+        with np.load(cache_path, allow_pickle=False) as data:
+            if str(data["fingerprint"][0]) != fingerprint:
+                return None
+            grid = WindowGrid(
+                t0_ns=int(data["grid_t0_ns"][0]),
+                window_ns=int(data["grid_window_ns"][0]),
+                n_windows=int(data["grid_n_windows"][0]),
+            )
+            return PreparedRun(
+                features=data["features"],
+                grid=grid,
+                valid_mask=data["valid_mask"],
+                feature_names=data["feature_names"].tolist(),
+                segment_ids=data["segment_ids"],
+            )
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
+        logger.warning(
+            "prepare_run: cache at %s is unreadable (%s) -- recomputing", cache_path, exc
+        )
+        return None
+
+
+def _write_cached_prepared_run(cache_path: Path, fingerprint: str, prepared: PreparedRun) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        cache_path,
+        features=prepared.features,
+        valid_mask=prepared.valid_mask,
+        segment_ids=prepared.segment_ids,
+        feature_names=np.array(prepared.feature_names, dtype=str),
+        grid_t0_ns=np.array([prepared.grid.t0_ns], dtype=np.int64),
+        grid_window_ns=np.array([prepared.grid.window_ns], dtype=np.int64),
+        grid_n_windows=np.array([prepared.grid.n_windows], dtype=np.int64),
+        fingerprint=np.array([fingerprint], dtype=str),
+    )
+
+
+# ---------------------------------------------------------------------------
 # prepare_run: the public entry point
 # ---------------------------------------------------------------------------
 
@@ -414,6 +522,7 @@ def prepare_run(
     cfg: Config,
     *,
     betriebsdaten: list[Path] | None = None,
+    use_cache: bool = True,
 ) -> PreparedRun:
     """Grid + chunked featurize + validity mask for one (run, variant) -- the
     expensive, k/clusterer-independent half of the Step-1 pipeline (design spec
@@ -427,7 +536,8 @@ def prepare_run(
     features`, one burst file resident in memory at a time) -> per-variant column
     assembly (`assemble_variant_features`/`_assemble_feature_names`) -> validity mask
     (`compute_validity_mask`, raises `RuntimeError` if > 5% of windows are invalid) ->
-    `PreparedRun`.
+    `PreparedRun`, optionally read from or written to the on-disk cache (module
+    docstring).
 
     SCADA/ground truth loading is deliberately NOT part of this function -- see the
     module docstring. Callers that need it (`scripts/run_step1.py`) call
@@ -438,12 +548,19 @@ def prepare_run(
         run: The `Run` (burst files by stream) to prepare.
         variant: One of the concrete variant strings (`"audio"`, `"audio-beats"`,
             `"vibration"`, `"fusion"`, `"fusion-beats"`).
-        cfg: Project configuration (`cfg.window.window_s`, `cfg.beats_checkpoint`).
+        cfg: Project configuration (`cfg.window.window_s`, `cfg.beats_checkpoint`,
+            `cfg.results_root` for the cache location).
         betriebsdaten: Accepted for signature symmetry with callers that already have
             this list on hand when they call `prepare_run` (`scripts/run_step1.py`,
             and Step-2's future `run_step2.py`) -- NOT used by this function itself:
-            SCADA/GT loading is a separate step (see module docstring), and no
-            `PreparedRun` field depends on it.
+            SCADA/GT loading is a separate step (see module docstring), and neither
+            the cache fingerprint nor any `PreparedRun` field depends on it.
+        use_cache: When `True` (default), load a previously cached `PreparedRun` from
+            `results/cache/<run.name>--<variant>.npz` if its stored fingerprint
+            matches the current run/variant/config (`_cache_fingerprint`); otherwise
+            recompute and write a fresh cache entry. `False` always recomputes and
+            never reads or writes the cache (matches `scripts/run_step1.py
+            --no-cache`).
 
     Returns:
         A `PreparedRun` with the assembled `(W, F)` feature matrix, the `WindowGrid` it
@@ -456,6 +573,16 @@ def prepare_run(
         ValueError: if *variant* is not a recognised variant string.
     """
     streams = _streams_for_variant(variant)
+    cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
+    fingerprint = _cache_fingerprint(run, variant, cfg)
+
+    if use_cache:
+        cached = _load_cached_prepared_run(cache_path, fingerprint)
+        if cached is not None:
+            logger.info("prepare_run: cache hit for %s/%s (%s)", run.name, variant, cache_path)
+            return cached
+        logger.info("prepare_run: cache miss for %s/%s -- recomputing", run.name, variant)
+
     grid = build_run_grid(run, streams, cfg.window.window_s)
 
     stream_results: dict[str, _StreamFeatureResult] = {}
@@ -472,10 +599,15 @@ def prepare_run(
     # separate "primary stream" lookup is needed here.
     segment_ids = stream_results[streams[0]].segment_ids
 
-    return PreparedRun(
+    prepared = PreparedRun(
         features=features,
         grid=grid,
         valid_mask=valid_mask,
         feature_names=feature_names,
         segment_ids=segment_ids,
     )
+
+    if use_cache:
+        _write_cached_prepared_run(cache_path, fingerprint, prepared)
+
+    return prepared

@@ -1,5 +1,6 @@
-"""Unit tests for `rowii.pipeline` (Step-2 Task S1): the two fields Step-1's own CLI
-never consumed, `feature_names` and `segment_ids`.
+"""Unit tests for `rowii.pipeline` (Step-2 Task S1): `prepare_run`'s on-disk feature
+cache (round-trip + fingerprint invalidation) and its two fields Step-1's own CLI never
+consumed, `feature_names` and `segment_ids`.
 
 `scripts/run_step1.py`'s own CLI-level behavior for this same underlying logic is
 covered by `tests/test_cli_smoke.py`'s miniature end-to-end test (which also pins exact
@@ -74,7 +75,7 @@ def test_prepare_run_audio_variant_populates_feature_names_and_segment_ids(tmp_p
     run = _single_file_audio_run(tmp_path / "burst", n_seconds=5)
     cfg = _cfg(tmp_path / "results")
 
-    prepared = prepare_run(run, "audio", cfg)
+    prepared = prepare_run(run, "audio", cfg, use_cache=False)
 
     assert isinstance(prepared, PreparedRun)
     assert prepared.grid.n_windows == 5
@@ -129,7 +130,127 @@ def test_extract_stream_features_segment_ids_track_files_in_time_order_with_gap(
 
 
 # ---------------------------------------------------------------------------
-# 2. Unknown variant raises ValueError (unchanged from the pre-refactor behavior)
+# 2. Cache round-trip: second call with an unchanged run/variant/cfg is a cache HIT
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_run_cache_round_trip_avoids_recompute(tmp_path, monkeypatch) -> None:
+    run = _single_file_audio_run(tmp_path / "burst")
+    cfg = _cfg(tmp_path / "results")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    first = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2, "one _extract_stream_features call per audio stream"
+
+    cache_path = tmp_path / "results" / "cache" / "unit-test-run--audio.npz"
+    assert cache_path.is_file()
+
+    second = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2, "second call must be a cache HIT -- no new extraction"
+
+    np.testing.assert_array_equal(first.features, second.features)
+    np.testing.assert_array_equal(first.valid_mask, second.valid_mask)
+    np.testing.assert_array_equal(first.segment_ids, second.segment_ids)
+    assert first.feature_names == second.feature_names
+    assert first.grid == second.grid
+
+
+def test_prepare_run_no_cache_never_reads_or_writes_cache_file(tmp_path, monkeypatch) -> None:
+    run = _single_file_audio_run(tmp_path / "burst")
+    cfg = _cfg(tmp_path / "results")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    prepare_run(run, "audio", cfg, use_cache=False)
+    prepare_run(run, "audio", cfg, use_cache=False)
+
+    assert call_count["n"] == 4, "use_cache=False must recompute every single call"
+    cache_path = tmp_path / "results" / "cache" / "unit-test-run--audio.npz"
+    assert not cache_path.exists()
+
+
+def test_prepare_run_cache_invalidates_when_source_file_size_changes(
+    tmp_path, monkeypatch
+) -> None:
+    burst_dir = tmp_path / "burst"
+    run = _single_file_audio_run(burst_dir, n_seconds=5)
+    cfg = _cfg(tmp_path / "results")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2
+
+    prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2, "unchanged inputs -- second call must be a cache HIT"
+
+    # Rebuild ONE stream's file with more data (6 s instead of 5 s) at the SAME path --
+    # a genuine byte-size change, exactly what the fingerprint must catch.
+    gen_mic_path = run.files["RAWGeneratorMic__0"][0].path
+    longer_data = np.ones((round(_RATE_HZ * 6), 4), dtype=np.float32)
+    build_gantner_file(
+        gen_mic_path, ["ch0", "ch1", "ch2", "ch3"], longer_data, t0_ns=0, rate_hz=_RATE_HZ
+    )
+    assert gen_mic_path.stat().st_size != (burst_dir / "tur_mic.dat").stat().st_size
+
+    prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 4, "a changed source file size must force a recompute"
+
+
+def test_prepare_run_cache_survives_a_corrupt_cache_file(tmp_path, monkeypatch) -> None:
+    """A cache file that fails to parse (e.g. truncated by an interrupted previous
+    write) is a cache MISS, not a crash -- `prepare_run` recomputes and overwrites it."""
+    run = _single_file_audio_run(tmp_path / "burst")
+    cfg = _cfg(tmp_path / "results")
+
+    prepare_run(run, "audio", cfg, use_cache=True)
+    cache_path = tmp_path / "results" / "cache" / "unit-test-run--audio.npz"
+    assert cache_path.is_file()
+    cache_path.write_bytes(b"not a real npz file")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    prepared = prepare_run(run, "audio", cfg, use_cache=True)
+
+    assert call_count["n"] == 2, "corrupt cache must trigger a real recompute"
+    assert isinstance(prepared, PreparedRun)
+    # The cache file must have been rewritten with valid data (readable again).
+    reloaded = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2, "the rewritten cache must be a HIT on the next call"
+    np.testing.assert_array_equal(prepared.features, reloaded.features)
+
+
+# ---------------------------------------------------------------------------
+# 3. Unknown variant raises ValueError (unchanged from the pre-refactor behavior)
 # ---------------------------------------------------------------------------
 
 
@@ -138,4 +259,4 @@ def test_prepare_run_unknown_variant_raises_value_error(tmp_path) -> None:
     cfg = _cfg(tmp_path / "results")
 
     with pytest.raises(ValueError, match="unknown variant"):
-        prepare_run(run, "not-a-real-variant", cfg)
+        prepare_run(run, "not-a-real-variant", cfg, use_cache=False)
