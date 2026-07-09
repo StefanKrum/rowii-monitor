@@ -4,7 +4,7 @@ plans/2026-07-09-step2-first-package.md` Task S5). No real data.
 
 Every numeric bound/seed used below was verified empirically against the real
 implementation before being hardcoded here (scratch scripts, not committed -- see
-`.superpowers/sdd/task-s5-report.md` for the full derivations), matching this
+the S5 review record for the full derivations), matching this
 package's own established practice (`test_conformal.py`'s module docstring; `task-s4-
 report.md`'s "Verification performed" section) for statistical/segment-split
 constructions whose outcome cannot be derived by inspection alone.

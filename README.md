@@ -577,15 +577,16 @@ per-state, not aggregate.** Across all six run x variant combos, every
 state that per-state conditioning could calibrate realizes a FAR between
 0.000 and 0.105 (nominal 0.05; worst case ~2.1x). Under a pooled
 (mode-agnostic) reference the same states realize 0.000-0.284: false
-alarms concentrate on ONE state per run (0.284 on the 01.07 turbine
-cluster, 0.271 / 0.237 / 0.137 / 0.111 / 0.109 elsewhere) while the
-remaining states are silenced (0.000-0.008) by a threshold inflated far
-past their own score range. Pooled AGGREGATES (0.035-0.143) can
+alarms concentrate on one or two states per run (0.284 on the 01.07
+turbine cluster, 0.271 / 0.237 / 0.137 / 0.111 / 0.109 elsewhere; on
+290626-tu audio three states exceed nominal at 0.137/0.106/0.056) while
+most remaining states are pushed far below nominal (many at 0.000-0.032)
+by a threshold inflated past their own score range. Pooled AGGREGATES (0.035-0.143) can
 nonetheless sit deceptively close to alpha because over- and
 under-alarming states cancel -- the aggregate number hides exactly the
 per-mode miscalibration the design predicts for mode-agnostic
 thresholds. Two honest caveats: (1) per-state aggregates still land
-1.2-1.4x above nominal on three of six combos (0.059-0.069) --
+1.2-1.4x above nominal on four of six combos (0.059-0.069) --
 within-run drift makes blocked calibration/scoring splits only
 approximately exchangeable; (2) on 290626-tu, three of four detected
 states were excluded per-state (below `min_ref` = 20 fit windows):
