@@ -779,6 +779,25 @@ def write_modality_by_mode(
         "each variant's KMeans run, restricted to that run's own eval windows "
         "(`gt.state != \"unknown\"`). Rows = GT state, columns = input variant.",
         "",
+        "**Mapping-view caveat.** This matrix uses the PRIMARY (majority "
+        "cluster->state) mapping family: a cluster is named after whichever GT state "
+        "holds the majority of its own eval windows, so a minority state that is "
+        "perfectly CONCENTRATED into one cluster still scores recall 0.000 here "
+        "whenever that cluster's majority belongs to a more numerous state. Earlier "
+        "prose reports describe exactly such cases through the other (strict, 1:1 "
+        "Hungarian) lens -- e.g. the README's multi-day section says "
+        "010726-tu_ph_tu's vibration variant catches \"all 117 standstill windows\" "
+        "in its quiet cluster, and that run's own `report.md` Hungarian mapping "
+        "indeed names that cluster standstill (its column captures 117/117) -- "
+        "while this matrix shows vibration standstill recall 0.000 for the same "
+        "run, because the same cluster's majority vote resolves to transition (142 "
+        "transition windows outvote the 117 standstill ones inside that cluster). "
+        "Both views are correct and computed from the same clustering; they answer "
+        "different questions (majority: \"what would a mode-labeling system "
+        "output?\"; Hungarian/cluster-level: \"is the state separable at all?\"). "
+        "When a cell below reads 0.000, consult the run's `report.md` confusion "
+        "matrices before concluding the state is not separated.",
+        "",
     ]
     for run in _MODALITY_BY_MODE_RUNS:
         tables = {}
@@ -833,7 +852,17 @@ def _longest_run_of_state(segments_with_state: pd.DataFrame, state: str) -> floa
     run of a single cluster id, but two ADJACENT segments can share the same
     majority-mapped state (different clusters, same state) -- this coalesces
     consecutive same-state rows before taking the max, so a state that is briefly
-    split across a cluster boundary is still counted as one contiguous hold."""
+    split across a cluster boundary is still counted as one contiguous hold.
+
+    NOT gap-tolerant: any non-*state* sliver -- including the 1-second `-1`/unknown
+    invalid-window segments the pipeline itself produces at 12-min burst-file
+    boundaries (a window straddling two burst files has a full-window sample run in
+    NEITHER file, so its features are NaN and the validity mask excludes it; see
+    `scripts.run_step1._extract_stream_features` / `compute_validity_mask`) -- resets
+    the accumulation. For hold-duration comparisons against wall-clock session facts
+    use `state_holds` instead; this function is kept as the diagnostic that MAKES the
+    fragmentation visible (its value vs. `state_holds`' envelope quantifies it).
+    """
     states = segments_with_state["state"].to_numpy()
     durations = segments_with_state["duration_s"].to_numpy()
     if state not in states:
@@ -847,6 +876,87 @@ def _longest_run_of_state(segments_with_state: pd.DataFrame, state: str) -> floa
         else:
             current = 0.0
     return best
+
+
+@dataclass(frozen=True)
+class StateHold:
+    """One gap-tolerant "hold" of a single state: a maximal group of same-state
+    segments in which consecutive same-state segments are separated by at most
+    `gap_tolerance_s` of other-state/unknown time (see `state_holds`)."""
+
+    start_utc: str
+    """First same-state segment's `start_utc` (as read from segments.csv)."""
+    end_utc: str
+    """Last same-state segment's `end_utc`."""
+    envelope_s: float
+    """Wall-clock span from the hold's first segment start to its last segment end
+    (INCLUDES the bridged sub-tolerance gaps)."""
+    summed_s: float
+    """Sum of the same-state segments' own durations (EXCLUDES the bridged gaps)."""
+    n_fragments: int
+    """How many separate same-state segments the hold was fragmented into."""
+
+
+def state_holds(
+    segments_with_state: pd.DataFrame, state: str, gap_tolerance_s: float
+) -> list[StateHold]:
+    """Gap-tolerant holds of *state* in a `_majority_mapped_segments` output.
+
+    Motivation (2026-07-09 crosscheck fix): `to_segments` output fragments a
+    physically continuous operating phase wherever the validity mask dropped a
+    window -- on real data this happens like clockwork at 12-min burst-file
+    boundaries, where the boundary-straddling window has a full-window sample run
+    in neither file, gets NaN features, and is excluded (cluster `-1` ->
+    majority-mapped "unknown"). A wall-clock hold duration comparable to an
+    operator-log fact ("~37-min PH hold") must therefore bridge sub-tolerance
+    interruptions instead of resetting at each 1-second sliver.
+
+    Two same-state segments belong to the same hold iff the wall-clock gap between
+    them (`next.start_utc - prev.end_utc`) is <= *gap_tolerance_s*. Each hold
+    reports both its envelope (first start -> last end, gaps included) and its
+    summed same-state duration (gaps excluded) -- see `StateHold`.
+
+    *segments_with_state* needs `state`, `start_utc`, `end_utc`, `duration_s`
+    columns and must be time-ordered (as `to_segments` guarantees). Timestamps may
+    be strings (raw segments.csv) or datetimes -- both are parsed via
+    `pd.to_datetime`. Returns [] when *state* never occurs.
+    """
+    matching = segments_with_state[segments_with_state["state"] == state]
+    if len(matching) == 0:
+        return []
+
+    starts = pd.to_datetime(matching["start_utc"])
+    ends = pd.to_datetime(matching["end_utc"])
+    durations = matching["duration_s"].to_numpy(dtype=np.float64)
+
+    holds: list[StateHold] = []
+    group_start_i = 0
+    for i in range(1, len(matching) + 1):
+        is_last = i == len(matching)
+        gap_s = (
+            float((starts.iloc[i] - ends.iloc[i - 1]).total_seconds()) if not is_last else None
+        )
+        if is_last or (gap_s is not None and gap_s > gap_tolerance_s):
+            start_ts = starts.iloc[group_start_i]
+            end_ts = ends.iloc[i - 1]
+            holds.append(
+                StateHold(
+                    start_utc=str(start_ts),
+                    end_utc=str(end_ts),
+                    envelope_s=float((end_ts - start_ts).total_seconds()),
+                    summed_s=float(durations[group_start_i:i].sum()),
+                    n_fragments=i - group_start_i,
+                )
+            )
+            group_start_i = i
+    return holds
+
+
+_HOLD_GAP_TOLERANCE_S = 60.0
+"""Gap tolerance for `state_holds` in the crosscheck: generously above the observed
+1-second invalid-window slivers at 12-min burst-file boundaries, far below any
+genuine mode dwell (`GtRules.ph_min_dwell_s` = 600 s; the gap between the
+290626-tu pre-generation PH hold and the post-generation PH spin-down is >3 h)."""
 
 
 def write_crosscheck(
@@ -869,26 +979,64 @@ def write_crosscheck(
         seg_path = cfg.results_root / "290626-tu" / "fusion-kmeans" / "segments.csv"
         segments = pd.read_csv(seg_path)
         segments = _majority_mapped_segments(segments, rv_290626.ev.state_mapping)
-        ph_hold_s = _longest_run_of_state(segments, "phase-shifter")
+        holds = state_holds(segments, "phase-shifter", _HOLD_GAP_TOLERANCE_S)
         lines += ["## PH-hold duration (290626-tu)", ""]
-        if ph_hold_s is None:
+        if not holds:
             lines += ["No phase-shifter segment found in our detection for this run.", ""]
         else:
-            cmp_ = compare_duration_s(
-                "290626-tu longest phase-shifter run (fusion-kmeans, majority-mapped)",
-                ph_hold_s, _PARTNER_PH_HOLD_MINUTES * 60.0,
+            hold = max(holds, key=lambda h: h.summed_s)
+            # holds is non-empty, so the state occurs and this can never be None --
+            # the fallback only satisfies the Optional type.
+            naive_s = _longest_run_of_state(segments, "phase-shifter") or 0.0
+            envelope_cmp = compare_duration_s(
+                "290626-tu PH-hold envelope", hold.envelope_s, _PARTNER_PH_HOLD_MINUTES * 60.0
+            )
+            summed_cmp = compare_duration_s(
+                "290626-tu PH-hold summed", hold.summed_s, _PARTNER_PH_HOLD_MINUTES * 60.0
             )
             lines += [
-                f"Ours: {cmp_.ours_s:.1f} s ({cmp_.ours_s / 60.0:.2f} min), from "
-                f"`results/290626-tu/fusion-kmeans/segments.csv` "
-                "(longest contiguous majority-mapped phase-shifter run).",
+                "Ours (from `results/290626-tu/fusion-kmeans/segments.csv`, "
+                "majority-mapped, longest gap-tolerant phase-shifter hold with "
+                f"{_HOLD_GAP_TOLERANCE_S:.0f} s gap tolerance):",
+                "",
+                f"- **Envelope** (first PH segment start -> last PH segment end): "
+                f"{envelope_cmp.ours_s:.1f} s ({envelope_cmp.ours_s / 60.0:.2f} min).",
+                f"- **Summed PH time within that envelope**: {summed_cmp.ours_s:.1f} s "
+                f"({summed_cmp.ours_s / 60.0:.2f} min), across {hold.n_fragments} "
+                "segment fragments.",
+                "",
                 f"Partner: ~{_PARTNER_PH_HOLD_MINUTES:.0f} min "
-                f"({cmp_.theirs_s:.0f} s), {_PARTNER_SOURCE} "
+                f"({envelope_cmp.theirs_s:.0f} s), {_PARTNER_SOURCE} "
                 '("37-min turbine-direction PH hold").',
-                f"Delta: {cmp_.delta_s:+.1f} s ({cmp_.delta_pct:+.1f}%).",
+                "",
+                f"Delta (envelope): {envelope_cmp.delta_s:+.1f} s "
+                f"({envelope_cmp.delta_pct:+.1f}%). Delta (summed): "
+                f"{summed_cmp.delta_s:+.1f} s ({summed_cmp.delta_pct:+.1f}%).",
+                "",
+                "### Why gap-tolerant statistics (fragmentation caveat)",
+                "",
+                "The naive \"longest contiguous majority-PH segment\" statistic reads "
+                f"only {naive_s:.0f} s ({naive_s / 60.0:.2f} min) for the same "
+                "hold and is NOT comparable to an operator-log wall-clock duration: "
+                "the hold is fragmented into "
+                f"{hold.n_fragments} pieces by 1-second `unknown` slivers at exactly "
+                "the 12-min burst-file boundaries. These slivers are windows the "
+                "pipeline's own validity mask drops BEFORE clustering (a window "
+                "straddling two burst files has a full-window sample run in neither "
+                "file, so its features are NaN and it is excluded -- cluster id `-1`, "
+                "majority-mapped \"unknown\"; see "
+                "`scripts/run_step1.py::_extract_stream_features` / "
+                "`compute_validity_mask`), not detector state flicker. The envelope "
+                "and summed statistics above bridge interruptions up to "
+                f"{_HOLD_GAP_TOLERANCE_S:.0f} s (generously above the observed 1-s "
+                "slivers, far below any genuine mode dwell) and are the comparable "
+                "quantities.",
                 "",
             ]
 
+        sequence = _coalesced_state_sequence(
+            _drop_brief_unknown_segments(segments, _HOLD_GAP_TOLERANCE_S)
+        )
         lines += [
             "## Session structure (qualitative)",
             "",
@@ -896,8 +1044,10 @@ def write_crosscheck(
             "turbine start (new class) via 37-min turbine-direction PH hold, load "
             "steps 91-292 MW, braked shutdown\" -- i.e. PH-hold FIRST, then loaded "
             "generation, ending in a braked shutdown. Our own fusion-kmeans "
-            "majority-mapped segment sequence for 290626-tu: "
-            + " -> ".join(_coalesced_state_sequence(segments))
+            "majority-mapped segment sequence for 290626-tu (sub-"
+            f"{_HOLD_GAP_TOLERANCE_S:.0f}-s unknown slivers dropped -- the "
+            "invalid-window fragmentation artifact explained above): "
+            + " -> ".join(sequence)
             + ".",
             "",
             "## \"22 groups\" (partner) — not a comparable unit",
@@ -906,9 +1056,10 @@ def write_crosscheck(
             "pre-processing measurement/burst groups for the 29.06 TU session, a "
             "different unit than our unsupervised state-segment count. Our "
             f"fusion-kmeans run produces {len(segments)} raw segments "
-            f"({len(_coalesced_state_sequence(segments))} after coalescing adjacent "
-            "same-state segments) -- reported here for transparency, not as a "
-            "like-for-like delta against the partner's 22.",
+            f"({len(sequence)} after dropping sub-{_HOLD_GAP_TOLERANCE_S:.0f}-s "
+            "unknown slivers and coalescing adjacent same-state segments) -- "
+            "reported here for transparency, not as a like-for-like delta against "
+            "the partner's 22.",
             "",
         ]
 
@@ -941,6 +1092,21 @@ def _coalesced_state_sequence(segments_with_state: pd.DataFrame) -> list[str]:
         if not sequence or sequence[-1] != state:
             sequence.append(state)
     return sequence
+
+
+def _drop_brief_unknown_segments(
+    segments_with_state: pd.DataFrame, max_duration_s: float
+) -> pd.DataFrame:
+    """Rows of *segments_with_state* minus `"unknown"` segments shorter than or equal
+    to *max_duration_s* -- the 1-second invalid-window slivers at burst-file
+    boundaries (see `state_holds`' docstring), which are a pipeline masking artifact,
+    not a detected state change. LONG unknown stretches (genuine no-coverage regions)
+    are kept, so a real gap still shows up in a qualitative sequence."""
+    keep = ~(
+        (segments_with_state["state"] == "unknown")
+        & (segments_with_state["duration_s"] <= max_duration_s)
+    )
+    return segments_with_state[keep].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

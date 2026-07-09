@@ -495,6 +495,143 @@ def test_longest_run_of_state_returns_none_when_state_absent() -> None:
 
 
 # ---------------------------------------------------------------------------
+# state_holds / _drop_brief_unknown_segments
+# ---------------------------------------------------------------------------
+
+
+def _segments_df(rows: list[tuple[str, str, str]]) -> pd.DataFrame:
+    """Build a segments-with-state frame from (state, start_iso, end_iso) tuples;
+    duration_s derived from the timestamps (mirrors `to_segments`' invariant)."""
+    starts = pd.to_datetime([r[1] for r in rows], utc=True)
+    ends = pd.to_datetime([r[2] for r in rows], utc=True)
+    return pd.DataFrame(
+        {
+            "state": [r[0] for r in rows],
+            "start_utc": starts,
+            "end_utc": ends,
+            "duration_s": [(e - s).total_seconds() for s, e in zip(starts, ends, strict=True)],
+        }
+    )
+
+
+def test_state_holds_bridges_sub_tolerance_slivers_into_one_hold() -> None:
+    # Replicates the real 290626-tu fragmentation shape: PH fragments separated by
+    # 1-second unknown slivers at burst-file boundaries. All four fragments must
+    # merge into ONE hold; envelope includes the slivers, summed excludes them.
+    segments = _segments_df(
+        [
+            ("phase-shifter", "2026-06-29T02:30:57", "2026-06-29T02:41:59"),  # 662 s
+            ("unknown", "2026-06-29T02:41:59", "2026-06-29T02:42:00"),  # 1 s sliver
+            ("phase-shifter", "2026-06-29T02:42:00", "2026-06-29T02:53:59"),  # 719 s
+            ("unknown", "2026-06-29T02:53:59", "2026-06-29T02:54:00"),  # 1 s sliver
+            ("phase-shifter", "2026-06-29T02:54:00", "2026-06-29T03:05:59"),  # 719 s
+            ("unknown", "2026-06-29T03:05:59", "2026-06-29T03:06:00"),  # 1 s sliver
+            ("phase-shifter", "2026-06-29T03:06:00", "2026-06-29T03:10:22"),  # 262 s
+            ("turbine", "2026-06-29T03:10:22", "2026-06-29T06:00:00"),
+        ]
+    )
+
+    holds = a.state_holds(segments, "phase-shifter", gap_tolerance_s=60.0)
+
+    assert len(holds) == 1
+    hold = holds[0]
+    assert hold.n_fragments == 4
+    assert hold.envelope_s == pytest.approx(2365.0)  # 02:30:57 -> 03:10:22, slivers included
+    assert hold.summed_s == pytest.approx(662.0 + 719.0 + 719.0 + 262.0)  # 2362, excluded
+
+
+def test_state_holds_does_not_bridge_gaps_above_tolerance() -> None:
+    segments = _segments_df(
+        [
+            ("phase-shifter", "2026-06-29T02:00:00", "2026-06-29T02:10:00"),
+            ("turbine", "2026-06-29T02:10:00", "2026-06-29T05:00:00"),  # ~3 h apart
+            ("phase-shifter", "2026-06-29T05:00:00", "2026-06-29T05:05:00"),
+        ]
+    )
+
+    holds = a.state_holds(segments, "phase-shifter", gap_tolerance_s=60.0)
+
+    assert len(holds) == 2
+    assert holds[0].summed_s == pytest.approx(600.0)
+    assert holds[0].n_fragments == 1
+    assert holds[1].summed_s == pytest.approx(300.0)
+
+
+def test_state_holds_gap_exactly_at_tolerance_is_bridged() -> None:
+    # Boundary semantics: gap <= tolerance bridges (docstring contract).
+    segments = _segments_df(
+        [
+            ("phase-shifter", "2026-06-29T02:00:00", "2026-06-29T02:10:00"),
+            ("unknown", "2026-06-29T02:10:00", "2026-06-29T02:11:00"),  # exactly 60 s
+            ("phase-shifter", "2026-06-29T02:11:00", "2026-06-29T02:20:00"),
+        ]
+    )
+
+    holds = a.state_holds(segments, "phase-shifter", gap_tolerance_s=60.0)
+
+    assert len(holds) == 1
+    assert holds[0].n_fragments == 2
+    assert holds[0].envelope_s == pytest.approx(1200.0)
+    assert holds[0].summed_s == pytest.approx(1140.0)
+
+
+def test_state_holds_returns_empty_for_absent_state() -> None:
+    segments = _segments_df([("turbine", "2026-06-29T02:00:00", "2026-06-29T03:00:00")])
+
+    assert a.state_holds(segments, "phase-shifter", gap_tolerance_s=60.0) == []
+
+
+def test_state_holds_accepts_string_timestamps_from_raw_csv() -> None:
+    # segments.csv read WITHOUT parse_dates yields string timestamps -- state_holds
+    # must parse them itself rather than crash on str - str arithmetic.
+    segments = pd.DataFrame(
+        {
+            "state": ["phase-shifter", "phase-shifter"],
+            "start_utc": ["2026-06-29 02:00:00+00:00", "2026-06-29 02:10:01+00:00"],
+            "end_utc": ["2026-06-29 02:10:00+00:00", "2026-06-29 02:20:00+00:00"],
+            "duration_s": [600.0, 599.0],
+        }
+    )
+
+    holds = a.state_holds(segments, "phase-shifter", gap_tolerance_s=60.0)
+
+    assert len(holds) == 1
+    assert holds[0].summed_s == pytest.approx(1199.0)
+
+
+def test_drop_brief_unknown_segments_removes_only_sub_tolerance_unknowns() -> None:
+    segments = _segments_df(
+        [
+            ("phase-shifter", "2026-06-29T02:00:00", "2026-06-29T02:10:00"),
+            ("unknown", "2026-06-29T02:10:00", "2026-06-29T02:10:01"),  # 1 s sliver -> drop
+            ("turbine", "2026-06-29T02:10:01", "2026-06-29T03:00:00"),
+            ("unknown", "2026-06-29T03:00:00", "2026-06-29T03:30:00"),  # 30 min genuine -> keep
+            ("turbine", "2026-06-29T03:30:00", "2026-06-29T04:00:00"),
+        ]
+    )
+
+    out = a._drop_brief_unknown_segments(segments, max_duration_s=60.0)
+
+    assert list(out["state"]) == ["phase-shifter", "turbine", "unknown", "turbine"]
+
+
+def test_drop_brief_unknown_segments_never_drops_known_states() -> None:
+    # A brief KNOWN-state segment (e.g. a 10 s turbine blip) is real detector
+    # output and must survive regardless of duration.
+    segments = _segments_df(
+        [
+            ("phase-shifter", "2026-06-29T02:00:00", "2026-06-29T02:10:00"),
+            ("turbine", "2026-06-29T02:10:00", "2026-06-29T02:10:10"),  # 10 s, kept
+            ("phase-shifter", "2026-06-29T02:10:10", "2026-06-29T02:20:00"),
+        ]
+    )
+
+    out = a._drop_brief_unknown_segments(segments, max_duration_s=60.0)
+
+    assert list(out["state"]) == ["phase-shifter", "turbine", "phase-shifter"]
+
+
+# ---------------------------------------------------------------------------
 # _baseline_gt_value / _perturbed_gt_rules
 # ---------------------------------------------------------------------------
 
