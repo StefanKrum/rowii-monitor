@@ -14,6 +14,7 @@ exists".
 """
 from __future__ import annotations
 
+import logging
 import math
 import sys
 from pathlib import Path
@@ -105,6 +106,77 @@ def _build_two_day_root(root: Path) -> Path:
     "000002-tu", each a self-contained day tree with its own Betriebsdaten."""
     _build_day_tree(root / "illwerke-000001", day_label="20260625")
     _build_day_tree(root / "illwerke-000002", day_label="20260701")
+    return root
+
+
+def _build_day_tree_too_sparse(day_dir: Path, *, day_label: str, t0_ns: int = _T0_NS) -> None:
+    """A day tree with only two 1-second bursts per stream, 60 s apart, instead of
+    `_N_SEGMENTS` contiguous ones -- the resulting grid is dominated by the gap between
+    them (>5% of windows invalid), reproducing the `RuntimeError`
+    `rowii.pipeline.compute_validity_mask` raises for a real, genuinely-short
+    "stray file" run that is still SCADA-covered and still discovered as one run (no
+    >15-min gap to split on) -- e.g. the real `010726-tu1-afternoon` run (Task S7,
+    2026-07-09), which crashed `--protocol cross-day`'s `_run_cross_day` before its
+    `prepare_run` call was guarded, since that loop had no `try/except` at all around a
+    call the module docstring already documents can raise for other reasons.
+    """
+    meas = day_dir / f"{day_label} Messung"
+    tu = meas / "TU"
+    bd = meas / "Betriebsdaten"
+    tu.mkdir(parents=True, exist_ok=True)
+    bd.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(3)
+    burst_s = 1
+    gap_s = 60
+    for i, offset_s in enumerate((0, burst_s + gap_s)):
+        seg_t0 = t0_ns + int(offset_s * 1e9)
+        ts = f"2026-06-25_07-{i:02d}-00_000000"
+        for stream_name in ("RAWGeneratorMic__0", "RAWTurbineMic__1"):
+            n = int(_MIC_RATE_HZ * burst_s)
+            data = rng.normal(0.0, 0.5, size=(n, 4)).astype(np.float32)
+            build_gantner_file(
+                tu / f"{stream_name}_{ts}.dat", ["ch0", "ch1", "ch2", "ch3"], data,
+                t0_ns=seg_t0, rate_hz=_MIC_RATE_HZ,
+            )
+        for stream_name in ("RAWGeneratorVib__2", "RAWTurbineVib__3"):
+            n = int(_VIB_RATE_HZ * burst_s)
+            data = rng.normal(0.0, 0.2, size=(n, 2)).astype(np.float32)
+            build_gantner_file(
+                tu / f"{stream_name}_{ts}.dat", ["chX", "chY"], data,
+                t0_ns=seg_t0, rate_hz=_VIB_RATE_HZ,
+            )
+
+    total_s = burst_s + gap_s + burst_s
+    n_scada = int(_SCADA_RATE_HZ * total_s)
+    power = np.full(n_scada, 10.0, dtype=np.float32)
+    speed = np.full(n_scada, 378.832, dtype=np.float32)
+    guide_vane = np.full(n_scada, 50.0, dtype=np.float32)
+    flow_tu = np.full(n_scada, 5.0, dtype=np.float32)
+    flow_pu = np.zeros(n_scada, dtype=np.float32)
+    reactive = np.zeros(n_scada, dtype=np.float32)
+    ks_valve = np.full(n_scada, 3.0, dtype=np.float32)
+    scada_data = np.stack(
+        [power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1
+    )
+    build_gantner_file(
+        bd / "2026-06-25_07-00-00.dat",
+        [
+            "1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU",
+            "Durchfluss PU", "1_Q_Ist", "1_KS Stellung",
+        ],
+        scada_data, t0_ns=t0_ns, rate_hz=_SCADA_RATE_HZ,
+    )
+
+
+def _build_three_day_root(root: Path) -> Path:
+    """Parent-root data_root -- two NORMAL SCADA-covered runs ("000001-tu",
+    "000002-tu") plus one run whose own `prepare_run` raises `RuntimeError`
+    ("000003-tu", `_build_day_tree_too_sparse`), for cross-day's prepare-failure
+    skip-not-crash regression."""
+    _build_day_tree(root / "illwerke-000001", day_label="20260625")
+    _build_day_tree(root / "illwerke-000002", day_label="20260701")
+    _build_day_tree_too_sparse(root / "illwerke-000003", day_label="20260702")
     return root
 
 
@@ -264,6 +336,33 @@ def test_within_day_gt_labels_skips_run_without_scada(tmp_path, monkeypatch) -> 
     assert not (tmp_path / "results" / "step2" / "within-day").exists()
 
 
+def test_within_day_skips_run_that_fails_to_prepare(tmp_path, monkeypatch, caplog) -> None:
+    """A SCADA-covered run whose `prepare_run` raises `RuntimeError` (too few valid
+    windows for this variant, e.g. a real "two stray files" run like
+    `010726-tu1-afternoon`) must be logged and skipped -- not crash the whole
+    invocation -- exactly like a `run_sweep` `ValueError` already is (module
+    docstring). Before this fix, `_run_within_day_for_run` called `prepare_run` with no
+    `try/except` at all."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    data_root = tmp_path / "data"
+    _build_day_tree_too_sparse(data_root, day_label="20260625")
+
+    import run_step2
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = run_step2.main(
+            [
+                "--run", "tu", "--variant", "fusion", "--labels", "detected",
+                "--scorer", "knn", "--conditioning", "all",
+            ]
+        )
+    assert exit_code == 0
+    assert not (tmp_path / "results" / "step2" / "within-day").exists()
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("tu" in w and "prepare_run" in w for w in warnings), warnings
+
+
 # ---------------------------------------------------------------------------
 # 4. cross-day with two fixture days -> pooled matrix rows
 # ---------------------------------------------------------------------------
@@ -355,6 +454,55 @@ def test_cross_day_skips_pairs_within_the_same_day(tmp_path, monkeypatch) -> Non
     )
     assert n_written == 0
     assert not (tmp_path / "results" / "step2" / "cross-day").exists()
+
+
+def test_cross_day_skips_run_that_fails_to_prepare(tmp_path, monkeypatch, caplog) -> None:
+    """A SCADA-covered day whose `prepare_run` raises `RuntimeError` must be excluded
+    from cross-day (every pair touching it skipped), while pairs between the OTHER,
+    healthy days still get written -- reproduces the real `--protocol cross-day
+    --variant fusion --scorer knn` crash Task S7 (2026-07-09) hit against
+    `010726-tu1-afternoon` (a real, SCADA-covered, single-run "two stray files" day):
+    before this fix, `_run_cross_day`'s `prepared_by_run` prewarm loop had no
+    `try/except` around `prepare_run` at all, so ONE bad day crashed the entire
+    invocation, losing every other day's matrix cell too.
+    """
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_three_day_root(tmp_path / "data")
+
+    import run_step2
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = run_step2.main(
+            [
+                "--protocol", "cross-day", "--variant", "fusion", "--scorer", "knn",
+                "--labels", "detected",
+            ]
+        )
+    assert exit_code == 0
+
+    results_root = tmp_path / "results"
+    summary = pd.read_csv(results_root / "step2" / "summary.csv")
+    cross_rows = summary[summary["notes"] == "cross-day pooled"]
+    # Only the healthy pair (both directions) -- every pair touching "000003-tu" (the
+    # too-sparse day) is skipped, not just silently missing one direction.
+    assert set(cross_rows["run"]) == {
+        "000001-tu__to__000002-tu", "000002-tu__to__000001-tu",
+    }
+    assert not any("000003" in run_pair for run_pair in summary["run"])
+
+    forward_dir = (
+        results_root / "step2" / "cross-day" / "fusion-detected"
+        / "000001-tu__to__000002-tu" / "knn-pooled"
+    )
+    assert forward_dir.is_dir()
+    assert not (results_root / "step2" / "cross-day" / "fusion-detected"
+                / "000003-tu__to__000001-tu").exists()
+    assert not (results_root / "step2" / "cross-day" / "fusion-detected"
+                / "000001-tu__to__000003-tu").exists()
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("000003-tu" in w and "prepare_run" in w for w in warnings), warnings
 
 
 # ---------------------------------------------------------------------------
