@@ -396,7 +396,7 @@ def zscore(x: np.ndarray) -> np.ndarray:
 
     Mean/std use `nanmean`/`nanstd` (Task 13 fix): a real feature matrix
     routinely has a handful of NaN rows (invalid windows -- see
-    `_StreamFeatureResult.features`'s docstring in `scripts/run_step1.py`).
+    `_StreamFeatureResult.features`'s docstring in `src/rowii/pipeline.py`).
     Plain `.mean()`/`.std()` propagate NaN into EVERY row's statistics for a
     column touched by even one NaN, and the old zero-std guard
     (`std >= 1e-12`) is always False for a NaN std (IEEE-754), which zeroed

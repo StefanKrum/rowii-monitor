@@ -249,6 +249,26 @@ _E2E_SCADA_RATE_HZ = 10.0
 _E2E_DURATION_S = 60
 _E2E_T0_NS = 1_750_000_000_000_000_000  # arbitrary but fixed UTC epoch, ns
 
+# Pinned pre-refactor values (Step-2 Task S1's regression guard): captured 2026-07-09 by
+# running this exact scenario against `scripts/run_step1.py` @ HEAD cdcf513, BEFORE the
+# `_prepare_run_features`/grid/mask/feature-assembly logic was extracted into
+# `src/rowii/pipeline.py`. That extraction is a pure code-motion refactor (plus an
+# additive on-disk cache and two new `PreparedRun` fields Step-1's own CLI never
+# consumes) with no intended numerical change, so this exact scenario must reproduce
+# these values post-refactor too -- `pytest.approx` with a tight relative tolerance
+# guards against a genuine regression while tolerating harmless float-reordering noise
+# (e.g. a different BLAS thread count), which a brittle exact `==` would not.
+_PRE_REFACTOR_ARI = 0.43159922928709055
+_PRE_REFACTOR_MACRO_F1 = 0.5333333333333333
+_PRE_REFACTOR_BOUNDARY_MEDIAN_ABS_S = 10.0
+_PRE_REFACTOR_SILHOUETTE = 0.6758045641533543
+_PRE_REFACTOR_STATE_ARI = 0.43159922928709055
+_PRE_REFACTOR_STATE_ACCURACY = 0.6666666666666666
+_PRE_REFACTOR_STATE_MACRO_F1 = 0.5333333333333333
+_PRE_REFACTOR_N_WINDOWS = 60
+_PRE_REFACTOR_N_VALID = 60
+_PRE_REFACTOR_N_EVAL = 60
+
 
 def _build_e2e_data_root(root: Path) -> Path:
     """A tiny synthetic data_root: 2 mic + 2 vib streams (~60 s) + one Betriebsdaten
@@ -361,6 +381,22 @@ def test_run_combo_fusion_kmeans_k2_end_to_end(tmp_path, monkeypatch) -> None:
     assert result.n_windows > 0
     assert result.ari is not None  # "any value" per the brief -- just must be present
 
+    # Step-2 Task S1 regression guard: the pipeline.py extraction must reproduce this
+    # scenario's numbers EXACTLY (see _PRE_REFACTOR_* constants' docstring above).
+    assert result.n_windows == _PRE_REFACTOR_N_WINDOWS
+    assert result.n_valid == _PRE_REFACTOR_N_VALID
+    assert result.n_eval == _PRE_REFACTOR_N_EVAL
+    assert result.ari == pytest.approx(_PRE_REFACTOR_ARI, rel=1e-9)
+    assert result.macro_f1 == pytest.approx(_PRE_REFACTOR_MACRO_F1, rel=1e-9)
+    assert result.boundary_median_abs_s == pytest.approx(
+        _PRE_REFACTOR_BOUNDARY_MEDIAN_ABS_S, rel=1e-9
+    )
+    assert result.silhouette == pytest.approx(_PRE_REFACTOR_SILHOUETTE, rel=1e-9)
+    assert result.state_ari == pytest.approx(_PRE_REFACTOR_STATE_ARI, rel=1e-9)
+    assert result.state_accuracy == pytest.approx(_PRE_REFACTOR_STATE_ACCURACY, rel=1e-9)
+    assert result.state_macro_f1 == pytest.approx(_PRE_REFACTOR_STATE_MACRO_F1, rel=1e-9)
+    assert result.notes == ""
+
     out_dir = cfg.results_root / "tu" / "fusion-kmeans"
     assert (out_dir / "report.md").is_file()
     assert (out_dir / "segments.csv").is_file()
@@ -378,6 +414,13 @@ def test_run_combo_fusion_kmeans_k2_end_to_end(tmp_path, monkeypatch) -> None:
     for col in ("state_ari", "state_accuracy", "state_macro_f1"):
         assert col in summary.columns, f"missing column {col!r} in summary.csv"
         assert pd.notna(summary.iloc[0][col]), f"{col!r} is NaN for a GT combo"
+    assert summary.iloc[0]["state_ari"] == pytest.approx(_PRE_REFACTOR_STATE_ARI, rel=1e-9)
+    assert summary.iloc[0]["state_accuracy"] == pytest.approx(
+        _PRE_REFACTOR_STATE_ACCURACY, rel=1e-9
+    )
+    assert summary.iloc[0]["state_macro_f1"] == pytest.approx(
+        _PRE_REFACTOR_STATE_MACRO_F1, rel=1e-9
+    )
 
 
 def test_run_combo_k_sweep_writes_four_rows_with_silhouette_and_k_sweep_note(

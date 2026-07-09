@@ -15,7 +15,7 @@ mono-mix over channels (mean) -> resample *rate_hz* -> 16 kHz
 (`BeatsEncoderProtocol.extract`) -> mean-pool over tokens. Batched over all W
 windows in one encoder forward pass (`torch.no_grad()`), not windowed one at
 a time -- the pipeline's real workloads are dominated by disk I/O and
-feature extraction happens per burst file already (`scripts/run_step1.py`'s
+feature extraction happens per burst file already (`src/rowii/pipeline.py`'s
 `_extract_stream_features`), so a single-file's worth of windows (at most a
 few hundred at 1-s windows / 12-min bursts) comfortably fits one batch on
 even CPU-only hardware.

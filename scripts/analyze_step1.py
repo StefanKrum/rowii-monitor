@@ -858,7 +858,7 @@ def _longest_run_of_state(segments_with_state: pd.DataFrame, state: str) -> floa
     invalid-window segments the pipeline itself produces at 12-min burst-file
     boundaries (a window straddling two burst files has a full-window sample run in
     NEITHER file, so its features are NaN and the validity mask excludes it; see
-    `scripts.run_step1._extract_stream_features` / `compute_validity_mask`) -- resets
+    `src/rowii/pipeline.py`'s `_extract_stream_features` / `compute_validity_mask`) -- resets
     the accumulation. For hold-duration comparisons against wall-clock session facts
     use `state_holds` instead; this function is kept as the diagnostic that MAKES the
     fragmentation visible (its value vs. `state_holds`' envelope quantifies it).
@@ -1025,7 +1025,7 @@ def write_crosscheck(
                 "straddling two burst files has a full-window sample run in neither "
                 "file, so its features are NaN and it is excluded -- cluster id `-1`, "
                 "majority-mapped \"unknown\"; see "
-                "`scripts/run_step1.py::_extract_stream_features` / "
+                "`src/rowii/pipeline.py::_extract_stream_features` / "
                 "`compute_validity_mask`), not detector state flicker. The envelope "
                 "and summed statistics above bridge interruptions up to "
                 f"{_HOLD_GAP_TOLERANCE_S:.0f} s (generously above the observed 1-s "
