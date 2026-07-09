@@ -50,8 +50,7 @@ per-label row it emits already shares one scorer/threshold, so a further roll-up
 be redundant, per the dispatch's "+ one 'pooled' row WHEN per-state" wording).
 
 IMPORTANT deviation from the dispatch's own worked intuition for the conditioning-
-comparison test, flagged prominently here and in the task report (`.superpowers/sdd/
-task-s5-report.md`): the dispatch's test item 3 describes "label B with 10x feature
+comparison test: the dispatch's test item 3 describes "label B with 10x feature
 scale: pooled FAR for tight label A inflates". Verified both theoretically and
 empirically (scratch script, not committed) that this direction is backwards. Split
 conformal's guarantee is scorer-agnostic as long as a label's threshold is calibrated on
@@ -352,7 +351,7 @@ def _aggregate_pooled_row(rows: list[_FarRow], cfg: SweepConfig) -> _FarRow:
     any_low_confidence = any(r.low_confidence for r in rows)
     return _FarRow(
         label=_POOLED_ROW_LABEL,
-        n_calibration=float(total_calibration) if contributing else math.nan,
+        n_calibration=float(total_calibration),
         n_scored=float(total_scored),
         n_alarms=float(total_alarms),
         realized_far=(total_alarms / total_scored) if total_scored > 0 else math.nan,
@@ -386,8 +385,7 @@ def _scores_and_candidates(
     it is the expected outcome for any label with more than a handful of far-out
     windows. Breaking such ties by ascending window index (tried first, see task
     report) silently let ordinary in-distribution windows that happened to have a small
-    index outrank genuinely extreme injected outliers -- observed directly on a
-    synthetic fixture (`.superpowers/sdd/task-s5-report.md`). Breaking by descending
+    index outrank genuinely extreme injected outliers. Breaking by descending
     score instead surfaces the more extreme reading first, matching what a human
     reviewing the candidate register would want. `np.lexsort`'s primary key is its LAST
     argument, so `(windows, -scores, p_vals)` sorts by `p_vals` first, `-scores`
@@ -440,6 +438,10 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
             side -- see `split_by_segments`' own `Raises`).
     """
     _validate_labels(labels)
+    if not (0 < cfg.alpha < 1):
+        raise ValueError(f"cfg.alpha must be in (0, 1), got {cfg.alpha!r}")
+    if cfg.top_k < 1:
+        raise ValueError(f"cfg.top_k must be >= 1, got {cfg.top_k!r}")
     if cfg.conditioning not in ("per-state", "pooled"):
         raise ValueError(
             f"cfg.conditioning must be 'per-state' or 'pooled', got {cfg.conditioning!r}"
@@ -455,7 +457,18 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
 
     calib_mask = np.zeros(n_windows, dtype=bool)
     calib_mask[calibration_windows] = True
-    nested_split = split_by_segments(prepared.segment_ids, calib_mask, 0.5, cfg.seed + 1)
+    try:
+        nested_split = split_by_segments(prepared.segment_ids, calib_mask, 0.5, cfg.seed + 1)
+    except ValueError as e:
+        calib_segments = np.unique(prepared.segment_ids[calibration_windows])
+        n_calib_segs = len(calib_segments)
+        n_calib_windows = len(calibration_windows)
+        raise ValueError(
+            f"nested fit/conformal split failed: calibration side has too few segments "
+            f"({n_calib_segs} segments, {n_calib_windows} windows); the run is too "
+            f"short/sparse for a three-way split — need >= 2 calibration-side segments "
+            f"(got {n_calib_segs}). Consider a longer run or different calibration_frac."
+        ) from e
     fit_windows = nested_split.calibration_windows
     conformal_windows = nested_split.scoring_windows
 

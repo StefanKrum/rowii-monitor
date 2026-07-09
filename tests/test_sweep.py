@@ -387,6 +387,188 @@ def test_run_sweep_raises_on_invalid_scorer_name() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Item 1: nested-split crash with clear diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_nested_split_failure_on_too_few_calibration_segments() -> None:
+    """A run with only 2 total segments will place one on each side of the top-level
+    split, leaving only 1 segment on the calibration side. The nested 50/50 split then
+    fails (cannot split 1 segment into 2 non-empty parts). Must raise a clear ValueError
+    naming the nested split context and actual counts."""
+    rng = np.random.default_rng(0)
+    n_features = 5
+    feats: list[np.ndarray] = []
+    labels: list[int] = []
+    segment_ids: list[int] = []
+    # Only 2 segments total -- top-level split puts one on each side
+    for seg in range(2):
+        block = rng.normal(scale=0.5, size=(25, n_features))
+        feats.append(block)
+        labels.extend([0] * 25)
+        segment_ids.extend([seg] * 25)
+
+    features = np.vstack(feats)
+    labels_arr = np.array(labels, dtype=np.int64)
+    segment_ids_arr = np.array(segment_ids, dtype=np.int64)
+    prepared = _prepared_run(features, segment_ids_arr)
+
+    cfg = SweepConfig(calibration_frac=0.5, seed=0)
+    with pytest.raises(ValueError, match="nested fit/conformal split failed"):
+        run_sweep(prepared, labels_arr, cfg)
+
+
+def test_nested_split_error_includes_actual_counts() -> None:
+    """The nested split error message must include the actual number of calibration
+    segments and windows, to help diagnose the problem."""
+    rng = np.random.default_rng(0)
+    n_features = 5
+    feats: list[np.ndarray] = []
+    labels: list[int] = []
+    segment_ids: list[int] = []
+    # Only 2 segments total -- top-level split puts one on each side
+    for seg in range(2):
+        block = rng.normal(scale=0.5, size=(25, n_features))
+        feats.append(block)
+        labels.extend([0] * 25)
+        segment_ids.extend([seg] * 25)
+
+    features = np.vstack(feats)
+    labels_arr = np.array(labels, dtype=np.int64)
+    segment_ids_arr = np.array(segment_ids, dtype=np.int64)
+    prepared = _prepared_run(features, segment_ids_arr)
+
+    cfg = SweepConfig(calibration_frac=0.5, seed=0)
+    with pytest.raises(ValueError, match="1 segment.*25 windows"):
+        run_sweep(prepared, labels_arr, cfg)
+
+
+def test_top_level_split_error_and_nested_split_error_differ() -> None:
+    """The top-level split failure (single segment) and nested split failure
+    (2-segment top-level split leaving 1 on calibration side) must raise DIFFERENT error
+    messages, so a caller can distinguish between the two problems."""
+    rng = np.random.default_rng(0)
+    n_features = 5
+
+    # Test 1: Single segment (cannot split top-level, different error)
+    feats_1 = [rng.normal(scale=0.5, size=(100, n_features))]
+    labels_1 = [0] * 100
+    segment_ids_1 = [0] * 100
+
+    features_1 = np.array(feats_1[0])
+    labels_arr_1 = np.array(labels_1, dtype=np.int64)
+    segment_ids_arr_1 = np.array(segment_ids_1, dtype=np.int64)
+    prepared_1 = _prepared_run(features_1, segment_ids_arr_1)
+
+    cfg = SweepConfig()
+    try:
+        run_sweep(prepared_1, labels_arr_1, cfg)
+        pytest.fail("Expected ValueError on single-segment run")
+    except ValueError as e:
+        top_level_msg = str(e)
+        assert "nested" not in top_level_msg.lower(), (
+            "top-level split error should NOT mention 'nested'"
+        )
+
+    # Test 2: Two segments total (top-level splits them 1-1, nested fails on calibration)
+    feats_2: list[np.ndarray] = []
+    labels_2: list[int] = []
+    segment_ids_2: list[int] = []
+    for seg in range(2):
+        block = rng.normal(scale=0.5, size=(25, n_features))
+        feats_2.append(block)
+        labels_2.extend([0] * 25)
+        segment_ids_2.extend([seg] * 25)
+
+    features_2 = np.vstack(feats_2)
+    labels_arr_2 = np.array(labels_2, dtype=np.int64)
+    segment_ids_arr_2 = np.array(segment_ids_2, dtype=np.int64)
+    prepared_2 = _prepared_run(features_2, segment_ids_arr_2)
+
+    try:
+        run_sweep(prepared_2, labels_arr_2, cfg)
+        pytest.fail("Expected ValueError on nested-split-fails run")
+    except ValueError as e:
+        nested_msg = str(e)
+        assert "nested" in nested_msg.lower(), (
+            "nested split error should mention 'nested'"
+        )
+
+    assert top_level_msg != nested_msg, (
+        "top-level and nested split errors should have different messages"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Item 2: eager alpha validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_alpha", [0.0, 1.0, -0.1, 1.5])
+def test_run_sweep_raises_on_invalid_alpha(bad_alpha: float) -> None:
+    prepared, labels, _injected = _three_label_run_with_injected_outliers()
+    bad_cfg = SweepConfig(alpha=bad_alpha)
+
+    with pytest.raises(ValueError, match="alpha.*0.*1"):
+        run_sweep(prepared, labels, bad_cfg)
+
+
+# ---------------------------------------------------------------------------
+# Item 3: top_k validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_top_k", [0, -1, -5])
+def test_run_sweep_raises_on_invalid_top_k(bad_top_k: int) -> None:
+    prepared, labels, _injected = _three_label_run_with_injected_outliers()
+    bad_cfg = SweepConfig(top_k=bad_top_k)
+
+    with pytest.raises(ValueError, match="top_k.*>= 1"):
+        run_sweep(prepared, labels, bad_cfg)
+
+
+# ---------------------------------------------------------------------------
+# Item 4: pooled-row convention (0 for counts, NaN for aggregates when all excluded)
+# ---------------------------------------------------------------------------
+
+
+def test_pooled_row_uses_zero_for_counts_when_all_labels_excluded() -> None:
+    """When all labels are excluded (min_ref too high), the pooled aggregate row must
+    use 0 (not NaN) for n_calibration/n_scored/n_alarms, and NaN only for
+    realized_far/threshold."""
+    rng = np.random.default_rng(0)
+    n_features = 5
+    feats: list[np.ndarray] = []
+    labels: list[int] = []
+    segment_ids: list[int] = []
+    # Only 12 segments total -> 300 windows. With 25% in fit-part -> 75 windows fit.
+    # Setting min_ref=100 excludes all (75 < 100).
+    for seg in range(12):
+        block = rng.normal(scale=0.5, size=(25, n_features))
+        feats.append(block)
+        labels.extend([0] * 25)
+        segment_ids.extend([seg] * 25)
+
+    features = np.vstack(feats)
+    labels_arr = np.array(labels, dtype=np.int64)
+    segment_ids_arr = np.array(segment_ids, dtype=np.int64)
+    prepared = _prepared_run(features, segment_ids_arr)
+
+    cfg = SweepConfig(min_ref=100, seed=0)
+
+    result = run_sweep(prepared, labels_arr, cfg)
+
+    pooled_row = result.far_table.set_index("label").loc["pooled"]
+    # All labels excluded -> no contributing rows -> counts should be 0, not NaN
+    assert pooled_row["n_calibration"] == 0.0, "n_calibration should be 0 when all excluded"
+    assert pooled_row["n_scored"] == 0.0, "n_scored should be 0 when all excluded"
+    assert pooled_row["n_alarms"] == 0.0, "n_alarms should be 0 when all excluded"
+    # But realized FAR and threshold are still NaN
+    assert math.isnan(pooled_row["realized_far"]), "realized_far should be NaN"
+    assert math.isnan(pooled_row["threshold"]), "threshold should be NaN"
+
+
+# ---------------------------------------------------------------------------
 # Fixture 3 + item 7: excluded-label row (total count < min_ref, ANY seed)
 # ---------------------------------------------------------------------------
 
