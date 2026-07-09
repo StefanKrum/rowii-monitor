@@ -476,3 +476,255 @@ std, computed in float32, picked up pairwise-summation rounding noise
 of one stream and crashed feature extraction with a width mismatch; the
 std is now computed in float64, where a constant channel is exactly 0.0
 for every batch shape.
+
+## Step 2 first evidence (2026-07-09)
+
+First real-data results from the Step-2 mode-conditioned anomaly-detection
+skeleton (`scripts/run_step2.py`; design spec
+`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`).
+No anomaly labels exist yet -- these are the two label-free evidence
+artifacts the spec defines: false-alarm-rate (FAR) control on held-out
+normal windows, and an anomaly-candidate register. Handcrafted features,
+kNN (k=1, cosine) scorer, split-conformal thresholds at nominal
+alpha = 0.05, per-run blocked segment splits (calibration and scoring
+never share a 12-min burst segment), Step-1 detected cluster labels
+(k = 4 KMeans + HMM) as the mode-conditioning signal unless noted.
+Commands:
+
+```bash
+python scripts/run_step2.py --protocol within-day --run <run> \
+    --variant fusion|audio --scorer knn --conditioning all --alpha 0.05
+python scripts/run_step2.py --run 010726-tu_ph_tu --variant fusion --labels gt ...       # diagnostics
+python scripts/run_step2.py --run 010726-tu_ph_tu --variant fusion --scorer mahalanobis  # scorer contrast
+python scripts/run_step2.py --protocol cross-day --variant fusion --scorer knn
+```
+
+Timestamp caveat (applies to every `utc_time` below and in
+`results/step2/`): the DAQ writes local wall-clock digits under a mis-set
+1996 epoch (see `results/parameter_verification.md`, "burst-file /
+Betriebsdaten clock convention"). The offset is uniform across all
+streams and SCADA of a day, so alignment, splits and segment logic are
+unaffected -- but the displayed times are not true calendar UTC.
+
+### Within-day FAR tables (detected labels, kNN, alpha = 0.05)
+
+One row per detected state; `(aggregate)` pools every calibrated state's
+alarms/windows. `n_cal` is the per-state conformal-calibration size
+(low-conf = below the n >= 1/alpha - 1 floor, threshold +inf, never
+alarms; excluded = fewer than 20 fit-part windows, no reference built).
+
+| run | variant | conditioning | label | n_cal | n_scored | n_alarms | realized FAR | low-conf | excluded |
+|---|---|---|---|---|---|---|---|---|---|
+| 250526-tu | fusion | per-state | 0 | 517 | 1113 | 5 | 0.004 |  |  |
+| 250526-tu | fusion | per-state | 1 | 914 | 2638 | 254 | 0.096 |  |  |
+| 250526-tu | fusion | per-state | 2 | — | — | — | — | yes | yes |
+| 250526-tu | fusion | per-state | 3 | 7 | 217 | 0 | 0.000 | yes |  |
+| 250526-tu | fusion | per-state | **(aggregate)** | 1438 | 3968 | 259 | 0.065 | yes |  |
+| 250526-tu | fusion | pooled | 0 | 1438 | 1113 | 0 | 0.000 |  |  |
+| 250526-tu | fusion | pooled | 1 | 1438 | 2638 | 287 | 0.109 |  |  |
+| 250526-tu | fusion | pooled | 2 | 1438 | 47 | 0 | 0.000 |  |  |
+| 250526-tu | fusion | pooled | 3 | 1438 | 217 | 7 | 0.032 |  |  |
+| 250526-tu | audio | per-state | 0 | 920 | 2672 | 90 | 0.034 |  |  |
+| 250526-tu | audio | per-state | 1 | — | — | — | — | yes |  |
+| 250526-tu | audio | per-state | 2 | 518 | 1115 | 11 | 0.010 |  |  |
+| 250526-tu | audio | per-state | 3 | — | — | — | — | yes |  |
+| 250526-tu | audio | per-state | **(aggregate)** | 1438 | 3787 | 101 | 0.027 | yes |  |
+| 250526-tu | audio | pooled | 0 | 1438 | 2672 | 155 | 0.058 |  |  |
+| 250526-tu | audio | pooled | 1 | 1438 | 155 | 42 | 0.271 |  |  |
+| 250526-tu | audio | pooled | 2 | 1438 | 1115 | 0 | 0.000 |  |  |
+| 250526-tu | audio | pooled | 3 | 1438 | 73 | 0 | 0.000 |  |  |
+| 290626-tu | fusion | per-state | 0 | 2498 | 3127 | 205 | 0.066 |  |  |
+| 290626-tu | fusion | per-state | 1 | — | — | — | — | yes | yes |
+| 290626-tu | fusion | per-state | 2 | — | — | — | — | yes | yes |
+| 290626-tu | fusion | per-state | 3 | — | — | — | — | yes | yes |
+| 290626-tu | fusion | per-state | **(aggregate)** | 2498 | 3127 | 205 | 0.066 | yes |  |
+| 290626-tu | fusion | pooled | 0 | 3595 | 3127 | 0 | 0.000 |  |  |
+| 290626-tu | fusion | pooled | 1 | 3595 | 2438 | 270 | 0.111 |  |  |
+| 290626-tu | fusion | pooled | 2 | 3595 | 2024 | 0 | 0.000 |  |  |
+| 290626-tu | fusion | pooled | 3 | 3595 | 66 | 0 | 0.000 |  |  |
+| 290626-tu | audio | per-state | 0 | 2520 | 3127 | 119 | 0.038 |  |  |
+| 290626-tu | audio | per-state | 1 | — | — | — | — | yes | yes |
+| 290626-tu | audio | per-state | 2 | — | — | — | — | yes | yes |
+| 290626-tu | audio | per-state | 3 | — | — | — | — | yes | yes |
+| 290626-tu | audio | per-state | **(aggregate)** | 2520 | 3127 | 119 | 0.038 | yes |  |
+| 290626-tu | audio | pooled | 0 | 3595 | 3127 | 2 | 0.001 |  |  |
+| 290626-tu | audio | pooled | 1 | 3595 | 2344 | 322 | 0.137 |  |  |
+| 290626-tu | audio | pooled | 2 | 3595 | 2118 | 119 | 0.056 |  |  |
+| 290626-tu | audio | pooled | 3 | 3595 | 66 | 7 | 0.106 |  |  |
+| 010726-tu_ph_tu | fusion | per-state | 0 | 1678 | 7109 | 565 | 0.079 |  |  |
+| 010726-tu_ph_tu | fusion | per-state | 1 | 2482 | 3595 | 168 | 0.047 |  |  |
+| 010726-tu_ph_tu | fusion | per-state | 2 | 735 | 2010 | 86 | 0.043 |  |  |
+| 010726-tu_ph_tu | fusion | per-state | 3 | 2280 | 1666 | 175 | 0.105 |  |  |
+| 010726-tu_ph_tu | fusion | per-state | **(aggregate)** | 7175 | 14380 | 994 | 0.069 |  |  |
+| 010726-tu_ph_tu | fusion | pooled | 0 | 7175 | 7109 | 2016 | 0.284 |  |  |
+| 010726-tu_ph_tu | fusion | pooled | 1 | 7175 | 3595 | 27 | 0.008 |  |  |
+| 010726-tu_ph_tu | fusion | pooled | 2 | 7175 | 2010 | 10 | 0.005 |  |  |
+| 010726-tu_ph_tu | fusion | pooled | 3 | 7175 | 1666 | 0 | 0.000 |  |  |
+| 010726-tu_ph_tu | audio | per-state | 0 | 735 | 2038 | 193 | 0.095 |  |  |
+| 010726-tu_ph_tu | audio | per-state | 1 | 1691 | 7109 | 488 | 0.069 |  |  |
+| 010726-tu_ph_tu | audio | per-state | 2 | 2477 | 3595 | 132 | 0.037 |  |  |
+| 010726-tu_ph_tu | audio | per-state | 3 | 2272 | 1638 | 35 | 0.021 |  |  |
+| 010726-tu_ph_tu | audio | per-state | **(aggregate)** | 7175 | 14380 | 848 | 0.059 |  |  |
+| 010726-tu_ph_tu | audio | pooled | 0 | 7175 | 2038 | 1 | 0.000 |  |  |
+| 010726-tu_ph_tu | audio | pooled | 1 | 7175 | 7109 | 1687 | 0.237 |  |  |
+| 010726-tu_ph_tu | audio | pooled | 2 | 7175 | 3595 | 3 | 0.001 |  |  |
+| 010726-tu_ph_tu | audio | pooled | 3 | 7175 | 1638 | 0 | 0.000 |  |  |
+
+### Per-state vs. pooled: the design's first Step-2 claim
+
+**Per-state conditioning holds FAR closer to nominal, and the effect is
+per-state, not aggregate.** Across all six run x variant combos, every
+state that per-state conditioning could calibrate realizes a FAR between
+0.000 and 0.105 (nominal 0.05; worst case ~2.1x). Under a pooled
+(mode-agnostic) reference the same states realize 0.000-0.284: false
+alarms concentrate on ONE state per run (0.284 on the 01.07 turbine
+cluster, 0.271 / 0.237 / 0.137 / 0.111 / 0.109 elsewhere) while the
+remaining states are silenced (0.000-0.008) by a threshold inflated far
+past their own score range. Pooled AGGREGATES (0.035-0.143) can
+nonetheless sit deceptively close to alpha because over- and
+under-alarming states cancel -- the aggregate number hides exactly the
+per-mode miscalibration the design predicts for mode-agnostic
+thresholds. Two honest caveats: (1) per-state aggregates still land
+1.2-1.4x above nominal on three of six combos (0.059-0.069) --
+within-run drift makes blocked calibration/scoring splits only
+approximately exchangeable; (2) on 290626-tu, three of four detected
+states were excluded per-state (below `min_ref` = 20 fit windows):
+that day's detected states are concentrated in few 12-min segments
+(39-min PH hold, short standstill), so segment-granular splits starve
+their references -- per-state conditioning needs either more data per
+state or cross-day reference pooling (future package).
+
+### Diagnostic: detected vs. GT labels (010726-tu_ph_tu, fusion, kNN)
+
+The `--labels gt` switch isolates the detected-label confounder
+(detected states inherit Step-1 errors; Step-1 state accuracy
+0.95-0.975). Result -- the confounder currently cuts the OTHER way:
+
+| labels | conditioning | aggregate FAR | per-state range | note |
+|---|---|---|---|---|
+| detected (k=4) | per-state | **0.069** | 0.043-0.105 | all 4 states calibrated |
+| gt (5 states) | per-state | **0.188** | 0.059-0.237 | turbine 0.237; pump excluded; standstill n_cal=35, 0 scored |
+| detected | pooled | 0.143 | 0.000-0.284 | |
+| gt | pooled | 0.231 | 0.010-0.637 | transition 0.637 |
+
+GT's single wide "turbine" state spans 91-292 MW of load; calibration
+and scoring segments carry different load mixes, breaking within-state
+exchangeability and inflating turbine FAR to 0.237. The finer detected
+clusters (which split turbine load levels) are MORE acoustically
+homogeneous than the coarse GT states, so Step-1 label noise does not
+degrade FAR control here -- it improves it. Conditioning granularity,
+not label perfection, is what mattered on this day.
+
+### Scorer contrast: Mahalanobis vs. kNN (010726-tu_ph_tu, fusion, detected)
+
+| scorer | conditioning | aggregate FAR | per-state range |
+|---|---|---|---|
+| kNN (k=1 cosine) | per-state | 0.069 | 0.043-0.105 |
+| Mahalanobis (diag, shrinkage 0.1) | per-state | **0.043** | 0.000-0.148 |
+| kNN | pooled | 0.143 | 0.000-0.284 |
+| Mahalanobis | pooled | 0.040 | 0.000-0.161 |
+
+Mahalanobis aggregates sit closer to nominal on this run, but its
+per-state spread is wider (label 2: 0.148) and pooled conditioning shows
+the same single-state alarm concentration (label 1: 0.161) -- scorer
+choice does not rescue a mode-agnostic threshold.
+
+### Cross-day pooled FA matrix (fusion, kNN, alpha = 0.05)
+
+Calibrate a pooled threshold on the row run, score every valid window of
+the column run. Rows/columns are RUNS (a measurement day contributes
+multiple sessions); `n/a` = same day tree (not cross-day by
+construction). `010726-tu1-afternoon` (SCADA-covered but only two stray
+burst files; >5 % invalid windows) fails `prepare_run` and is a
+documented exclusion -- every pair touching it is skipped.
+
+| calib \ score | 010726-pu | 010726-tu1-morning | 010726-tu2 | 010726-tu_ph_tu | 250526-pu-aft | 250526-pu-morn | 250526-tu | 290626-pu | 290626-tu |
+|---|---|---|---|---|---|---|---|---|---|
+| 010726-pu | — | n/a | n/a | n/a | 0.999 | 1.000 | 0.600 | 0.178 | 0.236 |
+| 010726-tu1-morning | n/a | — | n/a | n/a | 0.997 | 1.000 | 0.105 | 0.911 | 0.461 |
+| 010726-tu2 | n/a | n/a | — | n/a | 0.998 | 1.000 | 0.287 | 0.911 | 0.603 |
+| 010726-tu_ph_tu | n/a | n/a | n/a | — | 1.000 | 1.000 | 0.542 | 0.927 | 0.495 |
+| 250526-pu-afternoon | 0.198 | 0.082 | 0.100 | 0.087 | — | n/a | n/a | 0.144 | 0.116 |
+| 250526-pu-morning | 0.020 | 0.008 | 0.007 | 0.010 | n/a | — | n/a | 0.021 | 0.011 |
+| 250526-tu | 0.903 | 0.133 | 0.256 | 0.144 | n/a | n/a | — | 0.924 | 0.616 |
+| 290626-pu | 0.028 | 0.671 | 0.633 | 0.409 | 0.999 | 1.000 | 0.666 | — | n/a |
+| 290626-tu | 0.667 | 0.810 | 0.715 | 0.090 | 1.000 | 1.000 | 0.647 | n/a | — |
+
+Cross-day false-alarm inflation is severe and ubiquitous, exactly as the
+domain-shift literature predicts: against nominal 0.05, a threshold
+calibrated on one day realizes anywhere from 0.007 to 1.000 on another
+day's windows (median cell 0.60), and even the best inflated cells
+(290626-tu -> 010726-tu_ph_tu 0.090; 250526-pu-afternoon -> 01.07 runs
+0.08-0.10) miss nominal by ~2x -- while the handful of BELOW-nominal
+cells (0.007-0.028) are miscalibrated in the opposite, silent
+direction, not evidence of transfer working. The 250526-pu-morning asymmetry (as calibration source:
+0.007-0.021; as scoring target: ~1.000) shows the transfer failing in
+both directions -- its own wide score distribution produces a threshold
+nothing else exceeds, while its windows look alien to every other day's
+reference. Caveat: these cells conflate genuine day-to-day acoustic
+shift with operating-mode-mix differences (the pooled reference has no
+state alignment across days -- a pump session scored against a
+turbine-day reference inflates trivially); disentangling the two needs
+the per-state cross-day alignment deferred to a later package.
+
+### Candidate highlights (top-3 per headline run, fusion, per-state kNN)
+
+Full top-20-per-state tables with SCADA context:
+`results/step2/candidate_register.md` (374 of 1,060 within-day candidate
+rows carry a mechanical `operationally-explained (SCADA: ...)`
+assessment; everything else, and all cross-day sections, remain
+**unreviewed** -- none of these has been listened to yet).
+
+- **250526-tu**: (1)+(2) windows 6096/6097 (05:57:30 raw clock, p=0.001,
+  the run's two highest scores) -- a ~90 MW upward load step (138 -> 225 MW
+  in ~15 s); operationally-explained. (3) window 8021 (06:29:35, p=0.001)
+  -- steady 182 MW, 30-60 s BEFORE the shutdown ramp begins, no visible
+  SCADA event; the audio variant independently top-ranks the same
+  pre-shutdown band (windows 8033/8034): unreviewed -- needs listening.
+- **290626-tu**: (1) window 2954 (03:20:11) -- onset of a steep down-ramp
+  (225 -> 118 MW within a minute); (2) window 2934 (03:19:51) -- last
+  steady seconds immediately before that ramp; (3) window 3456 (03:28:33)
+  -- up-ramp 155 -> 244 MW. All three operationally-explained (load
+  steps); the most interesting UNEXPLAINED cluster on this run is steady
+  273-275 MW around 04:43 (audio pooled ranks 4/7/8) -- needs listening.
+- **010726-tu_ph_tu**: (1) window 24658 (22:36:13, global-best p=0.003)
+  -- steady 115 MW generation, no SCADA event within +/-40 s: unreviewed
+  -- needs listening. (2) window 25627 (22:52:22) -- start of a ~20 MW
+  load reduction; operationally-explained. (3) windows 1927/1928
+  (16:17:22) -- mid-phase-shifter hold, steady -3.5 MW motoring, KS
+  closed, no SCADA event: unreviewed -- needs listening (acoustic
+  novelty inside the PH hold is exactly the kind of event this register
+  exists for).
+
+**Partner cross-reference (pre-start filling-valve / Fuelldüse,
+deck-v3 p.16 -- comparison only, no values adopted):** each headline
+recording contains a 35-42 s pre-start standstill band. In four of six
+fusion/audio sweeps that band fell on the calibration side (never
+scored). Where it WAS scored, both sweeps flag it: 290626-tu fusion
+pooled produces its single pre-start alarm at window 34 (02:31:31 raw
+clock, p=0.024) -- the last second of true standstill, immediately
+before shaft rotation begins (rpm 5.3 at w35) -- and 290626-tu audio
+pooled independently ranks pre-start windows 27/30 (p=0.0017) in its
+top-20. Timing-consistent with the partner's observation at
+state-sequence level (the slide's own timestamp could not be
+re-verified this session); evidence is weak-to-moderate (1-3 one-second
+windows, pooled conditioning only) and stays **unreviewed** in the
+register.
+
+### Limitations
+
+Detected-label conditioning inherits Step-1 errors (state accuracy
+0.95-0.975) -- the gt-labels diagnostic bounds the effect and currently
+shows detected labels HELPING FAR control (0.069 vs 0.188 aggregate on
+01.07), but that is one run on one day, not a general finding.
+Calibration sizes are very uneven (n_cal 7-7,175): one state runs at a
++inf threshold (250526-tu fusion label 3, n=7 < 19 = 1/alpha - 1), and
+on 290626-tu three of four states could not be calibrated at all
+(segment-blocked label concentration) -- the conformal guarantee's
+1/(n+1) width spans 0.0001-0.125 across states. Everything above is a
+single alpha (0.05), single split seed, and the cross-day matrix is
+pooled-only (per-state cross-day needs label alignment across days;
+documented spec simplification) at run granularity. All `utc_time`
+values carry the DAQ's mis-set clock (see caveat at top). No candidate
+has been auditioned yet -- "operationally-explained" marks are
+mechanical SCADA-rule annotations, not human review.
