@@ -94,7 +94,13 @@ A sweep failing with `ValueError` (e.g. `rowii.anomaly.references.split_by_segme
 finding a degenerate split -- too few segments, or a `calibration_frac` that would empty
 one side) is logged and SKIPPED for that one combo, not fatal to the whole invocation --
 mirrors `scripts/run_step1.py`'s own "no SCADA coverage" defensive branch, generalized to
-every way a single combo can legitimately have nothing to report.
+every way a single combo can legitimately have nothing to report. The same principle
+extends one level earlier: a run whose own `rowii.pipeline.prepare_run` raises
+`RuntimeError` (too short/sparse for the requested variant -- e.g. a real "two stray
+files" run like `010726-tu1-afternoon`, Task S7 real-data finding) is logged and
+excluded -- the whole run for within-day (`_run_within_day_for_run`), or just that one
+day and every pair touching it for cross-day (`_run_cross_day`), never the rest of the
+invocation.
 """
 from __future__ import annotations
 
@@ -789,11 +795,29 @@ def _run_within_day_for_run(
     scorer) pair, writing that combo's outputs/summary-row/register-section. Returns
     the number of combos actually written (a combo whose sweep raises `ValueError` --
     module docstring -- is logged and skipped, not counted).
+
+    If `prepare_run` itself raises `RuntimeError` (a run too short/sparse for this
+    variant -- e.g. a real "two stray files" run, more than 5% of its grid windows
+    invalid, `rowii.pipeline.compute_validity_mask`), the WHOLE run is logged and
+    skipped (0 combos written) -- the same "not fatal to the whole invocation"
+    principle the module docstring already documents for a `run_sweep` `ValueError`,
+    extended to this earlier failure mode (Task S7 real-data finding,
+    `010726-tu1-afternoon`).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
 
-    prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
+    try:
+        prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
+    except RuntimeError as exc:
+        logger.warning(
+            "run_step2: prepare_run failed for run %r (%s) -- run is too short/sparse "
+            "for this variant (module docstring's exclusion principle extended to "
+            "prepare_run failures, not just run_sweep ValueErrors) -- skipping (0 "
+            "combos written)",
+            run.name, exc,
+        )
+        return 0
     scada = _load_run_scada(prepared, run, index)
 
     sweep_prepared: PreparedRun
@@ -862,6 +886,15 @@ def _run_cross_day(
     day_root`), same variant (trivially true -- one variant per invocation), skipping
     pairs whose feature dims are incompatible (module docstring). Returns the number
     of (pair, scorer) combos actually written.
+
+    A day whose own `prepare_run` raises `RuntimeError` (too short/sparse for this
+    variant, e.g. a real "two stray files" run) is logged and excluded from
+    `prepared_by_run` entirely -- every pair touching it is then skipped by the
+    `prepared_by_run` membership check below, but pairs between the OTHER, healthy
+    days are unaffected (Task S7 real-data finding: `010726-tu1-afternoon` crashed
+    this function's `prepared_by_run` prewarm loop, which had no `try/except` at all,
+    before this fix -- losing every OTHER day's matrix cell too, not just that one
+    day's).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -876,7 +909,16 @@ def _run_cross_day(
 
     prepared_by_run: dict[str, tuple[PreparedRun, np.ndarray, pd.DataFrame | None]] = {}
     for run in days:
-        prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
+        try:
+            prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
+        except RuntimeError as exc:
+            logger.warning(
+                "run_step2: prepare_run failed for run %r (%s) -- run is too "
+                "short/sparse for this variant, excluding from cross-day (every pair "
+                "touching it is skipped below, all OTHER days' pairs are unaffected)",
+                run.name, exc,
+            )
+            continue
         valid_mask, scada = _cross_day_valid_mask(prepared, run, index, cfg, labels_mode)
         prepared_by_run[run.name] = (prepared, valid_mask, scada)
 
@@ -884,6 +926,8 @@ def _run_cross_day(
     for run_a, run_b in itertools.permutations(days, 2):
         if run_a.day_root == run_b.day_root:
             continue  # not genuinely "cross-day" -- same day tree, different session
+        if run_a.name not in prepared_by_run or run_b.name not in prepared_by_run:
+            continue  # one side failed prepare_run above -- pair has nothing to score
 
         prepared_a, valid_a, _scada_a = prepared_by_run[run_a.name]
         prepared_b, valid_b, scada_b = prepared_by_run[run_b.name]
