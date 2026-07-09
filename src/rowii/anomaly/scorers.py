@@ -1,6 +1,6 @@
 """kNN embedding-distance and Mahalanobis anomaly scorers for Step-2 mode-conditioned
-scoring (design spec `docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`
-§3.5, plan `docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S3).
+scoring (design spec `docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`,
+plan `docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S3).
 
 Both scorers share the same two-step contract (`Scorer` protocol below): `fit(reference)`
 consumes a `(N, F)` matrix of NORMAL reference embeddings/features for one operating
@@ -67,12 +67,25 @@ def _check_reference(reference: np.ndarray) -> None:
         raise ValueError(f"reference must be non-empty, got shape {reference.shape}")
 
 
+def _check_query(x: np.ndarray) -> None:
+    """Shared `score()` precondition: query contains only finite values.
+
+    Raises:
+        ValueError: if `x` contains a NaN/inf value.
+    """
+    if not np.isfinite(x).all():
+        raise ValueError(
+            "query contains non-finite values; filter via valid_mask before scoring"
+        )
+
+
 def _l2_normalize(x: np.ndarray) -> np.ndarray:
     """Row-wise L2-normalize, leaving any zero-norm row unchanged (avoids 0/0) --
-    matches `sklearn.preprocessing.normalize`'s zero-vector convention. Only ever
-    applied to a `score()`-side query batch, never to the reference (see
-    `KnnScorer.fit`, which raises instead of silently tolerating a zero-norm
-    reference row)."""
+    matches `sklearn.preprocessing.normalize`'s zero-vector convention. A zero-norm
+    query row scores exactly 1.0 (orthogonal-equivalent to all reference vectors),
+    not maximally dissimilar (range max is 2.0). Only ever applied to a
+    `score()`-side query batch, never to the reference (see `KnnScorer.fit`, which
+    raises instead of silently tolerating a zero-norm reference row)."""
     norms = np.linalg.norm(x, axis=1, keepdims=True)
     safe_norms = np.where(norms == 0.0, 1.0, norms)
     return x / safe_norms
@@ -100,10 +113,13 @@ class KnnScorer:
                 change the result (see `test_scorers.py`'s chunked/unchunked tests).
 
         Raises:
-            ValueError: if `k < 1`, or `metric` is neither `"cosine"` nor `"euclidean"`.
+            ValueError: if `k < 1`, `chunk_size < 1`, or `metric` is neither
+                `"cosine"` nor `"euclidean"`.
         """
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
+        if chunk_size < 1:
+            raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if metric not in ("cosine", "euclidean"):
             raise ValueError(f"metric must be 'cosine' or 'euclidean', got {metric!r}")
         self.k = k
@@ -152,8 +168,9 @@ class KnnScorer:
         """`(W, F)` windows -> `(W,)` float64 scores, higher = more anomalous.
 
         Raises:
-            ValueError: if called before `fit()`.
+            ValueError: if called before `fit()`, or if `x` contains non-finite values.
         """
+        _check_query(x)
         if self.metric == "cosine":
             if self._reference is None:
                 raise ValueError("KnnScorer.score() called before fit()")
@@ -232,8 +249,9 @@ class MahalanobisScorer:
         `sqrt(sum((x - mean) ** 2 / var_shrunk, axis=1))`.
 
         Raises:
-            ValueError: if called before `fit()`.
+            ValueError: if called before `fit()`, or if `x` contains non-finite values.
         """
+        _check_query(x)
         mean = self._mean
         var_shrunk = self._var_shrunk
         if mean is None or var_shrunk is None:

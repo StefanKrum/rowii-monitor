@@ -341,3 +341,82 @@ def test_knn_constructor_raises_on_invalid_metric() -> None:
 def test_knn_constructor_raises_on_k_less_than_one() -> None:
     with pytest.raises(ValueError, match="k"):
         KnnScorer(k=0)
+
+
+def test_knn_constructor_raises_on_chunk_size_less_than_one() -> None:
+    """chunk_size must be >= 1: chunk_size=0 crashes low-level, chunk_size=-1 silently
+    returns uninitialized memory from np.empty."""
+    with pytest.raises(ValueError, match="chunk_size"):
+        KnnScorer(chunk_size=0)
+    with pytest.raises(ValueError, match="chunk_size"):
+        KnnScorer(chunk_size=-1)
+
+
+def test_knn_cosine_score_raises_on_nan_in_query() -> None:
+    """Query with NaN must be rejected before scoring."""
+    reference = np.random.default_rng(14).normal(size=(10, 3))
+    scorer = KnnScorer(k=1, metric="cosine").fit(reference)
+    x = np.ones((5, 3))
+    x[2, 1] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_knn_cosine_score_raises_on_inf_in_query() -> None:
+    """Query with inf must be rejected before scoring."""
+    reference = np.random.default_rng(15).normal(size=(10, 3))
+    scorer = KnnScorer(k=1, metric="cosine").fit(reference)
+    x = np.ones((5, 3))
+    x[1, 0] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_knn_cosine_score_raises_on_neginf_in_query() -> None:
+    """Query with -inf must be rejected before scoring."""
+    reference = np.random.default_rng(16).normal(size=(10, 3))
+    scorer = KnnScorer(k=1, metric="cosine").fit(reference)
+    x = np.ones((5, 3))
+    x[0, 2] = -np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_knn_euclidean_score_raises_on_nan_in_query() -> None:
+    """Query with NaN must be rejected before scoring (euclidean metric)."""
+    reference = np.random.default_rng(17).normal(size=(10, 3))
+    scorer = KnnScorer(k=1, metric="euclidean").fit(reference)
+    x = np.ones((5, 3))
+    x[2, 1] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_knn_euclidean_score_raises_on_inf_in_query() -> None:
+    """Query with inf must be rejected before scoring (euclidean metric)."""
+    reference = np.random.default_rng(18).normal(size=(10, 3))
+    scorer = KnnScorer(k=1, metric="euclidean").fit(reference)
+    x = np.ones((5, 3))
+    x[1, 0] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_mahalanobis_score_raises_on_nan_in_query() -> None:
+    """Query with NaN must be rejected before scoring."""
+    reference = np.random.default_rng(19).normal(size=(10, 3))
+    scorer = MahalanobisScorer().fit(reference)
+    x = np.ones((5, 3))
+    x[2, 1] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
+
+
+def test_mahalanobis_score_raises_on_inf_in_query() -> None:
+    """Query with inf must be rejected before scoring."""
+    reference = np.random.default_rng(20).normal(size=(10, 3))
+    scorer = MahalanobisScorer().fit(reference)
+    x = np.ones((5, 3))
+    x[1, 0] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.score(x)
