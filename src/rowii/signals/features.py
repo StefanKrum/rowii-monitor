@@ -385,6 +385,30 @@ class VibFeaturizer:
         return out
 
 
+def zscore_stats(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-column (mean, std) via `nanmean`/`nanstd`, float64 — the statistics
+    `zscore` standardizes with, exposed separately so a fitted model can carry its
+    FIT-day statistics and re-apply them to another day's features
+    (`rowii.state.detect.FittedDetector`, package-2 spec D1).
+    """
+    x64 = np.asarray(x, dtype=np.float64)
+    return np.nanmean(x64, axis=0), np.nanstd(x64, axis=0)
+
+
+def apply_zscore(x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    """`(x - mean) / std` per column with GIVEN statistics; columns with
+    `std < 1e-12` become zero; NaN input rows stay NaN (same semantics as `zscore`,
+    which is exactly `apply_zscore(x, *zscore_stats(x))` — regression-gated).
+    """
+    x64 = np.asarray(x, dtype=np.float64)
+    nan_rows = np.isnan(x64).any(axis=1)
+    out = np.zeros_like(x64)
+    safe = std >= 1e-12
+    out[:, safe] = (x64[:, safe] - mean[safe]) / std[safe]
+    out[nan_rows] = np.nan
+    return out
+
+
 def zscore(x: np.ndarray) -> np.ndarray:
     """Per-column `(x - mean) / std`, float64, ignoring NaN rows. Columns with
     `std < 1e-12` (over the non-NaN rows) become zero; NaN input rows stay NaN.
@@ -407,15 +431,7 @@ def zscore(x: np.ndarray) -> np.ndarray:
     to NaN in the output (not left as whatever the NaN-ignoring arithmetic
     produced) so a caller can still detect and mask them exactly as before.
     """
-    x64 = np.asarray(x, dtype=np.float64)
-    nan_rows = np.isnan(x64).any(axis=1)
-    mean = np.nanmean(x64, axis=0)
-    std = np.nanstd(x64, axis=0)
-    out = np.zeros_like(x64)
-    safe = std >= 1e-12
-    out[:, safe] = (x64[:, safe] - mean[safe]) / std[safe]
-    out[nan_rows] = np.nan
-    return out
+    return apply_zscore(x, *zscore_stats(x))
 
 
 def fuse(a: np.ndarray, b: np.ndarray) -> np.ndarray:

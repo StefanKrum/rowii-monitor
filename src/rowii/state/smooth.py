@@ -35,6 +35,8 @@ class StickyHmmSmoother:
         self.self_transition = self_transition
         self.random_seed = random_seed
         self.last_model_: GaussianHMM | None = None
+        self._fitted_ids: np.ndarray | None = None
+        self._component_to_id: dict[int, int] | None = None
 
     def fit_decode(self, features: np.ndarray, init_labels: np.ndarray) -> np.ndarray:
         """Fit a sticky GaussianHMM and decode the Viterbi state sequence.
@@ -55,6 +57,7 @@ class StickyHmmSmoother:
 
         if k <= 1:
             self.last_model_ = None
+            self._fitted_ids = unique_ids
             return np.asarray(init_labels, dtype=np.int64)
 
         features = np.asarray(features, dtype=np.float64)
@@ -87,13 +90,33 @@ class StickyHmmSmoother:
             raise RuntimeError("sticky transmat was re-estimated")
 
         self.last_model_ = model
+        self._fitted_ids = unique_ids
+        component_to_id = {idx: label_id for label_id, idx in id_to_component.items()}
+        self._component_to_id = component_to_id
 
         decoded_components = model.predict(features)
-        component_to_id = {idx: label_id for label_id, idx in id_to_component.items()}
         decoded = np.array(
             [component_to_id[c] for c in decoded_components], dtype=np.int64
         )
         return decoded
+
+    def decode(self, features: np.ndarray) -> np.ndarray:
+        """Viterbi labels for *features* from the already-fitted sticky HMM — no
+        refit, no EM; labels come back in the SAME id space `fit_decode` was given
+        (package-2 spec D1: cross-day apply must never re-estimate on the new day).
+
+        Raises:
+            RuntimeError: if `fit_decode` has never run on this instance.
+        """
+        if self._fitted_ids is None:
+            raise RuntimeError("StickyHmmSmoother.decode called before fit_decode")
+        if self.last_model_ is None:  # k<=1 fit: every window is the single fit id
+            return np.full(len(features), int(self._fitted_ids[0]), dtype=np.int64)
+        assert self._component_to_id is not None
+        components = self.last_model_.predict(np.asarray(features, dtype=np.float64))
+        return np.array(
+            [self._component_to_id[c] for c in components], dtype=np.int64
+        )
 
 
 def _sticky_transmat(k: int, self_transition: float) -> np.ndarray:

@@ -10,9 +10,11 @@ from rowii.signals.features import (
     MACHINE_HZ,
     AudioFeaturizer,
     VibFeaturizer,
+    apply_zscore,
     fuse,
     machine_band_bin_counts,
     zscore,
+    zscore_stats,
 )
 
 
@@ -535,3 +537,33 @@ def test_fuse_is_zscored_concatenation_of_both_inputs() -> None:
 
     np.testing.assert_allclose(fused[:, :2], zscore(a))
     np.testing.assert_allclose(fused[:, 2:], zscore(b))
+
+
+# ---------------------------------------------------------------------------
+# zscore_stats / apply_zscore (package-2 transfer primitives)
+# ---------------------------------------------------------------------------
+
+
+class TestZscoreStatsApply:
+    def test_apply_with_own_stats_equals_zscore(self):
+        # NaN row + constant column + normal columns: full semantics coverage
+        x = np.array(
+            [[1.0, 5.0, 2.0], [2.0, 5.0, 4.0], [np.nan, 5.0, 6.0], [3.0, 5.0, 8.0]]
+        )
+        mean, std = zscore_stats(x)
+        out = apply_zscore(x, mean, std)
+        expected = zscore(x)
+        np.testing.assert_array_equal(out, expected)  # NaN-positions compare equal
+
+    def test_apply_with_foreign_stats_uses_given_stats(self):
+        a = np.array([[0.0, 0.0], [2.0, 4.0]])  # mean (1,2), std (1,2)
+        mean, std = zscore_stats(a)
+        b = np.array([[1.0, 2.0]])
+        out = apply_zscore(b, mean, std)
+        np.testing.assert_allclose(out, [[0.0, 0.0]])
+
+    def test_apply_zero_std_column_becomes_zero(self):
+        mean = np.array([1.0, 2.0])
+        std = np.array([1.0, 0.0])
+        out = apply_zscore(np.array([[3.0, 9.0]]), mean, std)
+        np.testing.assert_allclose(out, [[2.0, 0.0]])
