@@ -60,7 +60,6 @@ The final sensor setup has been installed since **2026-06-15** (see
 
 | Period | Audio + vibration | SCADA (Betriebsdaten) | Ground truth |
 |---|---|---|---|
-| 2026-06-01 .. 06-24 | — | ✓ hourly history (577 files; SCADA-only baselines) | — |
 | 2026-06-25 TU (04:15–06:27 UTC) | ✓ | ✓ | ✓ |
 | 2026-06-25 PU morning (09:08–09:32 UTC) | ✓ | ✓ | ✓ |
 | 2026-06-25 PU afternoon (~11:44–12:40 UTC) | ✓ | ✗ export ends 11:00 UTC | ✗ permanent |
@@ -74,7 +73,10 @@ analyses rely on photo-derived hybrid labels and mark that day as an outlier;
 historian hours, so these two windows permanently lack SCADA ground truth
 (photo-derived approximate labels are the only possible fallback and would be
 documented as a separate, lower-confidence label tier); (3) first fully
-covered day: 2026-06-29; first day with all four operating modes: 2026-07-01.
+covered day: 2026-06-29; first day with all four operating modes: 2026-07-01;
+(4) the Betriebsdaten export additionally contains SCADA-only history back to
+2026-06-01 (577 hourly files before 25.06) — not usable for the pipeline
+(no audio/vibration exists before 25.06), kept for provenance only.
 
 `rowii.io.dataset.discover` also accepts a single day tree directly (e.g.
 `ROWII_DATA_ROOT=.../illwerke-250526`) for backward compatibility — run names
