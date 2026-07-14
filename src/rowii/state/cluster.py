@@ -33,6 +33,16 @@ class KMeansClusterer:
         labels = self._kmeans.fit_predict(x)
         return np.asarray(labels, dtype=np.int64)
 
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        """Nearest-centroid labels for *x* from the already-fitted model.
+
+        Raises:
+            RuntimeError: if called before `fit_predict`.
+        """
+        if not hasattr(self._kmeans, "cluster_centers_"):
+            raise RuntimeError("KMeansClusterer.predict called before fit_predict")
+        return np.asarray(self._kmeans.predict(x), dtype=np.int64)
+
 
 class GmmClusterer:
     """Gaussian Mixture Model clustering with full covariance."""
@@ -63,3 +73,13 @@ class GmmClusterer:
         """
         labels = self._gmm.fit_predict(x)
         return np.asarray(labels, dtype=np.int64)
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        """Posterior-argmax component labels for *x* from the already-fitted model.
+
+        Raises:
+            RuntimeError: if called before `fit_predict`.
+        """
+        if not hasattr(self._gmm, "means_"):
+            raise RuntimeError("GmmClusterer.predict called before fit_predict")
+        return np.asarray(self._gmm.predict(x), dtype=np.int64)

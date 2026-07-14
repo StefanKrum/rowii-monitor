@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from sklearn.metrics import adjusted_rand_score
 
 from rowii.state.cluster import GmmClusterer, KMeansClusterer
@@ -58,3 +59,29 @@ class TestGmmClusterer:
 
         ari = adjusted_rand_score(true_labels, pred_labels)
         assert ari == 1.0, f"Expected ARI=1.0, got {ari}"
+
+
+class TestPredict:
+    def test_kmeans_predict_matches_fit_predict_on_same_data(self):
+        rng = np.random.default_rng(0)
+        x = np.vstack([rng.normal(0, 0.1, (50, 3)), rng.normal(5, 0.1, (50, 3))])
+        c = KMeansClusterer(n_clusters=2, random_seed=7)
+        fit_labels = c.fit_predict(x)
+        np.testing.assert_array_equal(c.predict(x), fit_labels)
+        assert c.predict(x).dtype == np.int64
+
+    def test_kmeans_predict_before_fit_raises(self):
+        with pytest.raises(RuntimeError, match="fit_predict"):
+            KMeansClusterer(n_clusters=2, random_seed=7).predict(np.zeros((3, 2)))
+
+    def test_gmm_predict_new_points_assigned_to_nearest_component(self):
+        rng = np.random.default_rng(0)
+        x = np.vstack([rng.normal(0, 0.1, (50, 2)), rng.normal(5, 0.1, (50, 2))])
+        c = GmmClusterer(n_clusters=2, random_seed=7)
+        fit_labels = c.fit_predict(x)
+        label_at_origin = fit_labels[0]
+        assert c.predict(np.array([[0.05, -0.05]]))[0] == label_at_origin
+
+    def test_gmm_predict_before_fit_raises(self):
+        with pytest.raises(RuntimeError, match="fit_predict"):
+            GmmClusterer(n_clusters=2, random_seed=7).predict(np.zeros((3, 2)))

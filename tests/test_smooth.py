@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from rowii.state.smooth import StickyHmmSmoother
 
@@ -101,3 +102,43 @@ def test_noncontiguous_label_ids_are_preserved() -> None:
 
     assert set(np.unique(decoded)) <= {0, 2, 5}
     assert decoded.dtype == np.int64
+
+
+class TestDecode:
+    def _two_state_features(self, seed=0):
+        rng = np.random.default_rng(seed)
+        f = np.concatenate([rng.normal(0, 0.2, 60), rng.normal(4, 0.2, 60)])
+        labels = np.array([3] * 60 + [7] * 60, dtype=np.int64)  # non-contiguous ids
+        return f.reshape(-1, 1), labels
+
+    def test_decode_same_features_matches_fit_decode(self):
+        features, init = self._two_state_features()
+        s = StickyHmmSmoother(random_seed=7)
+        fitted = s.fit_decode(features, init)
+        np.testing.assert_array_equal(s.decode(features), fitted)
+
+    def test_decode_new_features_uses_fit_id_space_without_refit(self):
+        features, init = self._two_state_features()
+        s = StickyHmmSmoother(random_seed=7)
+        s.fit_decode(features, init)
+        means_before = s.last_model_.means_.copy()
+        new = np.concatenate(
+            [np.full(10, 4.0), np.full(10, 0.0)]
+        ).reshape(-1, 1)  # reversed order vs fit day
+        decoded = s.decode(new)
+        assert set(np.unique(decoded)) <= {3, 7}
+        assert decoded[0] == 7 and decoded[-1] == 3
+        np.testing.assert_array_equal(s.last_model_.means_, means_before)
+
+    def test_decode_before_fit_raises(self):
+        with pytest.raises(RuntimeError, match="fit_decode"):
+            StickyHmmSmoother().decode(np.zeros((5, 1)))
+
+    def test_decode_after_single_label_fit_returns_that_id(self):
+        features = np.zeros((10, 1))
+        init = np.full(10, 42, dtype=np.int64)
+        s = StickyHmmSmoother()
+        s.fit_decode(features, init)  # k=1 path: last_model_ stays None
+        np.testing.assert_array_equal(
+            s.decode(np.ones((4, 1))), np.full(4, 42, dtype=np.int64)
+        )
