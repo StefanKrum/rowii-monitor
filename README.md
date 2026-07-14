@@ -52,6 +52,30 @@ measurement day (`illwerke-<dayid>/`), each itself a full day tree:
     └── 20260701 Messung/           # PU, TU1, TU2, TU_PH_TU (all 4 operating modes), full-day SCADA
 ```
 
+### SCADA coverage and permanent gaps (final — no historian re-export will be provided)
+
+The final sensor setup has been installed since **2026-06-15** (see
+`Sensor_Anordnung_15062026.xlsx`; the Gantner stream configurations carry
+`MeasName: 2026-06-15`). Delivered coverage per window:
+
+| Period | Audio + vibration | SCADA (Betriebsdaten) | Ground truth |
+|---|---|---|---|
+| 2026-06-01 .. 06-24 | — | ✓ hourly history (577 files; SCADA-only baselines) | — |
+| 2026-06-25 TU (04:15–06:27 UTC) | ✓ | ✓ | ✓ |
+| 2026-06-25 PU morning (09:08–09:32 UTC) | ✓ | ✓ | ✓ |
+| 2026-06-25 PU afternoon (~11:44–12:40 UTC) | ✓ | ✗ export ends 11:00 UTC | ✗ permanent |
+| 2026-06-27 PU↔PH sessions (~04:41–14:33 UTC) | ✓ | ✗ never exported | ✗ permanent |
+| 2026-06-29 full day (TU + PU) | ✓ | ✓ 24 h | ✓ |
+| 2026-07-01 full day (PU, TU1, TU2, TU_PH_TU) | ✓ | ✓ | ✓ |
+
+Notes: (1) the gaps match the partner team's situation exactly — their 27.06
+analyses rely on photo-derived hybrid labels and mark that day as an outlier;
+(2) decision recorded 2026-07-14: Illwerke will NOT re-export the missing
+historian hours, so these two windows permanently lack SCADA ground truth
+(photo-derived approximate labels are the only possible fallback and would be
+documented as a separate, lower-confidence label tier); (3) first fully
+covered day: 2026-06-29; first day with all four operating modes: 2026-07-01.
+
 `rowii.io.dataset.discover` also accepts a single day tree directly (e.g.
 `ROWII_DATA_ROOT=.../illwerke-250526`) for backward compatibility — run names
 then have no day-id prefix, matching the pre-multi-day behaviour exactly. Under
