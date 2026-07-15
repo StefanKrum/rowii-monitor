@@ -956,3 +956,141 @@ def test_cross_day_per_state_end_to_end_and_summary_backfill(tmp_path, monkeypat
 
     register_text = (results_root / "step2" / "candidate_register.md").read_text()
     assert "000001-tu--to--000002-tu / fusion-detected / per-state-knn" in register_text
+
+
+# ---------------------------------------------------------------------------
+# 10. --run scoping: comma lists + cross-day pair filtering (Task 3 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_day_per_state_run_list_produces_exactly_the_listed_pairs(
+    tmp_path, monkeypatch
+) -> None:
+    """A 2-name `--run` list for `--protocol cross-day-per-state` produces exactly the
+    2 ordered pairs among the named runs -- no other pair directory exists."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_two_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "cross-day-per-state", "--variant", "fusion",
+            "--scorer", "knn", "--run", "000001-tu,000002-tu",
+        ]
+    )
+    assert exit_code == 0
+
+    root = tmp_path / "results" / "step2" / "cross-day-per-state"
+    assert sorted(p.name for p in root.iterdir()) == [
+        "000001-tu--to--000002-tu", "000002-tu--to--000001-tu",
+    ]
+    for pair_dir_name in ("000001-tu--to--000002-tu", "000002-tu--to--000001-tu"):
+        assert (root / pair_dir_name / "fusion-knn" / "far_table.csv").is_file()
+
+
+def test_cross_day_run_list_excludes_unlisted_day_before_prepare(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """The `--run` list restricts the cross-day PAIR SET itself, not just which outputs
+    get asserted: on the three-day root, "000003-tu" is SCADA-covered but too sparse to
+    prepare -- under `--run all` its `prepare_run` failure warning is exactly what
+    `test_cross_day_skips_run_that_fails_to_prepare` asserts EXISTS, so its absence
+    here proves the unlisted day was filtered out BEFORE `prepare_run` was ever
+    attempted, not merely skipped after failing."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_three_day_root(tmp_path / "data")
+
+    import run_step2
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = run_step2.main(
+            [
+                "--protocol", "cross-day", "--variant", "fusion", "--scorer", "knn",
+                "--labels", "detected", "--run", "000001-tu,000002-tu",
+            ]
+        )
+    assert exit_code == 0
+
+    cross_root = tmp_path / "results" / "step2" / "cross-day" / "fusion-detected"
+    assert sorted(p.name for p in cross_root.iterdir()) == [
+        "000001-tu__to__000002-tu", "000002-tu__to__000001-tu",
+    ]
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("000003" in w for w in warnings), warnings
+
+    summary = pd.read_csv(tmp_path / "results" / "step2" / "summary.csv")
+    assert not any("000003" in run_pair for run_pair in summary["run"])
+
+
+@pytest.mark.parametrize("protocol", ["cross-day", "cross-day-per-state"])
+def test_cross_day_single_run_name_rejected(tmp_path, monkeypatch, capsys, protocol) -> None:
+    """A 1-name `--run` list for a cross-day protocol has no pairs to sweep -- must be
+    rejected up front (exit 2, `parser.error`) rather than silently writing nothing."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # defensive: never reached if the guard fires first
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            ["--protocol", protocol, "--variant", "fusion", "--run", "000001-tu"]
+        )
+    assert exc_info.value.code == 2
+
+    err = capsys.readouterr().err
+    assert "no cross-day pairs" in err
+
+
+def test_unknown_run_name_exits_2_listing_available(tmp_path, monkeypatch, capsys) -> None:
+    """An unknown name anywhere in the `--run` list is a hard usage error (exit 2,
+    naming every discovered run) -- mirrors `scripts/warm_cache.py`'s own unknown-run
+    precedent; before this change, within-day logged a warning and exited 0 having
+    processed nothing."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_two_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        ["--run", "000001-tu,bogus", "--variant", "fusion", "--scorer", "knn"]
+    )
+    assert exit_code == 2
+
+    err = capsys.readouterr().err
+    assert "bogus" in err
+    assert "000001-tu" in err
+    assert "000002-tu" in err
+    assert not (tmp_path / "results" / "step2").exists()  # nothing was written
+
+
+def test_within_day_run_list_processes_each_named_run(tmp_path, monkeypatch) -> None:
+    """A comma-separated `--run` list for within-day processes each named run in
+    sequence -- the natural extension of the pre-existing single-name behavior."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_two_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        [
+            "--run", "000001-tu,000002-tu", "--variant", "fusion",
+            "--labels", "detected", "--conditioning", "per-state", "--scorer", "knn",
+        ]
+    )
+    assert exit_code == 0
+
+    for run_name in ("000001-tu", "000002-tu"):
+        combo_dir = (
+            tmp_path / "results" / "step2" / "within-day" / run_name
+            / "fusion-detected" / "per-state-knn"
+        )
+        assert (combo_dir / "far_table.csv").is_file(), f"missing outputs for {run_name}"
+
+    summary = pd.read_csv(tmp_path / "results" / "step2" / "summary.csv")
+    assert list(summary["run"]) == ["000001-tu", "000002-tu"]  # in the given order
