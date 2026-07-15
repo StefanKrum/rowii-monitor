@@ -29,7 +29,7 @@ pass over a `PreparedRun`:
      (`build_references`), and one threshold PER LABEL, calibrated on that label's own
      conformal-part scores. A label with fewer than `cfg.min_ref` fit-part windows (or
      none at all) is EXCLUDED: no reference, no threshold, every FAR-table metric NaN
-     (`_excluded_row`).
+     (`far_row_excluded`).
    - `"pooled"`: ONE scorer fit on `references.pooled` (every label's fit-part rows
      together) and ONE threshold calibrated on the WHOLE conformal-part's scores (every
      label's conformal windows pooled together, unlike per-state) -- `min_ref`/exclusion
@@ -43,7 +43,7 @@ pass over a `PreparedRun`:
 `far_table` always carries one row per label seen anywhere in this sweep's calibration
 or scoring windows (`excluded=True` rows included, metrics NaN). `conditioning=
 "per-state"` additionally appends one aggregate `label="pooled"` row summarising the
-realized FAR across every non-excluded label's alarms combined (`_aggregate_pooled_row`)
+realized FAR across every non-excluded label's alarms combined (`far_row_aggregate`)
 -- a single number answering "how well did the state-conditioned regime do overall",
 distinct from the `conditioning="pooled"` MODE (which never adds this extra row: every
 per-label row it emits already shares one scorer/threshold, so a further roll-up would
@@ -140,14 +140,18 @@ class SweepResult:
 
 
 @dataclass
-class _FarRow:
-    """Internal, mutable row builder for `SweepResult.far_table` -- one instance per
-    label (+ one aggregate instance), converted to a plain dict via `dataclasses.asdict`
-    at the very end. `n_calibration`/`n_scored`/`n_alarms` are floats (not ints) purely
-    so a NaN "not attempted" row (`_excluded_row`/`_no_conformal_data_row`) can share
-    the same field types as a real row -- pandas upcasts the whole column to float64
-    once any row contributes a NaN there regardless, so this changes nothing about the
-    final DataFrame's dtype."""
+class FarRow:
+    """Mutable row builder for `SweepResult.far_table` -- one instance per label (+ one
+    aggregate instance), converted to a plain dict via `dataclasses.asdict` at the very
+    end. `n_calibration`/`n_scored`/`n_alarms` are floats (not ints) purely so a NaN
+    "not attempted" row (`far_row_excluded`/`far_row_no_conformal_data`) can share the
+    same field types as a real row -- pandas upcasts the whole column to float64 once
+    any row contributes a NaN there regardless, so this changes nothing about the final
+    DataFrame's dtype.
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
+    """
 
     label: int | str
     n_calibration: float
@@ -245,7 +249,7 @@ def _assert_three_way_disjoint(
     )
 
 
-def _excluded_row(label: int | str, cfg: SweepConfig) -> _FarRow:
+def far_row_excluded(label: int | str, cfg: SweepConfig) -> FarRow:
     """A label with fewer than `cfg.min_ref` fit-part windows (or none at all -- both
     read the same way, see `run_sweep`'s `label not in references.references` check):
     no reference was ever fit, so every downstream metric is NaN ("labels excluded by
@@ -254,8 +258,11 @@ def _excluded_row(label: int | str, cfg: SweepConfig) -> _FarRow:
     force this column to `object` dtype (pandas has no float bool), and "no reliable
     calibration exists for this label at all" is unambiguously the maximally
     not-confident case, keeping the column clean `bool` throughout.
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
     """
-    return _FarRow(
+    return FarRow(
         label=label,
         n_calibration=math.nan,
         n_scored=math.nan,
@@ -269,31 +276,37 @@ def _excluded_row(label: int | str, cfg: SweepConfig) -> _FarRow:
     )
 
 
-def _no_conformal_data_row(label: int | str, cfg: SweepConfig) -> _FarRow:
-    """Same NaN-metrics shape as `_excluded_row`, for the narrower edge case of a label
-    that DID clear `cfg.min_ref` on the fit-part (a real reference exists) yet has zero
-    windows on the conformal-part (so `calibrate` has nothing to calibrate on) -- an
+def far_row_no_conformal_data(label: int | str, cfg: SweepConfig) -> FarRow:
+    """Same NaN-metrics shape as `far_row_excluded`, for the narrower edge case of a
+    label that DID clear `cfg.min_ref` on the fit-part (a real reference exists) yet has
+    zero windows on the conformal-part (so `calibrate` has nothing to calibrate on) -- an
     unlikely but reachable segment-granularity corner: the nested fit/conformal split
     (`run_sweep`) operates on ALL calibration-side segments together, not per label, so
     a label whose calibration presence is concentrated in very few segments can have
     all of them land on the fit side. `excluded=False` since `min_ref` was not the
     reason (a real reference DOES exist -- just nothing to calibrate a threshold with).
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
     """
-    row = _excluded_row(label, cfg)
+    row = far_row_excluded(label, cfg)
     row.excluded = False
     return row
 
 
-def _empty_scoring_row(
+def far_row_empty_scoring(
     label: int | str, cfg: SweepConfig, threshold_result: ConformalThreshold
-) -> _FarRow:
+) -> FarRow:
     """A label with a real reference AND a real calibrated threshold, but zero windows
     on the scoring side: `n_scored=n_alarms=0`, `realized_far=NaN` (0/0 undefined) --
     binding dispatch semantics ("Empty scoring side for a label -> row with n_scored=0,
     NaN far (no crash)"). Every other field reports the real, successfully-calibrated
     threshold (informative on its own, even with nothing yet scored against it).
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
     """
-    return _FarRow(
+    return FarRow(
         label=label,
         n_calibration=float(threshold_result.n_calibration),
         n_scored=0.0,
@@ -307,16 +320,20 @@ def _empty_scoring_row(
     )
 
 
-def _scored_row(
+def far_row_scored(
     label: int | str,
     cfg: SweepConfig,
     threshold_result: ConformalThreshold,
     n_scored: int,
     n_alarms: int,
-) -> _FarRow:
+) -> FarRow:
     """A label with a real reference, threshold, and >= 1 scored window --
-    `realized_far = n_alarms / n_scored` per the dispatch's literal formula."""
-    return _FarRow(
+    `realized_far = n_alarms / n_scored` per the dispatch's literal formula.
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
+    """
+    return FarRow(
         label=label,
         n_calibration=float(threshold_result.n_calibration),
         n_scored=float(n_scored),
@@ -330,26 +347,32 @@ def _scored_row(
     )
 
 
-def _aggregate_pooled_row(rows: list[_FarRow], cfg: SweepConfig) -> _FarRow:
+def far_row_aggregate(rows: list[FarRow], cfg: SweepConfig) -> FarRow:
     """The extra `label="pooled"` row `run_sweep` appends when `conditioning=
     "per-state"` (module docstring point 4): realized FAR treating every non-excluded
     label's already-computed alarms/scored-counts as one combined bucket --
     `n_scored`/`n_alarms`/`n_calibration` are plain sums across every row that has real
-    (non-NaN) data (`_excluded_row`/`_no_conformal_data_row` rows contribute nothing,
-    identified via `math.isnan(r.n_scored)` rather than `r.excluded` alone since the
-    latter is False for `_no_conformal_data_row` despite it also carrying no real
-    counts). `threshold`/`achievable_alpha_floor` are NaN here: per-state conditioning
-    calibrates a DIFFERENT threshold per label, so no single scalar threshold value
-    describes this aggregate row. `low_confidence` is True iff ANY constituent label
-    (excluded or not) was low-confidence -- a conservative "is there a state anywhere
-    in this sweep we should not trust" flag.
+    (non-NaN) data (`far_row_excluded`/`far_row_no_conformal_data` rows contribute
+    nothing, identified via `math.isnan(r.n_scored)` rather than `r.excluded` alone
+    since the latter is False for `far_row_no_conformal_data` despite it also carrying
+    no real counts). `threshold`/`achievable_alpha_floor` are NaN here: per-state
+    conditioning calibrates a DIFFERENT threshold per label, so no single scalar
+    threshold value describes this aggregate row. `low_confidence` is True iff ANY
+    constituent label (excluded or not) was low-confidence -- a conservative "is there a
+    state anywhere in this sweep we should not trust" flag.
+
+    `rows` must be exactly the per-label rows accumulated so far by THIS caller's own
+    sweep (never including a previously-appended aggregate row itself) -- `run_sweep`
+    calls this with its own `far_rows` list before appending this function's return
+    value onto it; `scripts/run_step2.py`'s cross-day-per-state protocol (public since
+    package 2) follows the identical calling convention.
     """
     contributing = [r for r in rows if not math.isnan(r.n_scored)]
     total_scored = sum(int(r.n_scored) for r in contributing)
     total_alarms = sum(int(r.n_alarms) for r in contributing)
     total_calibration = sum(int(r.n_calibration) for r in contributing)
     any_low_confidence = any(r.low_confidence for r in rows)
-    return _FarRow(
+    return FarRow(
         label=_POOLED_ROW_LABEL,
         n_calibration=float(total_calibration),
         n_scored=float(total_scored),
@@ -363,7 +386,7 @@ def _aggregate_pooled_row(rows: list[_FarRow], cfg: SweepConfig) -> _FarRow:
     )
 
 
-def _scores_and_candidates(
+def scores_and_candidates(
     label: int | str,
     windows: np.ndarray,
     scores: np.ndarray,
@@ -373,6 +396,9 @@ def _scores_and_candidates(
 ) -> tuple[list[_ScoreRow], list[_CandidateRow]]:
     """Every scored window's `_ScoreRow`, plus the `min(top_k, len(windows))`
     lowest-p-value windows' `_CandidateRow`s (rank 1-based ascending).
+
+    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    builds the same rows.
 
     Tie-break order: p-value ascending, then SCORE DESCENDING, then window ascending
     (only to guarantee a fully deterministic order in the astronomically unlikely case
@@ -479,7 +505,7 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
     all_windows = np.concatenate([calibration_windows, scoring_windows])
     all_labels = sorted(np.unique(labels[all_windows]).tolist())
 
-    far_rows: list[_FarRow] = []
+    far_rows: list[FarRow] = []
     score_rows: list[_ScoreRow] = []
     candidate_rows: list[_CandidateRow] = []
 
@@ -498,12 +524,12 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
 
         if cfg.conditioning == "per-state":
             if label not in references.references:
-                far_rows.append(_excluded_row(label, cfg))
+                far_rows.append(far_row_excluded(label, cfg))
                 continue
             scorer = _make_scorer(cfg.scorer).fit(references.references[label])
             label_conformal_windows = conformal_windows[labels[conformal_windows] == label]
             if label_conformal_windows.shape[0] == 0:
-                far_rows.append(_no_conformal_data_row(label, cfg))
+                far_rows.append(far_row_no_conformal_data(label, cfg))
                 continue
             label_conformal_scores = scorer.score(prepared.features[label_conformal_windows])
             threshold_result = calibrate(label_conformal_scores, cfg.alpha)
@@ -517,7 +543,7 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
 
         label_scoring_windows = scoring_windows[labels[scoring_windows] == label]
         if label_scoring_windows.shape[0] == 0:
-            far_rows.append(_empty_scoring_row(label, cfg, threshold_result))
+            far_rows.append(far_row_empty_scoring(label, cfg, threshold_result))
             continue
 
         label_scores = scorer.score(prepared.features[label_scoring_windows])
@@ -526,15 +552,15 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
         n_scored = int(label_scoring_windows.shape[0])
         n_alarms = int(label_alarms.sum())
 
-        far_rows.append(_scored_row(label, cfg, threshold_result, n_scored, n_alarms))
-        new_scores, new_candidates = _scores_and_candidates(
+        far_rows.append(far_row_scored(label, cfg, threshold_result, n_scored, n_alarms))
+        new_scores, new_candidates = scores_and_candidates(
             label, label_scoring_windows, label_scores, label_p_values, label_alarms, cfg.top_k
         )
         score_rows.extend(new_scores)
         candidate_rows.extend(new_candidates)
 
     if cfg.conditioning == "per-state":
-        far_rows.append(_aggregate_pooled_row(far_rows, cfg))
+        far_rows.append(far_row_aggregate(far_rows, cfg))
 
     far_table = pd.DataFrame([asdict(r) for r in far_rows], columns=_FAR_TABLE_COLUMNS)
     scores_df = pd.DataFrame([asdict(r) for r in score_rows], columns=_SCORES_COLUMNS)
