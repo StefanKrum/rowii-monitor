@@ -196,6 +196,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values  # noqa: E402
+from rowii.anomaly.fusion import (  # noqa: E402
+    fisher_statistic,
+    split_branch_columns,
+    tippett_statistic,
+)
 from rowii.anomaly.recon import ConvAeScorer, LstmAeScorer, MlpAeScorer  # noqa: E402
 from rowii.anomaly.references import build_references, split_by_segments  # noqa: E402
 from rowii.anomaly.scorers import (  # noqa: E402
@@ -327,6 +332,24 @@ def build_parser() -> argparse.ArgumentParser:
             "Disable rowii.pipeline.prepare_run's on-disk feature cache "
             "(results/cache/<run>--<variant>.npz): always recompute features and "
             "never write a cache entry for this invocation."
+        ),
+    )
+    parser.add_argument(
+        "--score-fusion", action="store_true",
+        help=(
+            "Also compute the score-level fusion view (Fisher/Tippett p-value "
+            "combination of the audio and vibration branches, re-calibrated via "
+            "split conformal, design spec D5): writes far_table_scorefusion.csv + "
+            "scorefusion_notes.md into each combo dir alongside the normal sweep "
+            "outputs. Only valid with --protocol within-day and --variant fusion."
+        ),
+    )
+    parser.add_argument(
+        "--score-fusion-scorer", choices=("knn", "mahalanobis"), default="knn",
+        help=(
+            "Per-branch scorer for --score-fusion (default: knn); fit "
+            "independently on the audio branch's and the vibration branch's own "
+            "columns."
         ),
     )
     return parser
@@ -1325,6 +1348,310 @@ def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Score-level fusion view (Task 5, spec D5) -- Fisher/Tippett p-value combination of
+# the fusion variant's audio and vibration branches, re-calibrated via split conformal
+# (rowii.anomaly.fusion's own module docstring carries the full statistical argument).
+# ---------------------------------------------------------------------------
+
+_SCORE_FUSION_SEED = 7
+"""Top-level split seed for `_run_score_fusion_view` -- matches `SweepConfig.seed`'s
+own default (7); the nested fit/conformal split below uses `_SCORE_FUSION_SEED + 1`
+(=8), mirroring `run_sweep`'s own `cfg.seed + 1` convention exactly (orchestrator
+resolution 4) so a `--score-fusion` run and a same-run `run_sweep` call partition one
+`PreparedRun`'s windows identically."""
+
+_SCORE_FUSION_MIN_REF = 20
+"""Minimum fit-side windows a label needs before `_run_score_fusion_view` fits real
+per-branch scorers for it -- matches `SweepConfig.min_ref`'s own default, and gates on
+the SAME window COUNT `rowii.anomaly.references.build_references` gates on (both
+branches share the same window set, just different feature columns)."""
+
+_SCORE_FUSION_COLUMNS: tuple[str, ...] = (
+    "rule", "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+    "low_confidence",
+)
+
+_SCORE_FUSION_RULES: tuple[str, ...] = ("fisher", "tippett", "audio-only", "vib-only")
+"""The four `far_table_scorefusion.csv` rules (orchestrator resolution 4): the two
+COMBINED rules plus the two single-branch baselines, all evaluated through the exact
+same p-value-then-recalibrate pipeline (`_score_fusion_statistic`) for a fair,
+apples-to-apples comparison."""
+
+
+@dataclass
+class _ScoreFusionRow:
+    """Mutable row builder for `far_table_scorefusion.csv` -- one instance per
+    (label, rule) pair, mirroring `rowii.anomaly.sweep.FarRow`'s own "converted to a
+    plain dict via `dataclasses.asdict` at the very end" pattern. Deliberately
+    narrower than `FarRow`: this view carries no `threshold`/`nominal_alpha`/
+    `achievable_alpha_floor`/`excluded` columns (orchestrator resolution 4's literal
+    column list) -- each rule's own threshold lives on a different, incomparable
+    scale (a Fisher chi-square-shaped statistic vs. a Tippett `[0, 1)` statistic), so
+    comparing rules only ever needs the REALIZED outcome, not the threshold value
+    that produced it."""
+
+    rule: str
+    label: int | str
+    n_calibration: float
+    n_scored: float
+    n_alarms: float
+    realized_far: float
+    low_confidence: bool
+
+
+def _score_fusion_statistic(rule: str, p_a: np.ndarray, p_v: np.ndarray) -> np.ndarray:
+    """The one real-valued, higher-is-more-anomalous combined statistic for *rule*,
+    from a label's own branch p-value arrays (*p_a*/*p_v*, aligned, same windows).
+
+    `"audio-only"`/`"vib-only"` route through this SAME p-value machinery as
+    `"fisher"`/`"tippett"` rather than the branch's raw score directly (orchestrator
+    resolution 4's "through the same conformal path") -- `1.0 - p` is `rowii.anomaly.
+    fusion.tippett_statistic` degenerated to a single branch (`tippett_statistic(p, p)
+    == 1.0 - p`), so all four rules are, structurally, "some deterministic reduction
+    of `(p_a, p_v)` to one number", differing only in how much of the OTHER branch's
+    evidence they use -- both (fisher), the stronger one (tippett), or neither
+    (audio-only/vib-only).
+
+    Raises:
+        ValueError: if `rule` is not one of `_SCORE_FUSION_RULES`.
+    """
+    if rule == "fisher":
+        return fisher_statistic(p_a, p_v)
+    if rule == "tippett":
+        return tippett_statistic(p_a, p_v)
+    if rule == "audio-only":
+        audio_only: np.ndarray = 1.0 - p_a
+        return audio_only
+    if rule == "vib-only":
+        vib_only: np.ndarray = 1.0 - p_v
+        return vib_only
+    raise ValueError(f"rule must be one of {_SCORE_FUSION_RULES!r}, got {rule!r}")
+
+
+def _score_fusion_low_confidence_rows(label: int | str) -> list[_ScoreFusionRow]:
+    """All four `_SCORE_FUSION_RULES` rows for *label*, NaN metrics + `low_confidence
+    = True` -- `_score_fusion_rows_for_label`'s shared fallback when *label* cannot
+    get a real per-branch reference or threshold at all (mirrors `rowii.anomaly.
+    sweep.far_row_excluded`'s own "no reliable calibration exists, don't alarm under
+    a false promise" convention, adapted to this view's narrower schema)."""
+    return [
+        _ScoreFusionRow(rule, label, math.nan, math.nan, math.nan, math.nan, True)
+        for rule in _SCORE_FUSION_RULES
+    ]
+
+
+def _score_fusion_rows_for_label(
+    label: int | str,
+    prepared: PreparedRun,
+    labels: np.ndarray,
+    audio_idx: np.ndarray,
+    vib_idx: np.ndarray,
+    fit_windows: np.ndarray,
+    conformal_windows: np.ndarray,
+    scoring_windows: np.ndarray,
+    alpha: float,
+    scorer_name: str,
+) -> list[_ScoreFusionRow]:
+    """One `_ScoreFusionRow` per rule (`_SCORE_FUSION_RULES`) for *label* -- the four
+    rules share every gating condition below (the same fit/conformal/scoring window
+    sets per label), so a label that cannot get a real per-branch reference or
+    threshold reports ALL FOUR rules as low-confidence (`_score_fusion_low_confidence_
+    rows`) rather than partially succeeding.
+
+    Args:
+        label: The state/cluster id (or GT state string) to build rows for.
+        prepared: The `fusion`(-beats)-variant `PreparedRun` being scored.
+        labels: Per-window labels aligned with `prepared.features`.
+        audio_idx: Audio-branch column indices (`rowii.anomaly.fusion.
+            split_branch_columns`).
+        vib_idx: Vibration-branch column indices, same source.
+        fit_windows: This run's fit-side window indices (branch scorers are fit on
+            *label*'s own subset of these).
+        conformal_windows: This run's conformal-side window indices (branch p-values
+            and the combined statistic's threshold are calibrated on *label*'s own
+            subset of these).
+        scoring_windows: This run's scoring-side window indices (alarms are raised on
+            *label*'s own subset of these).
+        alpha: Nominal false-alarm rate for `calibrate`.
+        scorer_name: `"knn"` or `"mahalanobis"` -- fit independently per branch.
+
+    Returns:
+        Exactly `len(_SCORE_FUSION_RULES)` rows for *label*.
+    """
+    label_fit = fit_windows[labels[fit_windows] == label]
+    if label_fit.shape[0] < _SCORE_FUSION_MIN_REF:
+        return _score_fusion_low_confidence_rows(label)
+
+    label_conformal = conformal_windows[labels[conformal_windows] == label]
+    if label_conformal.shape[0] == 0:
+        return _score_fusion_low_confidence_rows(label)
+
+    fit_features = prepared.features[label_fit]
+    scorer_a = _make_scorer(scorer_name).fit(fit_features[:, audio_idx])
+    scorer_v = _make_scorer(scorer_name).fit(fit_features[:, vib_idx])
+
+    conformal_features = prepared.features[label_conformal]
+    conformal_scores_a = scorer_a.score(conformal_features[:, audio_idx])
+    conformal_scores_v = scorer_v.score(conformal_features[:, vib_idx])
+    # Self-referential (each conformal-side window's p-value against the FULL
+    # conformal-side pool, itself included) -- gives the conformal-side combined
+    # statistic the same shape/role as any other calibration-score array `calibrate`
+    # expects (verified: tests/test_fusion.py's guarantee-restored test exercises
+    # this exact construction against the exact Beta band).
+    p_a_conformal = p_values(conformal_scores_a, conformal_scores_a)
+    p_v_conformal = p_values(conformal_scores_v, conformal_scores_v)
+
+    label_scoring = scoring_windows[labels[scoring_windows] == label]
+    n_scored = int(label_scoring.shape[0])
+
+    if n_scored == 0:
+        empty_rows: list[_ScoreFusionRow] = []
+        for rule in _SCORE_FUSION_RULES:
+            conformal_stat = _score_fusion_statistic(rule, p_a_conformal, p_v_conformal)
+            threshold = calibrate(conformal_stat, alpha)
+            empty_rows.append(_ScoreFusionRow(
+                rule, label, float(threshold.n_calibration), 0.0, 0.0, math.nan,
+                threshold.low_confidence,
+            ))
+        return empty_rows
+
+    scoring_features = prepared.features[label_scoring]
+    scoring_scores_a = scorer_a.score(scoring_features[:, audio_idx])
+    scoring_scores_v = scorer_v.score(scoring_features[:, vib_idx])
+    p_a_scoring = p_values(scoring_scores_a, conformal_scores_a)
+    p_v_scoring = p_values(scoring_scores_v, conformal_scores_v)
+
+    scored_rows: list[_ScoreFusionRow] = []
+    for rule in _SCORE_FUSION_RULES:
+        conformal_stat = _score_fusion_statistic(rule, p_a_conformal, p_v_conformal)
+        scoring_stat = _score_fusion_statistic(rule, p_a_scoring, p_v_scoring)
+        threshold = calibrate(conformal_stat, alpha)
+        alarms = scoring_stat > threshold.threshold
+        n_alarms = int(alarms.sum())
+        scored_rows.append(_ScoreFusionRow(
+            rule, label, float(threshold.n_calibration), float(n_scored),
+            float(n_alarms), n_alarms / n_scored, threshold.low_confidence,
+        ))
+    return scored_rows
+
+
+def _run_score_fusion_view(
+    prepared: PreparedRun, labels: np.ndarray, alpha: float, scorer_name: str,
+) -> pd.DataFrame:
+    """Score-level fusion FAR table for one (run, labels_mode) -- Fisher/Tippett
+    p-value combination of the `fusion` variant's audio and vibration branches,
+    RE-CALIBRATED with split conformal (`rowii.anomaly.fusion` module docstring;
+    design spec D5). Mirrors `rowii.anomaly.sweep.run_sweep`'s own three-way split
+    exactly (`_SCORE_FUSION_SEED`=7 top-level, `_SCORE_FUSION_SEED + 1`=8 nested) so a
+    `--score-fusion` run and a same-run `run_sweep` call partition *prepared*'s
+    windows identically.
+
+    Args:
+        prepared: A `fusion`(-beats)-variant `PreparedRun` (caller-guaranteed by the
+            `--score-fusion` CLI guard, `main`'s `parser.error` check).
+        labels: Per-window labels aligned with `prepared.features`, same convention as
+            `run_sweep`'s own `labels` argument.
+        alpha: Nominal false-alarm rate target for `calibrate`, shared by every rule.
+        scorer_name: `"knn"` or `"mahalanobis"` (`--score-fusion-scorer`) -- the SAME
+            scorer type is fit independently on each branch's own columns.
+
+    Returns:
+        A DataFrame with columns `rule, label, n_calibration, n_scored, n_alarms,
+        realized_far, low_confidence` -- `_SCORE_FUSION_RULES` (`"fisher"`,
+        `"tippett"`, `"audio-only"`, `"vib-only"`) rows per label seen in the
+        calibration or scoring windows.
+
+    Raises:
+        ValueError: propagated from `rowii.anomaly.fusion.split_branch_columns` if
+            *prepared*'s feature names do not split cleanly into audio/vibration
+            branches; from `split_by_segments` if the three-way split cannot be
+            formed (too few segments -- identical failure mode to `run_sweep`
+            itself); from `_make_scorer(...).fit(...)` if a branch's own fit-side
+            reference is degenerate for *scorer_name* (e.g. a zero-norm row for
+            `KnnScorer`'s cosine metric).
+    """
+    audio_idx, vib_idx = split_branch_columns(prepared.feature_names)
+
+    top_split = split_by_segments(
+        prepared.segment_ids, prepared.valid_mask, 0.5, _SCORE_FUSION_SEED
+    )
+    calibration_windows = top_split.calibration_windows
+    scoring_windows = top_split.scoring_windows
+
+    calib_mask = np.zeros(prepared.features.shape[0], dtype=bool)
+    calib_mask[calibration_windows] = True
+    nested_split = split_by_segments(
+        prepared.segment_ids, calib_mask, 0.5, _SCORE_FUSION_SEED + 1
+    )
+    fit_windows = nested_split.calibration_windows
+    conformal_windows = nested_split.scoring_windows
+
+    all_windows = np.concatenate([calibration_windows, scoring_windows])
+    all_labels = sorted(np.unique(labels[all_windows]).tolist())
+
+    rows: list[_ScoreFusionRow] = []
+    for label in all_labels:
+        rows.extend(_score_fusion_rows_for_label(
+            label, prepared, labels, audio_idx, vib_idx,
+            fit_windows, conformal_windows, scoring_windows, alpha, scorer_name,
+        ))
+
+    return pd.DataFrame([asdict(r) for r in rows], columns=list(_SCORE_FUSION_COLUMNS))
+
+
+_SCORE_FUSION_NOTES = """# Score-level fusion notes
+
+## Guarantee restoration
+
+`far_table_scorefusion.csv`'s `fisher`/`tippett` rows combine the audio and vibration
+branches' own conformal p-values into one statistic per window, then RE-CALIBRATE that
+combined statistic with the same split-conformal machinery every other Step-2 view
+uses (`rowii.anomaly.conformal.calibrate`, held out on the conformal-side windows).
+Because the combination is used only as a deterministic score transform -- never
+compared against the classical Fisher/Tippett null distributions, which assume the two
+branches are independent -- the resulting alarm rule's distribution-free FAR guarantee
+holds regardless of how the audio and vibration branches are statistically dependent
+(see `rowii.anomaly.fusion`'s module docstring for the full argument, and
+`tests/test_fusion.py`'s guarantee-restored test for the empirical check against
+correlated synthetic branches).
+
+## Honesty notes
+
+- `audio-only`/`vib-only` rows go through the EXACT SAME p-value-then-re-calibrate
+  pipeline as `fisher`/`tippett` (not a shortcut through the branch's raw score), so
+  every row in this table is comparable on equal footing.
+- No claim is made that Fisher dominates Tippett or vice versa in general: Fisher
+  requires corroboration from both branches (a single very anomalous branch is damped
+  by the other branch's own p-value), Tippett fires on the single most extreme branch
+  alone -- which is better depends on how the underlying anomaly actually shows up
+  across the two sensor modalities, an empirical question per dataset/finding, not a
+  property of the method.
+- A label whose fit-side window count falls below the same `min_ref=20` floor the rest
+  of Step-2 uses (or has zero conformal-side windows) reports `low_confidence=True`
+  with NaN metrics for all four rules and never contributes alarms -- the same "do not
+  alarm under a false promise" convention as `rowii.anomaly.sweep.far_row_excluded`.
+- This view only ever runs for `--variant fusion` under `--protocol within-day`
+  (`--score-fusion`'s own CLI guard) -- it needs both audio and vibration feature
+  columns on one grid, which only the `fusion`(-beats) variants provide.
+"""
+
+
+def _write_score_fusion_outputs(out_dir: Path, far_table: pd.DataFrame) -> None:
+    """Write `far_table_scorefusion.csv` + `scorefusion_notes.md` into *out_dir* (an
+    existing within-day combo directory, `_write_sweep_outputs`'s own `out_dir`) --
+    `far_table["label"]` is coerced to `str` first, mirroring `_write_sweep_outputs`'s
+    own label-dtype convention (detected cluster ids are ints; keeping the column
+    homogeneous avoids the same round-trip hazard `test_per_state_far_table_and_
+    scores_label_dtypes_merge_cleanly` guards against for the main far_table).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table = far_table.copy()
+    table["label"] = table["label"].astype(str)
+    table.to_csv(out_dir / "far_table_scorefusion.csv", index=False)
+    (out_dir / "scorefusion_notes.md").write_text(_SCORE_FUSION_NOTES)
+
+
+# ---------------------------------------------------------------------------
 # within-day orchestration
 # ---------------------------------------------------------------------------
 
@@ -1341,6 +1668,8 @@ def _run_within_day_for_run(
     top_k: int,
     *,
     use_cache: bool,
+    score_fusion: bool = False,
+    score_fusion_scorer: str = "knn",
 ) -> int:
     """Prepare *run*, attach labels once, then run one sweep per (conditioning,
     scorer) pair, writing that combo's outputs/summary-row/register-section. Returns
@@ -1354,6 +1683,21 @@ def _run_within_day_for_run(
     principle the module docstring already documents for a `run_sweep` `ValueError`,
     extended to this earlier failure mode (Task S7 real-data finding,
     `010726-tu1-afternoon`).
+
+    `score_fusion` (`--score-fusion`, Task 5, spec D5; caller-guaranteed `variant ==
+    "fusion"` via `main`'s own `parser.error` guard): after each combo's normal sweep
+    outputs are written, ALSO run `_run_score_fusion_view` over the SAME `(sweep_
+    prepared, labels)` and write `far_table_scorefusion.csv` + `scorefusion_notes.md`
+    into that SAME combo's `out_dir`. The score-fusion view does not depend on
+    *conditioning*/*scorer* at all (it has its own independent per-branch scorer,
+    *score_fusion_scorer*), so requesting multiple conditionings/scorers together
+    with `--score-fusion` writes an IDENTICAL copy of the view into each combo dir --
+    a deliberately simple "recompute per combo iteration" choice, not a shared/
+    deduplicated write. A score-fusion failure (`ValueError` -- e.g. `split_branch_
+    columns` finding the variant's feature names do not split cleanly) is logged and
+    skipped WITHOUT affecting that combo's own already-written normal sweep outputs
+    or `n_written` count -- this view is a strict addition, never a gate on the base
+    sweep.
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -1414,6 +1758,21 @@ def _run_within_day_for_run(
             alpha, result.candidates, sweep_prepared.grid, scada,
         )
         n_written += 1
+
+        if score_fusion:
+            try:
+                sf_table = _run_score_fusion_view(
+                    sweep_prepared, labels, alpha, score_fusion_scorer,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "run_step2: score-fusion view failed for %s/%s-%s/%s-%s (%s) -- "
+                    "skipping (that combo's normal sweep outputs above are "
+                    "unaffected)",
+                    run.name, variant, labels_mode, conditioning, scorer, exc,
+                )
+            else:
+                _write_score_fusion_outputs(out_dir, sf_table)
     return n_written
 
 
@@ -1675,6 +2034,11 @@ def main(argv: list[str] | None = None) -> int:
             f"--protocol {args.protocol} needs --run 'all' or >= 2 comma-separated "
             "run names (a single run has no cross-day pairs)"
         )
+    if args.score_fusion and (args.protocol != "within-day" or args.variant != "fusion"):
+        parser.error(
+            "--score-fusion requires --protocol within-day and --variant fusion "
+            f"(got --protocol {args.protocol!r} --variant {args.variant!r})"
+        )
 
     cfg = load_config()
     index = discover(cfg.data_root)
@@ -1705,6 +2069,8 @@ def main(argv: list[str] | None = None) -> int:
             n_combos += _run_within_day_for_run(
                 run, args.variant, cfg, index, scorers, conditionings,
                 args.labels, args.alpha, args.top_k, use_cache=use_cache,
+                score_fusion=args.score_fusion,
+                score_fusion_scorer=args.score_fusion_scorer,
             )
         print(
             f"run_step2: wrote {n_combos} within-day combo(s) across {len(runs)} run(s) "

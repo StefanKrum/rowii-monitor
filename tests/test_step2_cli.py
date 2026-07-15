@@ -1094,3 +1094,82 @@ def test_within_day_run_list_processes_each_named_run(tmp_path, monkeypatch) -> 
 
     summary = pd.read_csv(tmp_path / "results" / "step2" / "summary.csv")
     assert list(summary["run"]) == ["000001-tu", "000002-tu"]  # in the given order
+
+
+# ---------------------------------------------------------------------------
+# 11. --score-fusion view (Task 5, spec D5)
+# ---------------------------------------------------------------------------
+
+
+def test_score_fusion_view_end_to_end(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+            "--conditioning", "per-state", "--scorer", "knn", "--score-fusion",
+        ]
+    )
+    assert exit_code == 0
+
+    combo_dir = (
+        tmp_path / "results" / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "per-state-knn"
+    )
+    sf_path = combo_dir / "far_table_scorefusion.csv"
+    assert sf_path.is_file(), f"missing {sf_path}"
+    sf_table = pd.read_csv(sf_path)
+    assert list(sf_table.columns) == [
+        "rule", "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+        "low_confidence",
+    ]
+    assert set(sf_table["rule"]) == {"fisher", "tippett", "audio-only", "vib-only"}
+    # every label appears exactly once per rule
+    for rule in ("fisher", "tippett", "audio-only", "vib-only"):
+        assert (sf_table["rule"] == rule).sum() == sf_table["label"].nunique()
+
+    # the fixture was sized (file docstring, top of file) to give run_sweep's default
+    # min_ref=20 at least one non-excluded label -- score-fusion reuses the SAME
+    # split/min_ref, so at least one row must be a real (non-low-confidence, actually
+    # scored) row, not just NaN placeholders everywhere.
+    real_rows = sf_table[~sf_table["low_confidence"]]
+    assert len(real_rows) > 0
+    assert (real_rows["n_scored"] > 0).any()
+
+    notes_path = combo_dir / "scorefusion_notes.md"
+    assert notes_path.is_file(), f"missing {notes_path}"
+    notes_text = notes_path.read_text()
+    assert "Guarantee restoration" in notes_text
+    assert "Honesty notes" in notes_text
+
+
+def test_score_fusion_requires_within_day_and_fusion_variant(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """CLI-level guard (orchestrator resolution 4): `--score-fusion` combined with a
+    non-`fusion` variant or a non-`within-day` protocol must be rejected before any
+    run is ever prepared -- mirrors `test_gt_labels_mode_rejected`'s own
+    `parser.error(...)` precedent for `--protocol cross-day-per-state --labels gt`."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--score-fusion", "--variant", "audio"])
+    assert exc_info.value.code == 2
+    # Specific enough to only match main()'s own semantic parser.error (orchestrator
+    # resolution 4), not argparse's generic "unrecognized arguments" rejection.
+    assert "requires --protocol within-day and --variant fusion" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as exc_info2:
+        run_step2.main(
+            ["--score-fusion", "--variant", "fusion", "--protocol", "cross-day"]
+        )
+    assert exc_info2.value.code == 2
+    assert "requires --protocol within-day and --variant fusion" in capsys.readouterr().err
