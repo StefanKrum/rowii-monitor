@@ -38,10 +38,14 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from rowii.io.gantner import read_header
 
 logger = logging.getLogger(__name__)
 
@@ -362,3 +366,195 @@ def discover(data_root: Path) -> RecordingIndex:
         betriebsdaten=pooled_betriebsdaten,
         betriebsdaten_by_day=betriebsdaten_by_day,
     )
+
+
+# ---------------------------------------------------------------------------
+# DAQ epoch-2000 clock quirk (Task 10): derived per-run / per-Betriebsdaten-file-set
+# offset that maps the raw on-disk time axis onto true UTC. Every Gantner UDBF file
+# in this dataset (audio, vibration, AND Betriebsdaten) carries binary frame
+# timestamps from a DAQ clock that counts seconds since 2000-01-01 LOCAL time but
+# declares them as Unix (1970) nanoseconds -- `GantnerHeader.t0_ns`, read naively,
+# therefore decodes to a wall-clock-of-day that matches the file's true local time
+# exactly, under a fixed, wrong epoch YEAR (see `run_utc_offset_ns`'s own docstring
+# for the worked numeric example). The offset is always derived, never hardcoded,
+# since it depends on which local UTC offset (CEST/CET) was in effect when the
+# recording was made -- `_median_utc_offset_ns` below is the one place that
+# median/round/plausibility-gate/per-file-warning algorithm lives, shared by
+# `run_utc_offset_ns` (a burst `Run`, D1) and `betriebsdaten_utc_offset_ns` (a flat
+# Betriebsdaten file list, D3).
+# ---------------------------------------------------------------------------
+
+_HOUR_NS = 3_600_000_000_000
+"""One hour in nanoseconds -- the DAQ-clock-quirk offset (epoch-2000-as-1970 shift
+minus a whole local UTC offset) is always an exact multiple of this."""
+_OFFSET_PLAUSIBILITY_GATE_NS = _HOUR_NS
+"""Below this magnitude, a derived offset is treated as ordinary DAQ jitter on an
+ALREADY-correct clock (e.g. a future dataset), not a genuine quirky-clock shift --
+`_median_utc_offset_ns` returns 0 rather than inventing a tiny rounded-to-an-hour
+offset for data that was never quirky to begin with."""
+_OFFSET_WARN_TOLERANCE_NS = 2_000_000_000
+"""Max per-file deviation from the derived, rounded-to-the-hour offset before
+`_median_utc_offset_ns` logs a WARNING for that file. Filename-second-truncation
+scatter is documented at 0-900 ms (task-10-brief.md); 2 s leaves a comfortable
+margin above that while still catching a genuinely mismatched file."""
+
+
+def _hint_utc_ns(hint: datetime) -> int:
+    """*hint* (a tz-aware `datetime`, e.g. `BurstFile.start_utc_hint`) as nanoseconds
+    since the Unix epoch. `round()`, not truncation, of the sub-nanosecond float
+    product -- see `_median_utc_offset_ns`'s own docstring for why the residual
+    float-precision noise this can leave (up to a few hundred ns at 2020s-scale
+    timestamps) never affects the final derived offset."""
+    return round(hint.timestamp() * 1e9)
+
+
+def _median_utc_offset_ns(
+    entries: Sequence[tuple[Path, int, datetime]], *, context: str
+) -> int:
+    """Shared derivation behind `run_utc_offset_ns` and `betriebsdaten_utc_offset_ns`:
+    the median raw offset (`hint_utc_ns - header_t0_ns`) over *entries*, rounded to
+    the NEAREST HOUR, 0 below the 1-hour plausibility gate (`_OFFSET_PLAUSIBILITY_
+    GATE_NS`). Logs one WARNING per entry whose own raw offset deviates from the
+    rounded value by more than `_OFFSET_WARN_TOLERANCE_NS`, naming *context* (the
+    run, or the Betriebsdaten file set) and that entry's file.
+
+    The nearest-hour rounding is not cosmetic: the true offset (epoch-2000 shift
+    minus a whole local UTC offset, both exact numbers of seconds divisible by
+    3600) IS always an exact multiple of one hour, so rounding the noisy median
+    recovers it exactly regardless of any sub-second scatter in the inputs
+    (filename-second truncation) or sub-microsecond float-precision noise from
+    `_hint_utc_ns`'s `datetime.timestamp() * 1e9` product (at 2020s-scale
+    timestamps this product needs ~61 bits to represent exactly, a few bits past
+    float64's 52-bit mantissa -- utterly negligible next to the half-an-hour of
+    slack the rounding step tolerates).
+
+    Args:
+        entries: `(path, header_t0_ns, start_utc_hint)` triples -- *path* is used
+            only for the per-entry deviation warning's message.
+        context: Human-readable label for the warning message (e.g. `f"run
+            {run.name!r}"` or `"Betriebsdaten set"`).
+
+    Returns:
+        The derived offset in nanoseconds: 0 if *entries* is empty or the median
+        raw offset's magnitude is below the 1-hour plausibility gate, else the
+        rounded-to-the-hour value.
+    """
+    if not entries:
+        return 0
+    raw_offsets = [_hint_utc_ns(hint) - t0_ns for _, t0_ns, hint in entries]
+    median_offset = int(statistics.median(raw_offsets))
+    if abs(median_offset) < _OFFSET_PLAUSIBILITY_GATE_NS:
+        return 0
+    rounded = round(median_offset / _HOUR_NS) * _HOUR_NS
+    for (path, _t0_ns, _hint), raw_offset in zip(entries, raw_offsets, strict=True):
+        deviation_ns = raw_offset - rounded
+        if abs(deviation_ns) > _OFFSET_WARN_TOLERANCE_NS:
+            logger.warning(
+                "%s: file %s raw UTC offset %.3fs deviates from the derived, "
+                "rounded-to-the-hour offset %.3fs by %.3fs (> 2s tolerance)",
+                context, path.name, raw_offset / 1e9, rounded / 1e9, deviation_ns / 1e9,
+            )
+    return rounded
+
+
+def run_utc_offset_ns(run: Run) -> int:
+    """Nanosecond offset that maps this run's raw DAQ time axis onto true UTC
+    (documented DAQ quirk: clock counts from 2000-01-01 local time but labels
+    the count as Unix nanoseconds). Derived, never hardcoded: median over all
+    of the run's files of (start_utc_hint − header.t0_ns), rounded to the
+    NEAREST HOUR (the true offset is epoch-2000-shift minus the local UTC
+    offset, always a whole hour; sub-second scatter comes from
+    filename-second truncation). Logs one WARNING naming the run and the file
+    if any file's raw offset deviates from the rounded value by more than 2 s.
+
+    Example (verified against the real June-2026 delivery): a file whose
+    `header.t0_ns` decodes (naively, as Unix nanoseconds) to
+    `1996-06-27T06:41:03Z` and whose filename-derived `start_utc_hint` is
+    `2026-06-27T04:41:03Z` (the true UTC instant -- local Europe/Vienna
+    wall-clock digits `06:41:03` on 2026-06-27, CEST = UTC+2) yields an
+    offset of `946_677_600` seconds (`946_684_800` s epoch-2000 shift minus
+    `7_200` s CEST) -- exactly a whole number of hours (262,966), so the
+    rounding step is a no-op here; winter (CET, UTC+1) data would instead
+    give `946_681_200` s (`946_684_800` s minus `3_600` s).
+
+    Header reads go via `read_header` (cheap -- first ~1000 frames only, never
+    a full-file read); every file across every stream of *run* contributes to
+    the median (not just one variant's own streams), for the largest robust
+    sample. A run with a CORRECT clock (a future dataset) comes out as offset
+    0 via the plausibility gate (`_median_utc_offset_ns`): if the median raw
+    offset magnitude is below 1 hour, this returns 0 rather than inventing a
+    spurious rounded-to-an-hour shift for data that was never quirky.
+
+    Args:
+        run: The `Run` (burst files by stream) to derive the offset for.
+
+    Returns:
+        The derived offset in nanoseconds (0 for an empty run, or one with no
+        genuine quirky-clock shift).
+    """
+    entries = [
+        (bf.path, read_header(bf.path).t0_ns, bf.start_utc_hint)
+        for files in run.files.values()
+        for bf in files
+    ]
+    return _median_utc_offset_ns(entries, context=f"run {run.name!r}")
+
+
+def _betriebsdaten_utc_hint(path: Path) -> datetime | None:
+    """*path*'s own filename-derived local-time-of-day, converted to UTC (mirrors
+    `_parse_burst_filename`'s local -> UTC conversion, applied to the Betriebsdaten
+    filename convention instead: `_BETRIEBSDATEN_RE`, whole-hour local time only).
+    `None` if *path*'s name does not match that pattern at all.
+    """
+    m = _BETRIEBSDATEN_RE.match(path.name)
+    if m is None:
+        return None
+    local_dt = datetime.strptime(
+        f"{m['date']}_{m['hour']}-00-00", "%Y-%m-%d_%H-%M-%S"
+    ).replace(tzinfo=_LOCAL_TZ)
+    return local_dt.astimezone(ZoneInfo("UTC"))
+
+
+def betriebsdaten_utc_offset_ns(files: Sequence[Path]) -> int:
+    """Nanosecond offset that maps a Betriebsdaten file set's raw DAQ time axis onto
+    true UTC -- mirrors `run_utc_offset_ns` (D1: same DAQ-clock quirk, same
+    median/round-to-the-hour/plausibility-gate derivation, see that function's own
+    docstring for the numeric worked example and full rationale) applied to the
+    SCADA Betriebsdaten file set instead of a burst `Run`.
+
+    Betriebsdaten filenames carry no pre-parsed `BurstFile.start_utc_hint` (unlike
+    burst files), so this function derives that hint itself, per file
+    (`_betriebsdaten_utc_hint`, `_BETRIEBSDATEN_RE`'s local Europe/Vienna
+    wall-clock convention), before delegating to the shared `_median_utc_offset_ns`.
+    The SCADA clock is independent hardware from the audio/vibration DAQ, so this
+    function's own derivation must NEVER be skipped in favour of blindly reusing
+    `run_utc_offset_ns`'s result for the corresponding audio run -- the two are
+    expected to agree closely but are derived independently; a caller that has
+    both values is responsible for cross-checking them (e.g.
+    `rowii.scada.labels.load_scada_window_means`'s `audio_run_offset_ns`
+    parameter warns if they disagree by more than 2 s).
+
+    Files whose name does not match the Betriebsdaten filename pattern at all are
+    skipped (no hint can be derived for them) -- every real Betriebsdaten file
+    matches by construction (`_discover_betriebsdaten`), so this only matters for a
+    caller passing arbitrarily-named files (e.g. a synthetic test fixture that was
+    never trying to model the DAQ-clock quirk in the first place), for which this
+    function is then a safe no-op (returns 0, same as the plausibility gate's own
+    "nothing quirky here" outcome).
+
+    Args:
+        files: Betriebsdaten file paths (typically the day-scoped subset already
+            selected for one run's grid, or a whole day's files).
+
+    Returns:
+        The derived offset in nanoseconds (0 if *files* is empty, none of its
+        names match the Betriebsdaten filename pattern, or there is no genuine
+        quirky-clock shift to derive).
+    """
+    entries: list[tuple[Path, int, datetime]] = []
+    for path in files:
+        hint = _betriebsdaten_utc_hint(path)
+        if hint is None:
+            continue
+        entries.append((path, read_header(path).t0_ns, hint))
+    return _median_utc_offset_ns(entries, context="Betriebsdaten set")

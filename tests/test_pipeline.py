@@ -10,6 +10,7 @@ by hand for a focused unit test.
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -260,3 +261,159 @@ def test_prepare_run_unknown_variant_raises_value_error(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="unknown variant"):
         prepare_run(run, "not-a-real-variant", cfg, use_cache=False)
+
+
+# ---------------------------------------------------------------------------
+# 4. build_run_grid: DAQ epoch-2000 clock quirk (Task 10, D2) -- the run's derived
+# UTC offset (rowii.io.dataset.run_utc_offset_ns) must be baked into grid.t0_ns
+# BEFORE common_grid, so PreparedRun.grid.t0_ns is true UTC, not the raw DAQ axis.
+# ---------------------------------------------------------------------------
+
+
+def _naive_unix_decode_ns(dt: datetime) -> int:
+    """Nanoseconds since the Unix epoch that *dt* decodes to when its own digits
+    are read naively AS IF it already were a Unix timestamp -- mirrors
+    `tests.test_dataset._naive_unix_decode_ns` (duplicated, not imported)."""
+    return int((dt - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
+
+
+# CEST (UTC+2) worked example, identical constant to tests/test_dataset.py's own.
+_CEST_OFFSET_NS = 946_677_600 * 10**9
+
+
+def _quirky_two_stream_run(burst_dir: Path, *, n_seconds: int = 2) -> Run:
+    """Two single-file streams sharing the SAME quirky raw axis: `header.t0_ns`
+    decodes naively to `1996-06-27T06:41:03Z`; the true instant (filename hint) is
+    `2026-06-27T04:41:03Z` -- the CEST worked example, same as
+    `tests/test_dataset.py`'s own `run_utc_offset_ns` tests."""
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    raw_t0_ns = _naive_unix_decode_ns(datetime(1996, 6, 27, 6, 41, 3, tzinfo=UTC))
+    hint = datetime(2026, 6, 27, 4, 41, 3, tzinfo=UTC)
+    files = {
+        "RAWGeneratorMic__0": [
+            _burst(
+                burst_dir / "gen_mic.dat", "RAWGeneratorMic__0", n_seconds,
+                t0_ns=raw_t0_ns, start_utc_hint=hint,
+            )
+        ],
+        "RAWTurbineMic__1": [
+            _burst(
+                burst_dir / "tur_mic.dat", "RAWTurbineMic__1", n_seconds,
+                t0_ns=raw_t0_ns, start_utc_hint=hint,
+            )
+        ],
+    }
+    return Run(name="quirky-two-stream-run", files=files, day_root=burst_dir)
+
+
+def test_build_run_grid_shifts_t0_ns_onto_true_utc_for_quirky_clock(tmp_path) -> None:
+    run = _quirky_two_stream_run(tmp_path / "burst")
+
+    grid = pipeline.build_run_grid(
+        run, ("RAWGeneratorMic__0", "RAWTurbineMic__1"), window_s=1.0
+    )
+
+    expected_true_utc_t0_ns = _naive_unix_decode_ns(datetime(2026, 6, 27, 4, 41, 3, tzinfo=UTC))
+    assert grid.t0_ns == expected_true_utc_t0_ns
+    assert grid.n_windows == 2  # unaffected by the axis shift -- 2 s of data, 1 s windows
+
+
+def test_build_run_grid_leaves_already_correct_clock_grid_unshifted(tmp_path) -> None:
+    # header.t0_ns IS the true UTC instant already (a few seconds of ordinary DAQ
+    # jitter aside, well under the 1-hour plausibility gate) -- grid.t0_ns must come
+    # out exactly as `common_grid` alone would have computed it, no offset invented.
+    burst_dir = tmp_path / "burst"
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    hint = datetime(2030, 3, 1, 12, 0, 0, tzinfo=UTC)
+    true_t0_ns = _naive_unix_decode_ns(hint)
+    files = {
+        "RAWGeneratorMic__0": [
+            _burst(
+                burst_dir / "gen_mic.dat", "RAWGeneratorMic__0", 2,
+                t0_ns=true_t0_ns, start_utc_hint=hint,
+            )
+        ],
+        "RAWTurbineMic__1": [
+            _burst(
+                burst_dir / "tur_mic.dat", "RAWTurbineMic__1", 2,
+                t0_ns=true_t0_ns, start_utc_hint=hint,
+            )
+        ],
+    }
+    run = Run(name="correct-clock-run", files=files, day_root=burst_dir)
+
+    grid = pipeline.build_run_grid(
+        run, ("RAWGeneratorMic__0", "RAWTurbineMic__1"), window_s=1.0
+    )
+
+    assert grid.t0_ns == true_t0_ns
+
+
+# ---------------------------------------------------------------------------
+# 5. prepare_run cache: DAQ epoch-2000 clock quirk (Task 10, D4) -- a cache written
+# before the true-UTC fix carries a raw-axis grid_t0_ns; a fingerprint-matched hit
+# must OVERRIDE it with the true-UTC value on load, without recomputing features.
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_run_cache_hit_overrides_raw_axis_t0_ns_with_true_utc(
+    tmp_path, monkeypatch
+) -> None:
+    run = _quirky_two_stream_run(tmp_path / "burst")
+    cfg = _cfg(tmp_path / "results")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    # First call: real compute + cache write. grid.t0_ns is ALREADY true-UTC (D2),
+    # so simulate a cache written BEFORE the fix by round-tripping the cache file
+    # with grid_t0_ns rewritten back to the raw axis -- exactly what an npz on disk
+    # from before this task would carry.
+    first = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2
+
+    cache_path = tmp_path / "results" / "cache" / "quirky-two-stream-run--audio.npz"
+    assert cache_path.is_file()
+    with np.load(cache_path, allow_pickle=False) as data:
+        raw_cache = dict(data.items())
+    raw_axis_t0_ns = first.grid.t0_ns - _CEST_OFFSET_NS
+    raw_cache["grid_t0_ns"] = np.array([raw_axis_t0_ns], dtype=np.int64)
+    np.savez(cache_path, **raw_cache)
+
+    second = prepare_run(run, "audio", cfg, use_cache=True)
+
+    assert call_count["n"] == 2, "cache hit must not trigger a recompute"
+    assert second.grid.t0_ns == first.grid.t0_ns, "override must recover the true-UTC t0_ns"
+    assert second.grid.window_ns == first.grid.window_ns
+    assert second.grid.n_windows == first.grid.n_windows
+    np.testing.assert_array_equal(second.features, first.features)
+    np.testing.assert_array_equal(second.valid_mask, first.valid_mask)
+    np.testing.assert_array_equal(second.segment_ids, first.segment_ids)
+
+
+def test_prepare_run_cache_hit_is_a_no_op_when_t0_ns_already_true_utc(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A cache already written POST-fix (t0_ns already true-UTC) must be a silent
+    override no-op -- `_load_cached_prepared_run` recomputes the fresh grid t0 every
+    time (module docstring), but when it already matches the cached value there is
+    nothing to log or change."""
+    run = _quirky_two_stream_run(tmp_path / "burst")
+    cfg = _cfg(tmp_path / "results")
+
+    first = prepare_run(run, "audio", cfg, use_cache=True)
+    cache_path = tmp_path / "results" / "cache" / "quirky-two-stream-run--audio.npz"
+    assert cache_path.is_file()
+
+    with caplog.at_level(logging.INFO):
+        second = prepare_run(run, "audio", cfg, use_cache=True)
+
+    assert second.grid.t0_ns == first.grid.t0_ns
+    messages = [r.message for r in caplog.records]
+    assert not any("overriding" in m.lower() for m in messages), messages

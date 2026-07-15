@@ -23,9 +23,11 @@ addendum; that backward-compat behaviour is covered separately by
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from rowii.config import load_config
@@ -36,8 +38,12 @@ from rowii.scada.labels import GT_CHANNELS
 from rowii.signals.windows import WindowGrid
 from rowii.state.detect import FittedDetector
 
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
 _DATA_ROOT = load_config().data_root
 _HAS_DATA_ROOT = _DATA_ROOT.is_dir()
+_RESULTS_ROOT = load_config().results_root
 
 pytestmark = pytest.mark.data
 
@@ -209,3 +215,100 @@ def test_fitted_detector_apply_equals_fit_on_cached_run(data_root: Path) -> None
     det, fit_result = FittedDetector.fit(feats, grid, cfg.detect, clusterer="kmeans")
     applied = det.apply(feats, grid)
     np.testing.assert_array_equal(applied.frame_labels, fit_result.frame_labels)
+
+
+# ---------------------------------------------------------------------------
+# Task 10 (D6b/c): true-UTC time axis, the invariance regression on real data --
+# labels/scores/FAR/GT-eval-window-counts must be bit-for-bit unaffected by moving
+# the whole pipeline from the raw DAQ axis onto true UTC. Both tests are cache-hit
+# fast (no raw file re-read): `250526-tu--fusion.npz`/`250526-tu--audio.npz` are
+# already on disk with a RAW-axis `grid_t0_ns` (written before this task), so
+# `prepare_run`'s cache-hit path (D4) exercises the override for real here, not
+# just on the synthetic fixture in `tests/test_pipeline.py`.
+# ---------------------------------------------------------------------------
+
+_FAR_TABLE_PATH = (
+    _RESULTS_ROOT / "step2" / "within-day" / "250526-tu" / "fusion-detected"
+    / "per-state-knn" / "far_table.csv"
+)
+_HAS_FAR_TABLE = _FAR_TABLE_PATH.is_file()
+skip_reason_far_table = f"{_FAR_TABLE_PATH} not present"
+
+
+def test_within_day_far_table_matches_persisted_after_true_utc_fix(data_root: Path) -> None:
+    """Re-run the within-day sweep combo 250526-tu / fusion / detected-labels /
+    per-state / knn IN MEMORY via `rowii.anomaly.sweep.run_sweep` (the exact
+    combo `scripts/run_step2.py`'s default CLI arguments produce, reproduced here
+    via its own private `_detected_labels`) and assert the resulting `far_table` is
+    numerically identical to the ALREADY-PERSISTED `results/step2/within-day/
+    250526-tu/fusion-detected/per-state-knn/far_table.csv` (note: the directory
+    name is `<conditioning>-<scorer>` = "per-state-knn", not the brief's literal
+    "knn-per-state" -- see the task report). `far_table` carries no time/UTC
+    column at all (label, counts, FAR, threshold, ...) -- window INDICES and
+    VALUES, never absolute timestamps -- so this is a direct, real-data proof of
+    D6's bit-identity guarantee: the grid this sweep runs against is now true-UTC
+    (D2/D4), yet the FAR table matches a file generated back when the same grid
+    was still on the raw DAQ axis, numeral for numeral.
+    """
+    if not _HAS_FAR_TABLE:
+        pytest.skip(skip_reason_far_table)
+
+    import run_step2
+
+    from rowii.anomaly.sweep import SweepConfig, run_sweep
+
+    cfg = load_config()
+    index = discover(data_root)
+    run = next(r for r in index.runs if r.name == "250526-tu")
+
+    prepared = prepare_run(run, "fusion", cfg, use_cache=True)
+    labels = run_step2._detected_labels(prepared, cfg)
+    sweep_cfg = SweepConfig(alpha=0.05, top_k=20, conditioning="per-state", scorer="knn")
+    result = run_sweep(prepared, labels, sweep_cfg)
+
+    far_table = result.far_table.copy()
+    far_table["label"] = far_table["label"].astype(str)  # matches _write_sweep_outputs
+    persisted = pd.read_csv(_FAR_TABLE_PATH)
+
+    # check_dtype=False: a CSV round-trip infers plain numeric dtypes for columns
+    # that are float64-with-NaN in memory (pandas' own read_csv type inference,
+    # unrelated to this task) -- values (NaN-equal by assert_frame_equal's default)
+    # are what D6 actually claims invariant, not incidental dtype.
+    pd.testing.assert_frame_equal(
+        far_table.reset_index(drop=True), persisted.reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_250526_tu_gt_eval_window_counts_match_historical_readme_values(
+    data_root: Path,
+) -> None:
+    """Recompute GT labels for 250526-tu (audio variant) on the NEW true-UTC axis
+    (`scripts/run_step1.py::load_run_gt`, now D3-fixed) and assert the per-state
+    eval-window (non-"unknown") counts equal README.md's historical Step-1-grid
+    values (122 standstill / 403 transition / 7750 turbine = 8275 total,
+    "Step-1 grid results" section) -- proving SCADA (D3, its own independently
+    derived offset) and the audio grid (D2, the run's own offset) moved together
+    under this run's true-UTC shift. A genuine misalignment (e.g. SCADA selected
+    from the wrong file set, or one offset silently diverging from the other)
+    would shift these counts, not just their rendered times -- this is the
+    real-data equivalent of `tests/test_sweep.py`'s/`tests/test_detect_e2e.py`'s
+    synthetic D6a invariance tests, specifically for the SCADA/GT side D6a alone
+    does not cover.
+    """
+    import run_step1
+
+    cfg = load_config()
+    index = discover(data_root)
+    run = next(r for r in index.runs if r.name == "250526-tu")
+    betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
+
+    prepared = prepare_run(run, "audio", cfg, use_cache=True)
+    _scada, gt = run_step1.load_run_gt(
+        run, betriebsdaten, prepared.grid, cfg, prepared.valid_mask
+    )
+
+    counts = gt["state"].value_counts()
+    assert int(counts.get("standstill", 0)) == 122
+    assert int(counts.get("transition", 0)) == 403
+    assert int(counts.get("turbine", 0)) == 7750
+    assert int((gt["state"] != "unknown").sum()) == 8275

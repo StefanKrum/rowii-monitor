@@ -92,6 +92,44 @@ Each burst contributes four streams: `RAWGeneratorMic__0` / `RAWTurbineMic__1`
 Session folder names (`TU`, `PU`, `TU_PH_TU`, ...) are operator hints only —
 ground truth always comes from SCADA (or `unknown` on the one day with none).
 
+### DAQ clock quirk (epoch-2000-as-1970, local-time clock)
+
+Every Gantner UDBF file in this dataset — audio, vibration, AND the SCADA
+Betriebsdaten `.dat` files — carries binary frame timestamps (`header.t0_ns`)
+from a DAQ clock that counts **seconds since 2000-01-01 LOCAL time but declares
+them as Unix (1970) nanoseconds**. Read naively, `header.t0_ns` therefore
+decodes to a wall-clock-of-day that matches the file's true local time exactly,
+under a fixed, wrong epoch year — e.g. a file whose true instant is
+`2026-06-27T04:41:03Z` (local Europe/Vienna `06:41:03`, CEST = UTC+2) carries a
+raw `header.t0_ns` that decodes to `1996-06-27T06:41:03Z`.
+
+The pipeline derives, never hardcodes, the per-run and per-Betriebsdaten-file-set
+offset that maps this raw axis onto true UTC
+(`rowii.io.dataset.run_utc_offset_ns` / `betriebsdaten_utc_offset_ns`, full
+numeric derivation in `run_utc_offset_ns`'s own docstring): the median, over
+every file, of `(filename-hint UTC − header.t0_ns)`, rounded to the **nearest
+hour** — the true offset is always an exact whole-hour value (epoch-2000 shift
+minus a whole local UTC offset), so rounding recovers it exactly regardless of
+sub-second filename-truncation scatter. A **plausibility gate** returns offset
+`0` whenever the median raw offset is under 1 hour, so a future dataset
+recorded on an already-correct clock is never given a spurious shift. The
+audio/vibration run's own offset and the SCADA file set's own offset are always
+derived independently (never one blindly copied onto the other) and are
+cross-checked: a disagreement of more than 2 seconds is logged as a warning.
+
+This offset is applied once, at the single upstream point each axis enters the
+pipeline (`rowii.pipeline.build_run_grid` for audio/vibration,
+`rowii.scada.labels.load_scada_window_means` for SCADA) — every window grid,
+segment table, candidate timestamp, and report time is true UTC by
+construction from there on; detected labels, scores, and false-alarm rates are
+completely unaffected (a per-run constant shift moves only where a window is
+*displayed* in time, never which samples fall in it). **All persisted times
+are true UTC starting from this fix** — artifacts already written under
+`results/` before it (including every timestamp elsewhere in this README, e.g.
+the "Data layout" table above and the Step-2 evidence sections below) were
+generated on the raw axis and are off by the offset described above; they are
+not retroactively corrected here.
+
 ## Quickstart
 
 Copy the required subset of a source tree into `ROWII_DATA_ROOT`:
@@ -531,6 +569,10 @@ Timestamp caveat (applies to every `utc_time` below and in
 Betriebsdaten clock convention"). The offset is uniform across all
 streams and SCADA of a day, so alignment, splits and segment logic are
 unaffected -- but the displayed times are not true calendar UTC.
+**This is now fixed at the source** (see "DAQ clock quirk" under "Data
+layout" above) -- every `utc_time`/`start_utc`/`end_utc` from a
+combination re-run after that fix is true UTC; the specific values quoted
+below predate it and still carry the raw axis this caveat describes.
 
 ### Within-day FAR tables (detected labels, kNN, alpha = 0.05)
 

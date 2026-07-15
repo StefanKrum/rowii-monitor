@@ -1193,7 +1193,7 @@ def load_run_variant_eval(
     valid_mask = cluster != -1
 
     cfg_used = cfg if gt_rules is None else dataclasses.replace(cfg, gt=gt_rules)
-    _scada, gt = run_step1.load_run_gt(betriebsdaten, grid, cfg_used, valid_mask)
+    _scada, gt = run_step1.load_run_gt(run, betriebsdaten, grid, cfg_used, valid_mask)
 
     ev = evaluate(cluster, gt, grid)
     return RunVariantEval(run=run_name, variant=variant, grid=grid, gt=gt, cluster=cluster, ev=ev)

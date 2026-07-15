@@ -140,7 +140,8 @@ def _install_common_monkeypatches(
         else (lambda betriebsdaten, grid: []),
     )
     monkeypatch.setattr(
-        apply_detector, "load_scada_window_means", lambda files, grid: pd.DataFrame()
+        apply_detector, "load_scada_window_means",
+        lambda files, grid, *, audio_run_offset_ns=None: pd.DataFrame()
     )
     monkeypatch.setattr(
         apply_detector, "gt_labels", lambda scada, rules, *, window_s: _fake_gt_for_two_state()

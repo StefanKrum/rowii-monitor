@@ -11,6 +11,7 @@ constructions whose outcome cannot be derived by inspection alone.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -257,6 +258,34 @@ def test_run_sweep_is_deterministic_for_the_same_config() -> None:
     pd.testing.assert_frame_equal(result_a.far_table, result_b.far_table)
     pd.testing.assert_frame_equal(result_a.scores, result_b.scores)
     pd.testing.assert_frame_equal(result_a.candidates, result_b.candidates)
+
+
+def test_run_sweep_is_invariant_under_a_constant_grid_t0_shift() -> None:
+    """Task 10 (D6a, the invariance regression this task's whole point rests on):
+    `run_sweep` never reads `prepared.grid` at all (`_prepared_run`'s own docstring,
+    `run_sweep`'s own docstring: "grid/feature_names are not used by this
+    function") -- every split/reference/score/threshold decision is a function of
+    `features`/`valid_mask`/`segment_ids` and `labels` alone. Replacing `prepared`'s
+    grid with one whose `t0_ns` differs by an arbitrary constant (standing in for
+    `rowii.pipeline.build_run_grid`'s D2 true-UTC shift) must leave `far_table`/
+    `scores`/`candidates` -- window indices, labels, scores, p-values, thresholds,
+    realized FAR -- byte-for-byte IDENTICAL. This is the property the whole
+    DAQ-clock-quirk fix depends on: moving the pipeline onto true UTC must never
+    move a single label, score, or FAR value.
+    """
+    prepared, labels, _ = _three_label_run_with_injected_outliers()
+    shift_ns = 946_677_600 * 10**9  # arbitrary but realistic (task-10-brief.md's own
+    # worked CEST offset)
+    shifted_grid = dataclasses.replace(prepared.grid, t0_ns=prepared.grid.t0_ns + shift_ns)
+    shifted_prepared = dataclasses.replace(prepared, grid=shifted_grid)
+    cfg = SweepConfig(seed=2)
+
+    result = run_sweep(prepared, labels, cfg)
+    shifted_result = run_sweep(shifted_prepared, labels, cfg)
+
+    pd.testing.assert_frame_equal(result.far_table, shifted_result.far_table)
+    pd.testing.assert_frame_equal(result.scores, shifted_result.scores)
+    pd.testing.assert_frame_equal(result.candidates, shifted_result.candidates)
 
 
 # ---------------------------------------------------------------------------
