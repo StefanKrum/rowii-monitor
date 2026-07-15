@@ -182,3 +182,76 @@ def p_values(scores: np.ndarray, calibration_scores: np.ndarray) -> np.ndarray:
     at_least_as_extreme = n - less_than_count
     result: np.ndarray = (1.0 + at_least_as_extreme) / (n + 1)
     return result
+
+
+def loo_p_values(calibration_scores: np.ndarray) -> np.ndarray:
+    """Leave-one-out conformal p-value of each calibration score against the OTHER
+    calibration scores: `p_i = #{j : calibration_scores[j] >= calibration_scores[i]}
+    / n`.
+
+    Derivation: the standard conformal p-value of point `i` against a reference of
+    the other `n - 1` points is `p_i = (1 + #{j != i : s_j >= s_i}) / ((n - 1) + 1)`
+    (the `p_values` formula with the reference shrunk by one). Since `s_i >= s_i`
+    always, the self-excluded count is `#{j != i : s_j >= s_i} = #{all j : s_j >=
+    s_i} - 1`, so the `+1` numerator correction folds the self-exclusion away:
+    `p_i = #{all j : s_j >= s_i} / n` -- computable directly from the FULL array via
+    the same sorted/`searchsorted` machinery as `p_values`, no per-`i` loop. A tie
+    counts toward the `>=` set, the conservative direction, matching `p_values`' own
+    tie convention.
+
+    Why this exists (score-fusion review fix, 2026-07-15): `scripts/run_step2.py`'s
+    score-level fusion view calibrates a COMBINED statistic of two branches'
+    per-window p-values (`rowii.anomaly.fusion`), which requires the calibration-side
+    windows' p-values to be computed on the SAME footing as the scoring-side
+    windows' (one fixed transform applied to both sides, else calibration/scoring
+    exchangeability of the combined statistic breaks). The naive
+    `p_values(calibration_scores, calibration_scores)` puts each point in its OWN
+    reference (its self-match forces `p >= 2 / (n + 1)`, while a scoring point can
+    reach `1 / (n + 1)`) -- for a single branch that mismatch is a monotone
+    transform and cancels, but COMBINED across two branches it is anti-conservative:
+    measured mean realized FAR up to ~0.10 at alpha=0.05, n=39, anti-correlated
+    branches (review simulation, 2026-07-15, scratch scripts not committed). This
+    leave-one-out form evaluates each calibration point against a reference that
+    excludes it, exactly like a scoring point's reference excludes the scoring point.
+
+    Residual one-unit granularity: the LOO reference has `n - 1` points where the
+    scoring reference has `n`, so the smallest achievable LOO p-value is `1 / n`
+    versus `1 / (n + 1)` scoring-side. At any given raw score `s` with tie-inclusive
+    count `c = #{j : s_j >= s}`, the LOO p-value `c / n` is <= the scoring-side
+    `(1 + c) / (n + 1)` (equivalent to `c <= n`, always true), so calibration-side
+    combined statistics are weakly INFLATED relative to a perfectly-shared
+    transform and the calibrated threshold sits weakly higher -- the residual can
+    only SUPPRESS scoring-side alarms relative to that ideal, never add them
+    (conservative direction). Validated empirically: mean realized FAR at or below
+    alpha within Monte-Carlo precision (one-sided `alpha + 3*SE` bound, SE <= 0.002)
+    across dependence regimes -- independent, shared-latent-correlated (rho ~ 0.78),
+    anti-correlated, and identical branches -- at n in {39, 159}
+    (`tests/test_fusion.py`'s multi-regime validity test) and additionally at n=319
+    in the review-time simulation.
+
+    Args:
+        calibration_scores: `(n,)` finite calibration scores, at least 1 element,
+            higher = more anomalous -- the same set `calibrate`/`p_values` would be
+            given. (`n = 1` degrades gracefully: the LOO reference is empty and the
+            single p-value is `(1 + 0) / 1 = 1`.)
+
+    Returns:
+        `(n,)` float64 leave-one-out p-values in `(0, 1]` (specifically in
+        `[1/n, 1]`); smaller = more anomalous relative to the rest of the set.
+
+    Raises:
+        ValueError: if `calibration_scores` has fewer than 1 element or a non-finite
+            value.
+    """
+    n = calibration_scores.shape[0]
+    if n < 1:
+        raise ValueError(f"calibration_scores must have at least 1 element, got {n}")
+    _raise_if_non_finite(calibration_scores, "calibration_scores")
+
+    sorted_calibration = np.sort(calibration_scores)
+    less_than_count: np.ndarray = np.searchsorted(
+        sorted_calibration, calibration_scores, side="left"
+    )
+    at_least_as_extreme = n - less_than_count
+    result: np.ndarray = at_least_as_extreme / n
+    return result

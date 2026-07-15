@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 from scipy.stats import betabinom
 
-from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values
+from rowii.anomaly.conformal import ConformalThreshold, calibrate, loo_p_values, p_values
 
 _N_REPS = 200
 _N_TEST = 1000
@@ -275,6 +275,88 @@ def test_p_values_ties_match_brute_force_on_random_small_cases() -> None:
         expected = _brute_force_p_values(scores, calibration_scores)
 
         np.testing.assert_allclose(result, expected)
+
+
+# ---------------------------------------------------------------------------
+# loo_p_values: leave-one-out conformal p-values of a calibration set against itself
+# (score-fusion review fix, 2026-07-15 -- see that function's own docstring)
+# ---------------------------------------------------------------------------
+
+
+def _brute_force_loo_p_values(calibration_scores: np.ndarray) -> np.ndarray:
+    """Direct, unvectorized reimplementation of `loo_p_values`'s own definition: for
+    each i, the standard conformal p-value of `calibration_scores[i]` against the
+    OTHER n-1 points, `p_i = (1 + #{j != i : s_j >= s_i}) / ((n - 1) + 1)` -- a plain
+    Python loop over `np.delete`, an independent oracle for the tests below."""
+    n = calibration_scores.shape[0]
+    return np.array([
+        (1.0 + np.sum(np.delete(calibration_scores, i) >= calibration_scores[i])) / n
+        for i in range(n)
+    ])
+
+
+def test_loo_p_values_hand_computed_case() -> None:
+    calibration_scores = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    result = loo_p_values(calibration_scores)
+
+    # p_i = #{j : s_j >= s_i} / n (self-inclusion folds into the count, see the
+    # function docstring's derivation): s=1 -> 5/5, s=2 -> 4/5, ..., s=5 -> 1/5.
+    np.testing.assert_allclose(result, [1.0, 0.8, 0.6, 0.4, 0.2])
+
+
+def test_loo_p_values_ties_match_brute_force_on_random_small_cases() -> None:
+    # Small discrete value set (0..5) forces frequent exact ties -- exercises the
+    # ">=" (ties count, conservative) rule, same construction as `p_values`' own
+    # tie fuzz test above.
+    rng = np.random.default_rng(3)
+    for _ in range(200):
+        n = int(rng.integers(1, 11))
+        calibration_scores = rng.integers(0, 6, size=n).astype(np.float64)
+
+        result = loo_p_values(calibration_scores)
+        expected = _brute_force_loo_p_values(calibration_scores)
+
+        np.testing.assert_allclose(result, expected)
+
+
+def test_loo_p_values_monotone_in_score() -> None:
+    # Higher score = more anomalous = smaller-or-equal p; strictly smaller for
+    # strictly larger scores (no ties in this fixture).
+    rng = np.random.default_rng(4)
+    calibration_scores = rng.normal(size=100)
+
+    result = loo_p_values(calibration_scores)
+
+    order = np.argsort(calibration_scores)
+    assert (np.diff(result[order]) < 0).all()
+
+
+def test_loo_p_values_range_and_extremes() -> None:
+    rng = np.random.default_rng(5)
+    calibration_scores = rng.normal(size=50)
+
+    result = loo_p_values(calibration_scores)
+
+    assert (result > 0.0).all()
+    assert (result <= 1.0).all()
+    # Unique max scores 1/n (the one-unit-granularity floor the docstring documents,
+    # vs 1/(n+1) for a beyond-the-max scoring point under `p_values`); unique min
+    # scores exactly 1.
+    n = calibration_scores.shape[0]
+    assert result[np.argmax(calibration_scores)] == pytest.approx(1.0 / n)
+    assert result[np.argmin(calibration_scores)] == 1.0
+
+
+def test_loo_p_values_raises_on_empty() -> None:
+    with pytest.raises(ValueError, match="at least 1 element"):
+        loo_p_values(np.empty(0))
+
+
+@pytest.mark.parametrize("bad_value", [math.nan, math.inf, -math.inf])
+def test_loo_p_values_raises_on_non_finite(bad_value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        loo_p_values(np.array([1.0, bad_value, 3.0]))
 
 
 # ---------------------------------------------------------------------------
