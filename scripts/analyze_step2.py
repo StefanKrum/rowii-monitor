@@ -498,8 +498,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Validate every --pairs entry COMPLETELY up front -- both the ":" split and
+    # each half's combo suffix -- so a malformed combo is an argparse usage error
+    # (exit 2) before any I/O, never a raw ValueError traceback midway through the
+    # pair loop after earlier pairs already wrote reports (Task 7 review finding 1).
     try:
         pairs = [_split_pair(p) for p in args.pairs]
+        for combo_a, combo_b in pairs:
+            _parse_combo(combo_a)
+            _parse_combo(combo_b)
     except ValueError as exc:
         parser.error(str(exc))
 
