@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from rowii.signals.logmel import LogmelFeaturizer
+from rowii.signals.logmel import LogmelFeaturizer, _mel_filterbank
 
 
 class TestLogmelFeaturizer:
@@ -24,8 +24,22 @@ class TestLogmelFeaturizer:
         f = LogmelFeaturizer()
         out = f.transform(tone, 50_000.0).reshape(49, 64)
         band_energy = out.mean(axis=0)
-        # the 1 kHz band must dominate quiet bands far away in mel space
-        assert band_energy.argmax() not in (0, 63)
+        # Expected band computed from the filterbank's OWN weights, so a future
+        # off-by-one in `_mel_filterbank`'s edge/center construction fails here: at
+        # the default geometry (frame 1250 samples -> 40 Hz rFFT bins) the 1 kHz tone
+        # sits exactly on bin 25, and the band winning `transform`'s energy argmax
+        # must be the filter with the largest weight at that bin.
+        bank = _mel_filterbank(64, 1250 // 2 + 1, 50_000.0)
+        fft_freqs = np.linspace(0.0, 25_000.0, 1250 // 2 + 1)
+        tone_bin = int(np.argmin(np.abs(fft_freqs - 1000.0)))
+        expected_band = int(bank[:, tone_bin].argmax())
+        # Known value for the 1 kHz / 50 kHz / 64-mel geometry: the 66 mel edges span
+        # mel(20 Hz) = 31.7 .. mel(25 kHz) = 4060.7 in 65 steps of ~62 mel each, and
+        # mel(1 kHz) = 1000.0 falls between band 14's center (~961 mel) and band 15's
+        # (~1023 mel), closer to band 15's -> filter weights at bin 25 are ~0.39
+        # (band 14) vs ~0.61 (band 15).
+        assert expected_band == 15
+        assert band_energy.argmax() == expected_band
         assert band_energy.max() > band_energy.min() + 2.0  # log10 domain
 
     def test_deterministic(self):
