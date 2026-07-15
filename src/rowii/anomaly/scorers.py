@@ -422,12 +422,17 @@ class LofScorer:
                 does NOT pre-validate this against the reference row count the way
                 `KnnScorer.fit` validates `k` (design spec D1: deliberately left to
                 sklearn). Verified empirically against the installed sklearn version
-                that a `n_neighbors` exceeding the reference row count does NOT raise
-                -- sklearn silently reduces it to `n_reference - 1` and emits a
-                `UserWarning` (spec D1's "raises the sklearn error untouched" does
-                not hold here; see task report). The sweep's `min_ref` floor (default
-                20, matching this class's own default `n_neighbors`) makes a
-                reference smaller than `n_neighbors` structurally rare regardless.
+                that a too-small reference never raises (spec D1's "raises the
+                sklearn error untouched" does not hold here; see task report):
+                whenever `n_neighbors >= n_reference`, sklearn clips the effective
+                neighbourhood to `n_reference - 1`, emitting a `UserWarning` ONLY in
+                the strict case `n_neighbors > n_reference` -- at exactly
+                `n_neighbors == n_reference` (the `min_ref=20` boundary, the most
+                likely near-floor case given this class's default of 20) the clip
+                happens completely silently, with no warning at all. The sweep's
+                `min_ref` floor (default 20, matching this class's own default
+                `n_neighbors`) makes a reference smaller than `n_neighbors`
+                structurally rare regardless.
         """
         self.n_neighbors = n_neighbors
         self._model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True)

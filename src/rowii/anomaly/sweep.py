@@ -475,8 +475,8 @@ def run_sweep(prepared: PreparedRun, labels: np.ndarray, cfg: SweepConfig) -> Sw
 
     Raises:
         ValueError: if `labels` has neither an integer nor a string/object-of-str
-            dtype; if `cfg.conditioning`/`cfg.scorer` is not one of the two literal
-            values each accepts (a runtime-only guard -- see `_make_scorer`); if
+            dtype; if `cfg.conditioning`/`cfg.scorer` is not one of the values its
+            `Literal` type accepts (a runtime-only guard -- see `_make_scorer`); if
             `prepared.features.shape[0] != labels.shape[0]` (surfaced by
             `references.build_references`); if `split_by_segments` cannot produce a
             non-empty two-way split at either the top level or the nested fit/conformal
