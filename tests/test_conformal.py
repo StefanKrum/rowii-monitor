@@ -55,7 +55,7 @@ false-failure probability from this check alone stays far below 1e-3."""
 
 # ---------------------------------------------------------------------------
 # Exact-theory helpers for the Monte Carlo tests (independent of the module under
-# test: none of these import `rowii.anomaly.conformal`'s private `_threshold_index`).
+# test: none of these import `rowii.anomaly.conformal`'s `threshold_index`).
 # ---------------------------------------------------------------------------
 
 
