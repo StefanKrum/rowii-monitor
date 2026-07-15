@@ -23,6 +23,14 @@ error (exit 2, listing every discovered run) rather than a warn-and-skip, since
 silently warming the wrong (or a typo'd) run's cache would defeat the point of
 running this ahead of time. That check applies regardless of `--dry-run` (only
 the beats-import guard itself is dry-run-exempt, per this module's own `main`).
+
+A combo whose own `prepare_run` raises `RuntimeError` (run too short/sparse for
+the variant) or `KeyError` (a stream the variant needs is entirely absent from
+the run) is logged as a WARNING and SKIPPED -- the remaining combos still run,
+per the same catch-and-skip principle `scripts/run_step2.py`'s sweep
+orchestrators already apply to `prepare_run` failures. The failure is still
+surfaced in the exit code: 1 if ANY combo failed, 0 only when every combo
+succeeded.
 """
 from __future__ import annotations
 
@@ -48,10 +56,13 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RUNS: tuple[str, ...] = (
     # The 27.06 day tree gap-splits into THREE discovered runs (>15-min pauses between
-    # its PU/PH blocks -- `rowii.io.dataset._split_on_gaps`/`_group_name`), so all three
-    # are listed individually; a bare "270626-pu_ph_pu_ph_pu_ph" matches nothing.
-    "250526-tu", "290626-tu", "010726-tu_ph_tu",
-    "270626-pu_ph_pu_ph_pu_ph-1", "270626-pu_ph_pu_ph_pu_ph-2", "270626-pu_ph_pu_ph_pu_ph-3",
+    # its PU/PH blocks -- `rowii.io.dataset._split_on_gaps`/`_group_name`); a bare
+    # "270626-pu_ph_pu_ph_pu_ph" matches nothing. Only "-1" is worth warming: "-2" and
+    # "-3" are negligible single-fragment ~12-min orphans, and "-2" has NO
+    # RAWGeneratorMic__0 stream at all (real 2026-07-15 warm-up finding), so it is
+    # structurally impossible for every audio-bearing variant (`build_run_grid`'s
+    # `run.files[stream]` raises KeyError) -- deliberately excluded from the default.
+    "250526-tu", "290626-tu", "010726-tu_ph_tu", "270626-pu_ph_pu_ph_pu_ph-1",
 )
 _DEFAULT_VARIANTS: tuple[str, ...] = ("audio-beats", "fusion-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
@@ -134,11 +145,29 @@ def main(argv: list[str] | None = None) -> int:
     if any(_is_beats_variant(variant) for _, variant in combos):
         _import_beats_or_exit()
 
+    n_failed = 0
     for run_name, variant in combos:
         run = by_name[run_name]
         logger.info("warm_cache: starting %s x %s", run_name, variant)
         t0 = time.monotonic()
-        prepare_run(run, variant, cfg, use_cache=True)
+        try:
+            prepare_run(run, variant, cfg, use_cache=True)
+        except (RuntimeError, KeyError) as exc:
+            # Same catch-and-skip principle as scripts/run_step2.py's sweep
+            # orchestrators (its _run_within_day_for_run): ONE bad combo must never
+            # kill the rest of the batch. RuntimeError = run too short/sparse for this
+            # variant (rowii.pipeline.compute_validity_mask); KeyError = a stream the
+            # variant needs is entirely absent from the run (build_run_grid's
+            # run.files[stream] -- real 2026-07-15 case: 270626-pu_ph_pu_ph_pu_ph-2,
+            # an orphan fragment with no RAWGeneratorMic__0 at all, killed the first
+            # real warm-up after 8/12 combos before this guard existed).
+            n_failed += 1
+            logger.warning(
+                "warm_cache: %s x %s FAILED (%s: %s) -- skipping, continuing with the "
+                "next combo",
+                run_name, variant, type(exc).__name__, exc,
+            )
+            continue
         elapsed_s = time.monotonic() - t0
         cache_path = _cache_npz_path(cfg.results_root, run_name, variant)
         size_bytes = cache_path.stat().st_size if cache_path.is_file() else -1
@@ -147,6 +176,12 @@ def main(argv: list[str] | None = None) -> int:
             run_name, variant, elapsed_s, cache_path, size_bytes,
         )
 
+    if n_failed:
+        print(
+            f"warm_cache: warmed {len(combos) - n_failed}/{len(combos)} combo(s), "
+            f"{n_failed} failed (see warnings above)"
+        )
+        return 1
     print(f"warm_cache: warmed {len(combos)} combo(s)")
     return 0
 
