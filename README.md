@@ -39,10 +39,10 @@ measurement day (`illwerke-<dayid>/`), each itself a full day tree:
 <ROWII_DATA_ROOT>/
 ├── illwerke-250526/
 │   └── 20260626 Messung/
-│       ├── TU/                     # 48 files, 25 GB — turbine run, 2026-06-25 04:15-06:27 UTC,
+│       ├── TU/                     # 48 files, 25 GB — turbine run, 2026-06-25 02:15-04:39 UTC,
 │       │                           #   12-min segments x 4 streams
 │       ├── PU/                     # 21 files, 9.6 GB — pump runs, 2026-06-25 morning + afternoon
-│       └── Betriebsdaten/          # hourly SCADA, 2026-06-25 00:00-11:00, ~30 channels @ 10 Hz
+│       └── Betriebsdaten/          # hourly SCADA (local-named files), coverage to 10:00 UTC, ~30 channels @ 10 Hz
 ├── illwerke-270626/
 │   └── 20260627 Messung/
 │       └── PU_PH_PU_PH_PU_PH/      # ~4h alternating pump / phase-shifter; NO Betriebsdaten
@@ -58,14 +58,17 @@ The final sensor setup has been installed since **2026-06-15** (see
 `Sensor_Anordnung_15062026.xlsx`; the Gantner stream configurations carry
 `MeasName: 2026-06-15`). Delivered coverage per window:
 
+All times below are true UTC (derived from filename hints; corrected 2026-07-15
+after the DAQ clock quirk fix — see the next subsection):
+
 | Period | Audio + vibration | SCADA (Betriebsdaten) | Ground truth |
 |---|---|---|---|
-| 2026-06-25 TU (04:15–06:27 UTC) | ✓ | ✓ | ✓ |
-| 2026-06-25 PU morning (09:08–09:32 UTC) | ✓ | ✓ | ✓ |
-| 2026-06-25 PU afternoon (~11:44–12:40 UTC) | ✓ | ✗ export ends 11:00 UTC | ✗ permanent |
-| 2026-06-27 PU↔PH sessions (~04:41–14:33 UTC) | ✓ | ✗ never exported | ✗ permanent |
-| 2026-06-29 full day (TU + PU) | ✓ | ✓ 24 h | ✓ |
-| 2026-07-01 full day (PU, TU1, TU2, TU_PH_TU) | ✓ | ✓ | ✓ |
+| 2026-06-25 TU (02:15–04:39 UTC) | ✓ | ✓ | ✓ |
+| 2026-06-25 PU morning (06:56–07:44 UTC) | ✓ | ✓ | ✓ |
+| 2026-06-25 PU afternoon (11:44–12:44 UTC) | ✓ | ✗ export ends 10:00 UTC | ✗ permanent |
+| 2026-06-27 PU↔PH sessions (04:41–14:45 UTC, main session to 10:05) | ✓ | ✗ never exported | ✗ permanent |
+| 2026-06-29 full day (TU 00:30–04:54, PU 07:40–13:40 UTC) | ✓ | ✓ 24 h | ✓ |
+| 2026-07-01 full day (TU1 02:14–05:58, TU2 06:47–08:11, PU 10:52–12:16, TU_PH_TU 13:45–22:09 UTC) | ✓ | ✓ | ✓ |
 
 Notes: (1) the gaps match the partner team's situation exactly — their 27.06
 analyses rely on photo-derived hybrid labels and mark that day as an outlier;
@@ -124,11 +127,14 @@ segment table, candidate timestamp, and report time is true UTC by
 construction from there on; detected labels, scores, and false-alarm rates are
 completely unaffected (a per-run constant shift moves only where a window is
 *displayed* in time, never which samples fall in it). **All persisted times
-are true UTC starting from this fix** — artifacts already written under
-`results/` before it (including every timestamp elsewhere in this README, e.g.
-the "Data layout" table above and the Step-2 evidence sections below) were
-generated on the raw axis and are off by the offset described above; they are
-not retroactively corrected here.
+are true UTC starting from this fix.** Every `results/step2` artifact was
+regenerated on the corrected axis on 2026-07-15 (FARs/labels/scores are
+translation-invariant and did not change — verified byte-identically), and the
+"Data layout" tables above now carry true-UTC session spans. Step-1 artifacts
+under `results/<run>/` and any timestamps quoted in the Step-1/multi-day README
+sections below still render the raw axis (wall-clock numerals are correct local
+time, the year/epoch is not); the raw-axis Step-2 originals are preserved under
+`results/step2-rawaxis-archive/`.
 
 ## Quickstart
 
@@ -797,3 +803,113 @@ documented spec simplification) at run granularity. All `utc_time`
 values carry the DAQ's mis-set clock (see caveat at top). No candidate
 has been auditioned yet -- "operationally-explained" marks are
 mechanical SCADA-rule annotations, not human review.
+
+## Step 2 package-2 evidence (2026-07-15): cross-day transfer, calibration scarcity, BEATs
+
+All artifacts under `results/step2/` on the true-UTC axis (regenerated after the
+DAQ-clock fix; FARs identical to the raw-axis originals in
+`results/step2-rawaxis-archive/`). Full numeric digest with per-table source
+paths: `.superpowers/sdd/results_digest.md`. Grid: ordered pairs of
+{250526-tu, 290626-tu, 010726-tu_ph_tu} × {fusion, audio, audio-beats} ×
+{kNN, Mahalanobis}; alpha = 0.05 throughout; detected labels (runtime path).
+
+### Cross-day: no protocol controls per-state FAR; pooled "control" is cancellation
+
+The new `cross-day-per-state` protocol transfers day A's fitted detector
+(`FittedDetector`: fit-day standardisation + fit-day HMM decode, no refit) to
+day B and scores each window against its PREDICTED state's day-A reference and
+threshold — runtime-honest, no GT anywhere, and it dissolves the cross-day
+label-alignment problem (one model, one label space).
+
+Headline (fusion, kNN; aggregate FAR at alpha = 0.05):
+
+| pair | per-state agg | pooled protocol | best state | worst state |
+|---|---|---|---|---|
+| 290626 -> 010726 | 0.138 | 0.090 | 0.023 (n=6282) | 0.268 (n=11002) |
+| 250526 -> 010726 | 0.208 | 0.144 | 0.082 (n=13166) | 0.906 (n=2496) |
+| 010726 -> 290626 | 0.462 | 0.495 | 0.021 (n=1056) | 0.618 (n=10320) |
+| 290626 -> 250526 | 0.687 | 0.647 | 0.362 (n=138) | 0.692 (n=8087) |
+| 010726 -> 250526 | 0.731 | 0.542 | 0.572 (n=250) | 1.000 (n=629) |
+| 250526 -> 290626 | 0.507 | 0.616 | 0.055 (n=5258) | 0.970 (n=304) |
+
+Findings (all 36 combos in the digest):
+
+1. **No cross-day protocol reaches nominal FAR reliably.** Only 14 of 72
+   aggregate FARs are <= 0.05, and 12 of those are Mahalanobis POOLED values
+   whose apparent control is the cancellation mechanism already demonstrated
+   within-day in package 1: e.g. fusion-Mahalanobis 290626->010726 reports a
+   pooled FAR of 0.004 while the per-state view of the same transfer has state
+   0 at 0.531 — a mode-aware monitor would flood one mode with alarms and stay
+   silent elsewhere; the pooled number hides exactly that.
+2. **Day shift is state- and direction-dependent.** 290626->010726 is the most
+   transferable pair in every variant × scorer group, and individual states
+   transfer with near-nominal FAR (fusion state 1: 0.023; audio-beats state 1:
+   0.007; audio-beats-Mahalanobis state 3: 0.004) while sibling states of the
+   same transfer fail badly (up to 1.000). Anything involving 25.06 as source
+   or target transfers poorly.
+3. **Consequence (the package's practical claim):** transfer the DETECTOR
+   (Step-1 state detection survives the day change), but RECALIBRATE the
+   per-state thresholds on the target day. The scarcity results below show
+   that recalibration is cheap.
+
+### Calibration scarcity: 19–159 windows per state, when curvable
+
+Windows-per-mode curves (50 seeded reps per budget, exact Beta bands,
+threshold-only fast path; `results/step2/scarcity*/`): on 010726-tu_ph_tu,
+every curvable fusion/audio-beats state that stabilises at all does so between
+**n = 19 and n = 159** calibration windows (band rule: 50-rep mean FAR in
+[0.025, 0.10] and 95th percentile <= 0.10) — i.e. seconds-to-minutes of
+per-state data, far below a day of recording. Failure modes are as informative
+as the successes: fusion state 3 never stabilises under kNN (full-pool anchor
+0.105) but does at n = 79 under Mahalanobis, which in turn loses state 2
+(anchor 0.148); audio-beats state 0 never alarms under Mahalanobis at ANY
+budget (FAR 0.000 with real thresholds — under-band, not "well controlled").
+Neither scorer dominates. On the starved day (290626) only 1–2 states are
+curvable at all (min_ref = 20 on the fit side), which is the quantitative form
+of package 1's "calibration windows per state is the binding constraint".
+
+The deployment-facing secondary curve (segment accumulation, "record N more
+minutes") reaches band-stability for 2 of 4 states within 10–22 accumulated
+12-min segments (~113–249 min of mixed-mode recording) and shows much wider
+rep-spread than window-level sampling (segment draws are clumpy) — recording
+time budgets per mode matter more than raw window counts.
+
+### BEATs as scoring representation: no uniform win; a complementary lens
+
+Within-day (detected labels): audio-beats posts the best cell on 250526
+(per-state kNN FAR 0.007) and the best pooled-Mahalanobis cell on 010726
+(0.020), but the worst cells on 290626 (0.130/0.112) — no representation wins
+uniformly, mirroring Step-1's split verdict. The sharper finding is WHAT the
+representations flag: the global top-20 candidate lists of fusion vs
+audio-beats overlap at Jaccard <= 0.081 on every day (audio vs audio-beats
+reaches 0.379 on 010726) — BEATs surfaces substantially different moments than
+the physics features. Needs-listening cross-check: the 2026-07-01T14:17:22Z
+candidate is confirmed by all three combos; the 2026-06-25T04:29:35Z candidate
+by fusion (p = 0.0011) and audio (p = 0.0022) but NOT by audio-beats; the other
+three checks by none (two have near-misses 14–23 s outside the 5 s tolerance,
+listed in `results/step2/overlap/`).
+
+### 27.06 gets its first state timeline (qualitative, transferred)
+
+`scripts/apply_detector.py --fit-run 010726-tu_ph_tu --apply-run
+270626-pu_ph_pu_ph_pu_ph-1` (fusion + audio-beats;
+`results/step2/transfer/.../timeline.md`): both variants agree on the coarse
+structure of the no-SCADA day — a phase-shifter-rich first ~100 min
+(04:41–06:14 UTC, gap-tolerant PH blocks up to 42.2 min) followed by one
+uninterrupted ~219 min non-PH stretch to 09:53 UTC; PH totals differ by only
+77 s between variants, block boundaries by <= 19 s. Hard limitation, stated on
+every artifact: the fit day has NO pump state, so pump windows can only land in
+turbine-mapped clusters — the timeline is evidence of PH-vs-non-PH structure,
+not of pump detection; labels are transferred, the day has no ground truth,
+and no accuracy is claimed.
+
+### Compute reuse (why re-running any of this is cheap)
+
+Nothing expensive ever runs twice: the BEATs checkpoint is pre-trained by
+Microsoft and stored once (no training on our side, encoder frozen); embedding
+extraction is cached once per run × variant under `results/cache/`
+(sha256-fingerprinted; the true-UTC fix reuses caches byte-identically, only
+the grid anchor moves); clusterers, scorers, and conformal thresholds refit in
+seconds by design (deterministic, seed 7), so the entire package-2 evidence
+suite above regenerates from warm caches in ~15 minutes. `FittedDetector` is
+the future serialisation point for the runtime prototype.
