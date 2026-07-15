@@ -1,9 +1,11 @@
 """Step-2 mode-conditioned anomaly-sweep CLI: prepare -> label -> sweep -> report.
 
 Drives `rowii.anomaly.sweep.run_sweep` (Task S5) over one or more (run, variant,
-labels, conditioning, scorer) combinations for two protocols (design spec
+labels, conditioning, scorer) combinations for three protocols (design spec
 `docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md` §2-4, plan
-`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S6):
+`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S6, extended by
+package 2's design spec `docs/superpowers/specs/2026-07-15-step2-scarcity-crossday-
+beats-design.md` §D2 for the third protocol below):
 
 - **within-day**: per selected run, prepare features (`rowii.pipeline.prepare_run`),
   attach labels, then run one sweep per (conditioning, scorer) pair the CLI was asked
@@ -12,18 +14,26 @@ labels, conditioning, scorer) combinations for two protocols (design spec
   score every OTHER SCADA-covered run's ("day B") valid windows against it -- a
   cross-day false-alarm-rate matrix, format-compatible with the partner's own
   cross-day comparison table (no values adopted from either side).
+- **cross-day-per-state** (package-2 Task 3, spec D2): same SCADA-covered day pairs as
+  `cross-day`, but day A's detector is TRANSFERRED to day B (`rowii.state.detect.
+  FittedDetector.apply`, no refit) instead of pooling, and day B's windows are scored
+  under their own PREDICTED state against day A's per-state reference/threshold for
+  that state -- package 2's answer to whether per-state conditioning restores the FAR
+  control `cross-day`'s pooling loses (see the dedicated section below).
 
 Every combo's outputs land under `results/step2/...` (see `_within_day_out_dir`/
-`_cross_day_out_dir`), plus two shared, append-only artifacts every combo contributes
-a row/section to: `results/step2/summary.csv` and `results/step2/candidate_register.md`.
+`_cross_day_out_dir`/`_cross_day_per_state_out_dir`), plus two shared, append-only
+artifacts every combo contributes a row/section to: `results/step2/summary.csv` and
+`results/step2/candidate_register.md`.
 
 ## Labels (`--labels detected|gt`)
 
 `detected` (the default, and the only run-time-realistic mode -- design spec §2: "Per-
 state normal references built from Step-1 detected labels ... GT states used only in
-evaluation views"): `rowii.state.detect.run_detection` runs on this run's VALID windows
-only (mirrors `scripts/run_step1.py`'s own `_detect_and_report`), then gets scattered
-back into a full-length `(W,)` int64 array with the `-1` sentinel on invalid windows.
+evaluation views"): `rowii.state.detect.FittedDetector.fit` (`run_detection`'s own
+delegate since package 2's Task 2) runs on this run's VALID windows only (mirrors
+`scripts/run_step1.py`'s own `_detect_and_report`), then gets scattered back into a
+full-length `(W,)` int64 array with the `-1` sentinel on invalid windows.
 That sentinel never actually reaches `run_sweep`'s internals: `rowii.anomaly.
 references.split_by_segments` (called from `run_sweep`) only ever draws window indices
 from `PreparedRun.valid_mask == True` positions, which are EXACTLY the positions this
@@ -60,6 +70,45 @@ ELIGIBLE (excluding GT-`"unknown"` windows from both day A and day B, same mecha
 within-day), while `detected` mode never runs `run_detection` at all for cross-day (there
 is no per-label reference to build) and simply uses each day's own `valid_mask` unchanged.
 
+## Cross-day-per-state: detector transfer (package-2 spec D2)
+
+Per-state conditioning across two different days cannot simply reuse either day's own
+detected cluster ids, for exactly the reason the section above gives as cross-day's own
+reason for pooling only: KMeans label 0 fit independently on day A and day B has no
+reason to mean the same physical state on both. `cross-day-per-state` dissolves this by
+never fitting a SECOND detector at all: `_cross_day_per_state_sweep` fits day A's
+detector ONCE (`_detected_labels_and_detector`, `FittedDetector.fit`) and TRANSFERS it
+to day B (`_apply_detector_labels`, `FittedDetector.apply` -- fit-day standardization +
+fit-day HMM Viterbi decode, no refit/EM anywhere, package-2 spec D1). Day B's windows
+are then scored under their own PREDICTED (transferred) state, each against day A's
+per-state reference and per-state conformal threshold for that SAME state id --
+conditioning key = day A's cluster id, one model, one label space, so the cross-day
+label-alignment problem this package's own spec calls out never arises. Day A's own
+split collapses to fit/conformal only (`split_by_segments(day_a.segment_ids,
+day_a_valid_mask, 0.5, seed)`, day A never contributes scoring windows here either,
+exactly like `cross-day`'s own day A); day B contributes ALL of its own valid windows
+to scoring, keyed by their predicted state.
+
+This is the runtime-honest path (spec D2): `--labels gt` is rejected outright for this
+protocol (`main`'s `parser.error` guard, checked before any run is even prepared)
+rather than silently reinterpreted -- there is no meaningful "GT-conditioned" transfer
+sweep to run, since GT state names are no more comparable across days than detected
+cluster ids are, without the exact alignment problem this protocol exists to dissolve.
+GT is used only as a DIAGNOSTIC overlay, never in the runtime path: when day B has
+SCADA coverage, `far_by_true_state.csv` reports the SAME scored windows' realized FAR
+grouped by their TRUE state instead of their predicted one (`_far_by_true_state`) -- a
+side-by-side view of whether per-state conditioning controlled the false-alarm rate
+both by what the detector predicted and by what actually happened physically, never
+fed back into scoring itself.
+
+The `pooled` cell of this protocol's own comparison grid (spec D2: "conditioning
+{per-state, pooled recomputed under the same transfer protocol}") is intentionally
+NEVER reimplemented here: pooling ignores per-state distinctions entirely, so a pooled
+sweep under the transfer protocol is mathematically identical to `cross-day`'s own
+existing pooled sweep (`_cross_day_sweep`) -- the existing `--protocol cross-day`
+output IS that grid cell, unchanged, and doubles as the published pooled comparator
+this protocol's per-state numbers are checked against.
+
 ## Output layout
 
 - within-day: `results/step2/within-day/<run>/<variant>-<labels>/<conditioning>-<scorer>/`
@@ -71,17 +120,40 @@ is no per-label reference to build) and simply uses each day's own `valid_mask` 
   <scorer>-pooled/` -- same `<variant>-<labels>` convention as within-day, plus a
   `<scorer>-pooled` leaf (conditioning is always "pooled" for cross-day, so it is folded
   into the leaf name rather than kept as a separate segment).
+- cross-day-per-state (package-2 Task 3, no literal-path precedent in either spec):
+  `results/step2/cross-day-per-state/<dayA>--to--<dayB>/<variant>-<scorer>/`
+  (`_cross_day_per_state_out_dir`) -- DOUBLE-DASH `--to--`, deliberately different from
+  cross-day's `__to__`, so a pair directory's own name alone already distinguishes the
+  two protocols' outputs on disk. `--labels` is not part of this path at all (always
+  "detected" -- `gt` is rejected outright, see the section above) and conditioning is
+  always "per-state" (no separate segment for it, mirroring how cross-day folds its own
+  fixed "pooled" conditioning into its `<scorer>-pooled` leaf -- here there is no
+  remaining leaf to fold it into beyond `<variant>-<scorer>` since labels/conditioning
+  are both constants for this protocol). When day B has SCADA coverage,
+  `far_by_true_state.csv` (columns: `true_state, n_scored, n_alarms, realized_far`) is
+  written alongside the usual three files in the same combo dir (`_far_by_true_state`).
 - `results/step2/summary.csv` (append-only, one row per combo actually written this
-  invocation): `run, variant, labels, conditioning, scorer, alpha, per_label_count,
-  pooled_realized_far, mean_per_state_far, n_low_confidence, notes`. `run` holds the pair
-  string `"<dayA>__to__<dayB>"` for a cross-day row (`notes="cross-day pooled"`, spec's
-  literal wording). `per_label_count` is the spec's prose "per-label-count", snake_cased
-  to match every other summary column. `pooled_realized_far` is the realized FAR treating
-  every non-excluded label's alarms/scored-counts as one combined bucket (identical
-  arithmetic to `rowii.anomaly.sweep`'s own per-state aggregate row, recomputed locally
-  here for `conditioning="pooled"` sweeps too, which never get that row from `run_sweep`
-  itself). `mean_per_state_far` is the plain unweighted mean of each label's own
-  `realized_far` (NaN/excluded labels dropped).
+  invocation): `run, protocol, variant, labels, conditioning, scorer, alpha,
+  per_label_count, pooled_realized_far, mean_per_state_far, n_low_confidence, notes`.
+  `protocol` (package-2 addition, 2nd column) is `"within-day"`/`"cross-day"`/
+  `"cross-day-per-state"`; `_read_summary_csv_or_none` backfills it onto a pre-package-2
+  `summary.csv` that is missing the column entirely (`"cross-day"` when `run` already
+  encodes a `_cross_day_summary_row`-style `"<dayA>__to__<dayB>"` pair, else
+  `"within-day"` -- a file written before this package cannot contain a
+  `cross-day-per-state` row, so that value is never inferred, only ever written
+  explicitly by this package's own code going forward). `run` holds the pair string
+  `"<dayA>__to__<dayB>"` for a cross-day row (`notes="cross-day pooled"`, spec's literal
+  wording) or `"<dayA>--to--<dayB>"` (double-dash, matching the output-directory
+  convention above) for a cross-day-per-state row. `per_label_count` is the spec's prose
+  "per-label-count", snake_cased to match every other summary column.
+  `pooled_realized_far` is the realized FAR treating every non-excluded label's
+  alarms/scored-counts as one combined bucket (identical arithmetic to
+  `rowii.anomaly.sweep`'s own per-state aggregate row, recomputed locally here for
+  `conditioning="pooled"` sweeps too, which never get that row from `run_sweep` itself
+  -- cross-day-per-state sweeps DO get it, from the now-public `far_row_aggregate`, so
+  their summary row reads it back via `_summary_far_metrics` exactly like a within-day
+  per-state sweep would). `mean_per_state_far` is the plain unweighted mean of each
+  label's own `realized_far` (NaN/excluded labels dropped).
 - `results/step2/candidate_register.md` (append-only): a static header (written once,
   `_REGISTER_HEADER`) naming this register's purpose plus the ONE external candidate this
   package's spec calls out by name -- the partner's pre-start filling-valve (Fuelldüse)
@@ -92,15 +164,17 @@ is no per-label reference to build) and simply uses each day's own `valid_mask` 
 
 A sweep failing with `ValueError` (e.g. `rowii.anomaly.references.split_by_segments`
 finding a degenerate split -- too few segments, or a `calibration_frac` that would empty
-one side) is logged and SKIPPED for that one combo, not fatal to the whole invocation --
-mirrors `scripts/run_step1.py`'s own "no SCADA coverage" defensive branch, generalized to
-every way a single combo can legitimately have nothing to report. The same principle
-extends one level earlier: a run whose own `rowii.pipeline.prepare_run` raises
-`RuntimeError` (too short/sparse for the requested variant -- e.g. a real "two stray
-files" run like `010726-tu1-afternoon`, Task S7 real-data finding) is logged and
-excluded -- the whole run for within-day (`_run_within_day_for_run`), or just that one
-day and every pair touching it for cross-day (`_run_cross_day`), never the rest of the
-invocation.
+one side; `_cross_day_per_state_sweep` raises the same way for the identical reasons,
+plus "day B has zero eligible windows") is logged and SKIPPED for that one combo, not
+fatal to the whole invocation -- mirrors `scripts/run_step1.py`'s own "no SCADA
+coverage" defensive branch, generalized to every way a single combo can legitimately
+have nothing to report. The same principle extends one level earlier: a run whose own
+`rowii.pipeline.prepare_run` raises `RuntimeError` (too short/sparse for the requested
+variant -- e.g. a real "two stray files" run like `010726-tu1-afternoon`, Task S7
+real-data finding) is logged and excluded -- the whole run for within-day
+(`_run_within_day_for_run`), or just that one day and every pair touching it for
+cross-day (`_run_cross_day`) and cross-day-per-state (`_run_cross_day_per_state`,
+identical exclusion mechanics), never the rest of the invocation.
 """
 from __future__ import annotations
 
@@ -111,10 +185,10 @@ import logging
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -122,9 +196,20 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values  # noqa: E402
-from rowii.anomaly.references import split_by_segments  # noqa: E402
+from rowii.anomaly.references import build_references, split_by_segments  # noqa: E402
 from rowii.anomaly.scorers import KnnScorer, MahalanobisScorer, Scorer  # noqa: E402
-from rowii.anomaly.sweep import SweepConfig, SweepResult, run_sweep  # noqa: E402
+from rowii.anomaly.sweep import (  # noqa: E402
+    FarRow,
+    SweepConfig,
+    SweepResult,
+    far_row_aggregate,
+    far_row_empty_scoring,
+    far_row_excluded,
+    far_row_no_conformal_data,
+    far_row_scored,
+    run_sweep,
+    scores_and_candidates,
+)
 from rowii.config import Config, load_config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, Run, discover  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
@@ -136,7 +221,7 @@ from rowii.pipeline import (  # noqa: E402
 )
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
-from rowii.state.detect import run_detection  # noqa: E402
+from rowii.state.detect import FittedDetector  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +232,7 @@ logger = logging.getLogger(__name__)
 ConditioningName = Literal["per-state", "pooled"]
 ScorerName = Literal["knn", "mahalanobis"]
 
-_PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day")
+_PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
 )
@@ -159,14 +244,17 @@ _CONCRETE_SCORERS: tuple[ScorerName, ...] = ("knn", "mahalanobis")
 _CONCRETE_CONDITIONINGS: tuple[ConditioningName, ...] = ("per-state", "pooled")
 
 _INVALID_LABEL = -1
-"""Sentinel written into `_detected_labels`' full-length label array on invalid
-windows -- never read by `run_sweep` (module docstring)."""
+"""Sentinel written into `_detected_labels`'/`_detected_labels_and_detector`'s (and,
+for day B, `_apply_detector_labels`'s) full-length label array on invalid windows --
+never read by `run_sweep` or `_cross_day_per_state_sweep` (module docstring)."""
 
 _POOLED_LABEL = "pooled"
-"""FAR-table label for both `rowii.anomaly.sweep`'s own per-state aggregate row (its
-private `_POOLED_ROW_LABEL`, same value, not imported across modules) and this script's
-single cross-day row. Collides with a real label only if a state is itself named
-"pooled" -- not a name any detected cluster id (int) or GT state string uses."""
+"""FAR-table label for `rowii.anomaly.sweep`'s own per-state aggregate row (its private
+`_POOLED_ROW_LABEL`, same value, not imported across modules -- also reused, via the
+now-public `far_row_aggregate`, by `_cross_day_per_state_sweep`'s own aggregate row) and
+this script's single cross-day row. Collides with a real label only if a state is
+itself named "pooled" -- not a name any detected cluster id (int) or GT state string
+uses."""
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +274,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--protocol", choices=_PROTOCOL_CHOICES, default="within-day",
         help="'within-day': one blocked split per run. 'cross-day': calibrate on one "
-             "SCADA-covered run, score every other one (pooled only).",
+             "SCADA-covered run, score every other one (pooled only). "
+             "'cross-day-per-state': same day pairs, but day A's detector is "
+             "TRANSFERRED to day B (FittedDetector.apply) and scoring is conditioned "
+             "on each window's predicted state (detected-labels only, package-2 spec "
+             "D2).",
     )
     parser.add_argument(
         "--run", default="all",
         help=(
-            "Run name to process (within-day only; ignored for --protocol cross-day, "
-            "which always sweeps every SCADA-covered run pair). 'all' (default) means "
-            "every SCADA-covered run discovered under ROWII_DATA_ROOT."
+            "Run name to process (within-day only; ignored for --protocol cross-day "
+            "and cross-day-per-state, which always sweep every SCADA-covered run "
+            "pair). 'all' (default) means every SCADA-covered run discovered under "
+            "ROWII_DATA_ROOT."
         ),
     )
     parser.add_argument("--variant", choices=_VARIANT_CHOICES, default="fusion")
@@ -306,18 +399,46 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
 # ---------------------------------------------------------------------------
 
 
-def _detected_labels(prepared: PreparedRun, cfg: Config) -> np.ndarray:
-    """Full-length `(W,)` int64 detected cluster-id labels, `_INVALID_LABEL` on invalid
-    windows (module docstring) -- mirrors `scripts/run_step1.py`'s own
-    `_detect_and_report` scatter-back pattern.
-    """
+def _detected_labels_and_detector(
+    prepared: PreparedRun, cfg: Config
+) -> tuple[np.ndarray, FittedDetector]:
+    """`_detected_labels` + the `FittedDetector` behind it (package-2 spec D2:
+    `cross-day-per-state` needs day A's detector, not just its labels, to TRANSFER it
+    to day B -- `_apply_detector_labels` below)."""
     valid_mask = prepared.valid_mask
     features_valid = prepared.features[valid_mask]
     n_valid = int(valid_mask.sum())
     valid_grid = WindowGrid(
         t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns, n_windows=n_valid
     )
-    det = run_detection(features_valid, valid_grid, cfg.detect, clusterer="kmeans")
+    detector, det = FittedDetector.fit(
+        features_valid, valid_grid, cfg.detect, clusterer="kmeans"
+    )
+    full_labels = np.full(prepared.features.shape[0], _INVALID_LABEL, dtype=np.int64)
+    full_labels[valid_mask] = det.frame_labels
+    return full_labels, detector
+
+
+def _detected_labels(prepared: PreparedRun, cfg: Config) -> np.ndarray:
+    """Full-length `(W,)` int64 detected cluster-id labels, `_INVALID_LABEL` on invalid
+    windows (module docstring) -- mirrors `scripts/run_step1.py`'s own
+    `_detect_and_report` scatter-back pattern.
+    """
+    labels, _detector = _detected_labels_and_detector(prepared, cfg)
+    return labels
+
+
+def _apply_detector_labels(prepared: PreparedRun, detector: FittedDetector) -> np.ndarray:
+    """Day-B per-window labels in day-A's id space via `FittedDetector.apply` (fit-day
+    standardization + fit-day HMM decode, no refit -- package-2 spec D1),
+    `_INVALID_LABEL` on invalid windows (same scatter-back as `_detected_labels`)."""
+    valid_mask = prepared.valid_mask
+    features_valid = prepared.features[valid_mask]
+    n_valid = int(valid_mask.sum())
+    valid_grid = WindowGrid(
+        t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns, n_windows=n_valid
+    )
+    det = detector.apply(features_valid, valid_grid)
     full_labels = np.full(prepared.features.shape[0], _INVALID_LABEL, dtype=np.int64)
     full_labels[valid_mask] = det.frame_labels
     return full_labels
@@ -441,7 +562,7 @@ def _cross_day_sweep(
         columns=_SCORES_COLUMNS,
     )
 
-    # Tie-break identical to rowii.anomaly.sweep._scores_and_candidates: p-value
+    # Tie-break identical to rowii.anomaly.sweep.scores_and_candidates: p-value
     # ascending, then score DESCENDING (surfaces the more extreme reading first among
     # windows tied at the achievable-minimum p-value), then window ascending.
     top_order = np.lexsort((scoring_windows, -scores, p_vals))[:top_k]
@@ -476,6 +597,162 @@ def _cross_day_valid_mask(
 
 
 # ---------------------------------------------------------------------------
+# Cross-day-per-state sweep (package-2 Task 3, spec D2 -- see module docstring)
+# ---------------------------------------------------------------------------
+
+
+def _cross_day_per_state_sweep(
+    prepared_a: PreparedRun,
+    valid_a: np.ndarray,
+    prepared_b: PreparedRun,
+    valid_b: np.ndarray,
+    rowii_cfg: Config,
+    scorer_name: str,
+    alpha: float,
+    top_k: int,
+) -> tuple[SweepResult, np.ndarray]:
+    """Per-state cross-day sweep under DETECTOR TRANSFER (package-2 spec D2): fit day
+    A's detector, per-state references (from A's own fit-part), and per-state
+    conformal thresholds (from A's own conformal-part) -- exactly `run_sweep`'s own
+    per-state machinery, reused here via the now-public row builders (Task 3 Step 1)
+    -- then score day B's windows grouped by their PREDICTED (transferred) state
+    (`_apply_detector_labels`). Runtime-honest: no GT anywhere in this function; the
+    conditioning key is day A's cluster id (module docstring). Returns the
+    `SweepResult` plus day B's full-length predicted labels (`_INVALID_LABEL` on
+    invalid windows, same convention as `_detected_labels`) for the GT-diagnostic view
+    (`_far_by_true_state`).
+
+    Day A's own split collapses to fit/conformal only (`split_by_segments(prepared_a.
+    segment_ids, valid_a, 0.5, _CROSS_DAY_SEED)`, the SAME single call `_cross_day_
+    sweep` makes for its own day A) -- day A never contributes scoring windows here
+    either. Day B contributes ALL of its own eligible (`valid_b`) windows to scoring.
+
+    Args:
+        prepared_a: Day A's `PreparedRun` (detector fit + per-state reference source).
+        valid_a: Day A's valid mask (always `prepared_a.valid_mask` unchanged -- this
+            protocol is detected-labels only, module docstring; `main`'s `parser.error`
+            guard rejects `--labels gt` before this function is ever called).
+        prepared_b: Day B's `PreparedRun` (scoring target).
+        valid_b: Day B's valid mask, same convention as `valid_a`.
+        rowii_cfg: Project configuration -- `rowii_cfg.detect` parameterizes day A's
+            `FittedDetector.fit` (named to avoid shadowing `sweep_cfg`, the per-sweep
+            `SweepConfig` built below).
+        scorer_name: `"knn"` or `"mahalanobis"`.
+        alpha: Nominal false-alarm rate.
+        top_k: Candidate register size.
+
+    Raises:
+        ValueError: if day A's eligible windows cannot form a non-empty fit/conformal
+            split (`split_by_segments`), or day B has zero eligible windows to score.
+    """
+    labels_a, detector = _detected_labels_and_detector(prepared_a, rowii_cfg)
+
+    split = split_by_segments(prepared_a.segment_ids, valid_a, 0.5, _CROSS_DAY_SEED)
+    fit_windows, conformal_windows = split.calibration_windows, split.scoring_windows
+
+    refs = build_references(prepared_a.features, labels_a, fit_windows)
+
+    labels_b = _apply_detector_labels(prepared_b, detector)
+    scoring_windows = np.flatnonzero(valid_b).astype(np.int64)
+    if scoring_windows.size == 0:
+        raise ValueError("cross-day-per-state: day B has zero eligible windows")
+
+    # `scorer_name` is a plain `str` here (matching `_cross_day_sweep`'s own existing
+    # parameter type, and `_make_scorer`'s runtime-validated signature below) rather
+    # than the `ScorerName` Literal `SweepConfig.scorer` declares -- the mismatch is
+    # real (an arbitrary string could reach this call), so the ignore is deliberate,
+    # not a blanket suppression: `_make_scorer` already raises `ValueError` on an
+    # unrecognised name wherever it is actually called with one, same as within-day.
+    sweep_cfg = SweepConfig(alpha=alpha, top_k=top_k, scorer=scorer_name)  # type: ignore[arg-type]
+
+    all_labels = sorted(
+        set(refs.references) | set(refs.excluded)
+        | set(np.unique(labels_b[scoring_windows]).tolist())
+    )
+
+    far_rows: list[FarRow] = []
+    score_rows: list[Any] = []
+    candidate_rows: list[Any] = []
+    for label in all_labels:
+        if label not in refs.references:
+            far_rows.append(far_row_excluded(label, sweep_cfg))
+            continue
+        scorer = _make_scorer(scorer_name).fit(refs.references[label])
+        label_conformal = conformal_windows[labels_a[conformal_windows] == label]
+        if label_conformal.shape[0] == 0:
+            far_rows.append(far_row_no_conformal_data(label, sweep_cfg))
+            continue
+        conformal_scores = scorer.score(prepared_a.features[label_conformal])
+        threshold = calibrate(conformal_scores, alpha)
+
+        label_scoring = scoring_windows[labels_b[scoring_windows] == label]
+        if label_scoring.shape[0] == 0:
+            far_rows.append(far_row_empty_scoring(label, sweep_cfg, threshold))
+            continue
+        scores = scorer.score(prepared_b.features[label_scoring])
+        p_vals = p_values(scores, conformal_scores)
+        alarms = scores > threshold.threshold
+        far_rows.append(
+            far_row_scored(
+                label, sweep_cfg, threshold, int(label_scoring.shape[0]), int(alarms.sum())
+            )
+        )
+        new_scores, new_cands = scores_and_candidates(
+            label, label_scoring, scores, p_vals, alarms, top_k
+        )
+        score_rows.extend(new_scores)
+        candidate_rows.extend(new_cands)
+
+    # Same calling convention `run_sweep` itself uses (sweep.py's `far_row_aggregate`
+    # docstring): `far_rows` here still holds ONLY this sweep's own per-label rows,
+    # never a previously-appended aggregate (orchestrator resolution 3).
+    far_rows.append(far_row_aggregate(far_rows, sweep_cfg))
+
+    far_table = pd.DataFrame([asdict(r) for r in far_rows], columns=_FAR_TABLE_COLUMNS)
+    scores_df = pd.DataFrame([asdict(r) for r in score_rows], columns=_SCORES_COLUMNS)
+    candidates_df = pd.DataFrame(
+        [asdict(r) for r in candidate_rows], columns=_CANDIDATES_COLUMNS
+    )
+    return SweepResult(far_table=far_table, scores=scores_df, candidates=candidates_df), labels_b
+
+
+def _far_by_true_state(scores_df: pd.DataFrame, gt_states: np.ndarray) -> pd.DataFrame:
+    """Alarm rate of `_cross_day_per_state_sweep`'s scored day-B windows, grouped by
+    their TRUE (SCADA) state instead of the PREDICTED one -- the GT-diagnostic view
+    (module docstring, spec D2): never part of the runtime path (no GT anywhere in
+    `_cross_day_per_state_sweep` itself), a side-by-side comparison only.
+
+    Args:
+        scores_df: `_cross_day_per_state_sweep`'s own `SweepResult.scores` (raw, not
+            the `_write_sweep_outputs`-coerced copy -- `window`/`alarm` are read at
+            their original int/bool dtypes).
+        gt_states: Day B's full-length `(W,)` GT state-name array (`_gt_state_labels`),
+            aligned with `scores_df["window"]`'s indices (day B's OWN window space,
+            never day A's).
+
+    Returns:
+        One row per distinct TRUE state seen among the scored windows, columns
+        `true_state, n_scored, n_alarms, realized_far` -- `realized_far` is NaN for a
+        state with zero scored windows (never occurs here in practice, since every row
+        of *scores_df* already has some true state; kept for the same 0/0-safety
+        `rowii.anomaly.sweep.far_row_scored`'s sibling rows use).
+    """
+    windows = scores_df["window"].to_numpy()
+    alarms = scores_df["alarm"].to_numpy()
+    states = gt_states[windows]
+    rows: list[dict[str, object]] = []
+    for state in sorted(np.unique(states).tolist()):
+        mask = states == state
+        n = int(mask.sum())
+        rows.append({
+            "true_state": state, "n_scored": n,
+            "n_alarms": int(alarms[mask].sum()),
+            "realized_far": float(alarms[mask].sum()) / n if n else math.nan,
+        })
+    return pd.DataFrame(rows, columns=["true_state", "n_scored", "n_alarms", "realized_far"])
+
+
+# ---------------------------------------------------------------------------
 # Output paths
 # ---------------------------------------------------------------------------
 
@@ -496,6 +773,22 @@ def _cross_day_out_dir(
     return (
         results_root / "step2" / "cross-day" / f"{variant}-{labels_mode}"
         / f"{day_a}__to__{day_b}" / f"{scorer}-pooled"
+    )
+
+
+def _cross_day_per_state_out_dir(
+    results_root: Path, variant: str, day_a: str, day_b: str, scorer: str
+) -> Path:
+    """`results/step2/cross-day-per-state/<day_a>--to--<day_b>/<variant>-<scorer>/`
+    (module docstring's "Output layout" section) -- DOUBLE-DASH `--to--`, deliberately
+    different from `_cross_day_out_dir`'s `__to__`, so a pair directory's own name
+    alone already distinguishes the two protocols' outputs on disk. No `<labels_mode>`
+    segment (always "detected", `--labels gt` is rejected outright) and no separate
+    conditioning segment (always "per-state", the only remaining axis is `scorer`).
+    """
+    return (
+        results_root / "step2" / "cross-day-per-state" / f"{day_a}--to--{day_b}"
+        / f"{variant}-{scorer}"
     )
 
 
@@ -755,9 +1048,16 @@ def _append_candidate_register(
 # ---------------------------------------------------------------------------
 
 _SUMMARY_COLUMNS: tuple[str, ...] = (
-    "run", "variant", "labels", "conditioning", "scorer", "alpha", "per_label_count",
-    "pooled_realized_far", "mean_per_state_far", "n_low_confidence", "notes",
+    "run", "protocol", "variant", "labels", "conditioning", "scorer", "alpha",
+    "per_label_count", "pooled_realized_far", "mean_per_state_far", "n_low_confidence",
+    "notes",
 )
+
+_SUMMARY_COLUMNS_LEGACY: tuple[str, ...] = tuple(c for c in _SUMMARY_COLUMNS if c != "protocol")
+"""`_SUMMARY_COLUMNS` before package 2 added `protocol` as the 2nd column --
+`_read_summary_csv_or_none` still accepts a `summary.csv` written in this older shape
+(backfilling `protocol` onto it, never quarantining it as corrupt) so appending to a
+file left over from before this package never produces a ragged CSV."""
 
 
 @dataclass(frozen=True)
@@ -765,6 +1065,7 @@ class _SummaryRow:
     """One `results/step2/summary.csv` row -- see module docstring for column semantics."""
 
     run: str
+    protocol: str
     variant: str
     labels: str
     conditioning: str
@@ -821,10 +1122,10 @@ def _summary_row(
         far_table, conditioning
     )
     return _SummaryRow(
-        run=run_name, variant=variant, labels=labels_mode, conditioning=conditioning,
-        scorer=scorer, alpha=alpha, per_label_count=per_label_count,
-        pooled_realized_far=pooled_far, mean_per_state_far=mean_far,
-        n_low_confidence=n_low_conf, notes="",
+        run=run_name, protocol="within-day", variant=variant, labels=labels_mode,
+        conditioning=conditioning, scorer=scorer, alpha=alpha,
+        per_label_count=per_label_count, pooled_realized_far=pooled_far,
+        mean_per_state_far=mean_far, n_low_confidence=n_low_conf, notes="",
     )
 
 
@@ -841,20 +1142,57 @@ def _cross_day_summary_row(
     row = far_table.iloc[0]
     far = float(row["realized_far"]) if pd.notna(row["realized_far"]) else math.nan
     return _SummaryRow(
-        run=f"{day_a}__to__{day_b}", variant=variant, labels=labels_mode,
-        conditioning="pooled", scorer=scorer, alpha=alpha, per_label_count=1,
-        pooled_realized_far=far, mean_per_state_far=far,
+        run=f"{day_a}__to__{day_b}", protocol="cross-day", variant=variant,
+        labels=labels_mode, conditioning="pooled", scorer=scorer, alpha=alpha,
+        per_label_count=1, pooled_realized_far=far, mean_per_state_far=far,
         n_low_confidence=int(bool(row["low_confidence"])), notes="cross-day pooled",
     )
 
 
+def _cross_day_per_state_summary_row(
+    day_a: str, day_b: str, variant: str, scorer: str, alpha: float, far_table: pd.DataFrame,
+) -> _SummaryRow:
+    """cross-day-per-state's summary row: unlike `_cross_day_summary_row`'s single
+    pooled row, `_cross_day_per_state_sweep`'s `far_table` has the SAME shape a
+    within-day `conditioning="per-state"` sweep produces -- one row per predicted
+    state plus a `run_sweep`-style aggregate `"pooled"` row (from the now-public
+    `far_row_aggregate`, Task 3 Step 1) -- so this reuses `_summary_far_metrics`
+    directly rather than `_cross_day_summary_row`'s single-row shortcut.
+    `labels`/`conditioning` are both constants for this protocol (`"detected"`/
+    `"per-state"` -- `--labels gt` is rejected outright, module docstring).
+    """
+    per_label_count, pooled_far, mean_far, n_low_conf = _summary_far_metrics(
+        far_table, "per-state"
+    )
+    return _SummaryRow(
+        run=f"{day_a}--to--{day_b}", protocol="cross-day-per-state", variant=variant,
+        labels="detected", conditioning="per-state", scorer=scorer, alpha=alpha,
+        per_label_count=per_label_count, pooled_realized_far=pooled_far,
+        mean_per_state_far=mean_far, n_low_confidence=n_low_conf,
+        notes="cross-day-per-state transfer",
+    )
+
+
+def _infer_legacy_protocol(run_field: str) -> str:
+    """Backfill inference for one legacy (pre-`protocol`-column) summary row's `run`
+    field (`_read_summary_csv_or_none`): `"cross-day"` iff it matches
+    `_cross_day_summary_row`'s own `f"{day_a}__to__{day_b}"` pair encoding -- the ONLY
+    legacy row-builder that ever puts `"__to__"` into `run` (`_summary_row` always
+    writes a single run's own bare name) -- else `"within-day"`. `cross-day-per-state`
+    is never inferred here: that protocol was born together with the `protocol` column
+    itself (this package), so a file lacking the column could never contain one of its
+    rows in the first place.
+    """
+    return "cross-day" if "__to__" in run_field else "within-day"
+
+
 def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     """`pd.read_csv(summary_path)`, or `None` if the file does not exist, fails to
-    parse, or parses to the wrong column schema (S6 review finding: `summary.csv` is a
-    shared, append-only artifact a killed prior invocation can leave mid-write). A
-    corrupt file is quarantined via `_quarantine_corrupt_file` (never deleted, never
-    silently overwritten); the caller then treats this exactly like "does not exist
-    yet".
+    parse, or parses to neither a recognised column schema (S6 review finding:
+    `summary.csv` is a shared, append-only artifact a killed prior invocation can leave
+    mid-write). A corrupt file is quarantined via `_quarantine_corrupt_file` (never
+    deleted, never silently overwritten); the caller then treats this exactly like
+    "does not exist yet".
 
     Deliberately narrow on which parse failures count as "corrupt, recover":
     `pd.errors.ParserError` (malformed CSV token stream, e.g. an unbalanced quote),
@@ -864,8 +1202,13 @@ def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     (pandas fills missing trailing fields with NaN), and losing part of the HEADER line
     itself instead changes which columns get parsed at all, again with no exception.
     Neither is caught by the exceptions above, so the parsed result's columns are also
-    checked against `_SUMMARY_COLUMNS` explicitly: any mismatch is treated as corrupt
-    too, rather than attempting to salvage a partial row.
+    checked explicitly against TWO known schemas: `_SUMMARY_COLUMNS` (current) is
+    returned as-is; `_SUMMARY_COLUMNS_LEGACY` (pre-package-2, missing `protocol`) is
+    BACKFILLED -- `protocol` is inserted as the 2nd column, one value per row inferred
+    from that row's own `run` field (`_infer_legacy_protocol`) -- and returned, never
+    quarantined, so appending a fresh row (which always carries an explicit `protocol`)
+    to an old-schema file never produces a ragged CSV. Any OTHER column set is treated
+    as corrupt, same as before package 2.
     """
     if not summary_path.exists():
         return None
@@ -874,6 +1217,9 @@ def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
         _quarantine_corrupt_file(summary_path, f"{type(exc).__name__}: {exc}")
         return None
+    if list(existing.columns) == list(_SUMMARY_COLUMNS_LEGACY):
+        existing.insert(1, "protocol", existing["run"].map(_infer_legacy_protocol))
+        return existing
     if list(existing.columns) != list(_SUMMARY_COLUMNS):
         _quarantine_corrupt_file(
             summary_path, f"unexpected columns {list(existing.columns)!r} (truncated write?)"
@@ -1096,6 +1442,115 @@ def _run_cross_day(
 
 
 # ---------------------------------------------------------------------------
+# cross-day-per-state orchestration (package-2 Task 3, spec D2)
+# ---------------------------------------------------------------------------
+
+
+def _run_cross_day_per_state(
+    variant: str,
+    cfg: Config,
+    index: RecordingIndex,
+    scorers: tuple[ScorerName, ...],
+    alpha: float,
+    top_k: int,
+    *,
+    use_cache: bool,
+) -> int:
+    """Every ordered pair of SCADA-covered runs from DIFFERENT day trees, same variant,
+    scored under the per-state DETECTOR-TRANSFER protocol (`_cross_day_per_state_
+    sweep`, module docstring). Mirrors `_run_cross_day`'s own orchestration closely
+    (prepare-failure skip-not-crash, feature-dim compatibility check, same-day-root
+    pairs skipped), with two differences specific to this protocol: no `_cross_day_
+    valid_mask` narrowing -- this protocol is detected-labels only (`main`'s `parser.
+    error` guard rejects `--labels gt` before this function is ever called), so every
+    day's own `prepared.valid_mask` is used unchanged -- and, when day B has SCADA
+    coverage, an extra `far_by_true_state.csv` GT-diagnostic write alongside the usual
+    three output files. Returns the number of (pair, scorer) combos actually written.
+    """
+    if _is_beats_variant(variant):
+        _import_beats_or_exit()
+
+    days = _scada_covered_runs(index)
+    if len(days) < 2:
+        logger.warning(
+            "run_step2: cross-day-per-state needs >= 2 SCADA-covered runs, found %d "
+            "-- nothing to do",
+            len(days),
+        )
+        return 0
+
+    prepared_by_run: dict[str, tuple[PreparedRun, pd.DataFrame | None]] = {}
+    for run in days:
+        try:
+            prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
+        except RuntimeError as exc:
+            logger.warning(
+                "run_step2: prepare_run failed for run %r (%s) -- run is too "
+                "short/sparse for this variant, excluding from cross-day-per-state "
+                "(every pair touching it is skipped below, all OTHER days' pairs are "
+                "unaffected)",
+                run.name, exc,
+            )
+            continue
+        scada = _load_run_scada(prepared, run, index)
+        prepared_by_run[run.name] = (prepared, scada)
+
+    n_written = 0
+    for run_a, run_b in itertools.permutations(days, 2):
+        if run_a.day_root == run_b.day_root:
+            continue  # not genuinely "cross-day" -- same day tree, different session
+        if run_a.name not in prepared_by_run or run_b.name not in prepared_by_run:
+            continue  # one side failed prepare_run above -- pair has nothing to score
+
+        prepared_a, _scada_a = prepared_by_run[run_a.name]
+        prepared_b, scada_b = prepared_by_run[run_b.name]
+
+        if prepared_a.features.shape[1] != prepared_b.features.shape[1]:
+            logger.warning(
+                "run_step2: skipping cross-day-per-state %s -> %s (incompatible "
+                "feature dims %d vs %d)",
+                run_a.name, run_b.name,
+                prepared_a.features.shape[1], prepared_b.features.shape[1],
+            )
+            continue
+
+        for scorer in scorers:
+            try:
+                result, _labels_b = _cross_day_per_state_sweep(
+                    prepared_a, prepared_a.valid_mask, prepared_b, prepared_b.valid_mask,
+                    cfg, scorer, alpha, top_k,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "run_step2: cross-day-per-state sweep failed for %s -> %s / %s "
+                    "(%s) -- skipping",
+                    run_a.name, run_b.name, scorer, exc,
+                )
+                continue
+
+            out_dir = _cross_day_per_state_out_dir(
+                cfg.results_root, variant, run_a.name, run_b.name, scorer
+            )
+            _write_sweep_outputs(out_dir, result, prepared_b.grid, scada_b, top_k)
+            if scada_b is not None:
+                gt_states = _gt_state_labels(scada_b, cfg)
+                far_by_true_state = _far_by_true_state(result.scores, gt_states)
+                far_by_true_state.to_csv(out_dir / "far_by_true_state.csv", index=False)
+            _append_summary_row(
+                cfg.results_root,
+                _cross_day_per_state_summary_row(
+                    run_a.name, run_b.name, variant, scorer, alpha, result.far_table,
+                ),
+            )
+            _append_candidate_register(
+                cfg.results_root, f"{run_a.name}--to--{run_b.name}", variant, "detected",
+                "per-state", scorer, alpha, result.candidates, prepared_b.grid, scada_b,
+            )
+            n_written += 1
+    return n_written
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1123,7 +1578,7 @@ def main(argv: list[str] | None = None) -> int:
             f"run_step2: wrote {n_combos} within-day combo(s) across {len(runs)} run(s) "
             f"to {cfg.results_root / 'step2'}"
         )
-    else:
+    elif args.protocol == "cross-day":
         if args.conditioning not in ("all", "pooled"):
             logger.info(
                 "run_step2: --conditioning=%r is ignored for --protocol cross-day "
@@ -1136,6 +1591,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"run_step2: wrote {n_combos} cross-day pair-combo(s) to "
+            f"{cfg.results_root / 'step2'}"
+        )
+    else:
+        if args.labels == "gt":
+            parser.error("--protocol cross-day-per-state is detected-labels only (spec D2)")
+        if args.conditioning not in ("all", "per-state"):
+            logger.info(
+                "run_step2: --conditioning=%r is ignored for --protocol "
+                "cross-day-per-state (always per-state -- module docstring; the "
+                "pooled cell of this protocol's own grid is mathematically identical "
+                "to --protocol cross-day, spec D2, so it is never reimplemented here)",
+                args.conditioning,
+            )
+        n_combos = _run_cross_day_per_state(
+            args.variant, cfg, index, scorers, args.alpha, args.top_k, use_cache=use_cache,
+        )
+        print(
+            f"run_step2: wrote {n_combos} cross-day-per-state pair-combo(s) to "
             f"{cfg.results_root / 'step2'}"
         )
 

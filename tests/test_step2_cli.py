@@ -17,12 +17,16 @@ from __future__ import annotations
 import logging
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from rowii.config import Config, load_config
+from rowii.pipeline import PreparedRun
+from rowii.signals.windows import WindowGrid
 from tests.fixtures.gantner_builder import build_gantner_file
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
@@ -622,9 +626,9 @@ def test_append_summary_row_recovers_from_unbalanced_quote(tmp_path, monkeypatch
     summary_path.write_text(corrupt_content)
 
     row = run_step2._SummaryRow(
-        run="tu", variant="fusion", labels="detected", conditioning="pooled",
-        scorer="knn", alpha=0.05, per_label_count=1, pooled_realized_far=0.1,
-        mean_per_state_far=0.1, n_low_confidence=0, notes="",
+        run="tu", protocol="within-day", variant="fusion", labels="detected",
+        conditioning="pooled", scorer="knn", alpha=0.05, per_label_count=1,
+        pooled_realized_far=0.1, mean_per_state_far=0.1, n_low_confidence=0, notes="",
     )
     with caplog.at_level(logging.WARNING):
         run_step2._append_summary_row(tmp_path / "results", row)
@@ -666,9 +670,9 @@ def test_append_summary_row_recovers_from_truncated_header(tmp_path, monkeypatch
     assert list(silently_parsed.columns) != list(run_step2._SUMMARY_COLUMNS)
 
     row = run_step2._SummaryRow(
-        run="tu", variant="fusion", labels="detected", conditioning="pooled",
-        scorer="knn", alpha=0.05, per_label_count=1, pooled_realized_far=0.1,
-        mean_per_state_far=0.1, n_low_confidence=0, notes="",
+        run="tu", protocol="within-day", variant="fusion", labels="detected",
+        conditioning="pooled", scorer="knn", alpha=0.05, per_label_count=1,
+        pooled_realized_far=0.1, mean_per_state_far=0.1, n_low_confidence=0, notes="",
     )
     with caplog.at_level(logging.WARNING):
         run_step2._append_summary_row(tmp_path / "results", row)
@@ -733,3 +737,222 @@ def test_append_candidate_register_repairs_truncated_header(tmp_path, monkeypatc
 
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any(str(register_path) in w for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# 9. cross-day-per-state protocol (Task 3, package-2 spec D2)
+# ---------------------------------------------------------------------------
+
+
+class TestCrossDayPerStateSweep:
+    """Unit coverage of `run_step2._cross_day_per_state_sweep` directly, against
+    hand-built `PreparedRun`s -- mirrors `tests/test_sweep.py`'s own `_prepared_run`
+    fixture-construction style, since this sweep composes the same public row builders
+    `run_sweep` does (Task 3 Step 1's rename). The CLI-level guard test at the bottom
+    goes through `run_step2.main` on this file's usual synthetic-tree fixtures instead,
+    since it exercises argument parsing, not the sweep itself.
+    """
+
+    def _make_prepared(
+        self,
+        seed: int,
+        n_segments: int = 8,
+        seg_len: int = 40,
+        order: tuple[int, ...] = (0, 1),
+    ) -> PreparedRun:
+        """Two well-separated 'states' (feature values 0 and 5), alternating by
+        segment so `split_by_segments` has material on both sides for both labels."""
+        rng = np.random.default_rng(seed)
+        feats: list[np.ndarray] = []
+        seg_ids: list[np.ndarray] = []
+        for s in range(n_segments):
+            value = 5.0 * order[s % len(order)]
+            feats.append(rng.normal(value, 0.1, (seg_len, 2)))
+            seg_ids.append(np.full(seg_len, s, dtype=np.int64))
+        features = np.vstack(feats)
+        n = len(features)
+        return PreparedRun(
+            features=features,
+            grid=WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n),
+            valid_mask=np.ones(n, dtype=bool),
+            feature_names=["f0", "f1"],
+            segment_ids=np.concatenate(seg_ids),
+        )
+
+    def _rowii_cfg(self) -> Config:
+        cfg = load_config()  # follow the file's existing config-construction pattern
+        return replace(cfg, detect=replace(cfg.detect, n_states=2, min_dwell_s=3))
+
+    def test_per_state_rows_and_far_control_on_shifted_day(self) -> None:
+        prepared_a = self._make_prepared(seed=0)
+        prepared_b = self._make_prepared(seed=1)  # same distribution, new draws
+
+        import run_step2
+
+        result, labels_b = run_step2._cross_day_per_state_sweep(
+            prepared_a, prepared_a.valid_mask, prepared_b, prepared_b.valid_mask,
+            self._rowii_cfg(), "knn", alpha=0.10, top_k=5,
+        )
+        far = result.far_table
+        real_rows = far[(far["label"] != "pooled") & (~far["excluded"])]
+        assert len(real_rows) == 2  # both fit-day states got references + scoring
+        # Exchangeable B => realized FAR near alpha for every state (loose gate;
+        # per-rep FAR is Beta-distributed, not exact)
+        assert (real_rows["realized_far"] < 0.35).all()
+        # aggregate row present, labeled like run_sweep's own convention
+        assert (far["label"] == "pooled").sum() == 1
+        assert labels_b.shape == (prepared_b.features.shape[0],)
+
+    def test_day_b_windows_keyed_by_predicted_state(self) -> None:
+        prepared_a = self._make_prepared(seed=0, order=(0, 1))
+        # Day B: 6 of 8 segments are state "5.0", 2 are state "0.0" -- proportions
+        # must show up in per-label n_scored via PREDICTED labels
+        prepared_b = self._make_prepared(seed=2, order=(1, 1, 1, 0))
+
+        import run_step2
+
+        result, labels_b = run_step2._cross_day_per_state_sweep(
+            prepared_a, prepared_a.valid_mask, prepared_b, prepared_b.valid_mask,
+            self._rowii_cfg(), "knn", alpha=0.10, top_k=5,
+        )
+        far = result.far_table
+        real_rows = far[(far["label"] != "pooled") & (~far["excluded"])]
+        counts = dict(zip(real_rows["label"], real_rows["n_scored"], strict=True))
+        assert max(counts.values()) >= 2.5 * min(counts.values())
+        # Runtime-honest (spec D2): day B's predicted labels live in day A's own
+        # cluster-id space (here {0, 1}, n_states=2) -- never a day-B-only concept.
+        assert set(np.unique(labels_b[labels_b >= 0])) <= {0, 1}
+
+    def test_gt_labels_mode_rejected(self, tmp_path, monkeypatch, capsys) -> None:
+        """CLI-level guard (spec D2: the transfer runtime path is detected-labels
+        only) -- `--protocol cross-day-per-state` combined with `--labels gt` must be
+        rejected before any run is ever prepared. `parser.error(...)` is the simplest,
+        clearest rejection (orchestrator resolution 2): argparse writes a usage message
+        to stderr and raises `SystemExit(2)`, the same exit-code contract this file's
+        own `test_run_step2_help_exits_zero` already asserts for `--help` (exit 0).
+        """
+        monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+        monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+        (tmp_path / "data").mkdir()  # must exist for discover() -- empty is fine, the
+        # guard fires before any run is ever looked up
+
+        import run_step2
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_step2.main(
+                ["--protocol", "cross-day-per-state", "--labels", "gt", "--variant", "fusion"]
+            )
+        assert exc_info.value.code == 2
+
+        err = capsys.readouterr().err
+        assert "cross-day-per-state" in err
+        assert "detected-labels only" in err
+
+
+def test_cross_day_per_state_end_to_end_and_summary_backfill(tmp_path, monkeypatch) -> None:
+    """CLI-level end-to-end run of `--protocol cross-day-per-state`, on the SAME
+    two-day synthetic tree `test_cross_day_pooled_matrix` uses (Task 3 Step 5): the
+    usual three per-combo files plus the GT-diagnostic `far_by_true_state.csv` exist
+    for both pair directions, `summary.csv` gains real `"cross-day-per-state"` rows,
+    AND a `summary.csv` already on disk in the OLD (pre-package-2, no `protocol`
+    column) schema is backfilled -- not quarantined -- when this run's own append
+    reads it back (`_read_summary_csv_or_none`'s backfill path).
+    """
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_two_day_root(tmp_path / "data")
+
+    import run_step2
+
+    # Pre-seed a legacy (pre-package-2) summary.csv: one within-day-shaped row (bare
+    # run name) and one cross-day-shaped row (`"__to__"` pair encoding), so this run's
+    # own append exercises BOTH branches of `_infer_legacy_protocol`.
+    results_root = tmp_path / "results"
+    step2_dir = results_root / "step2"
+    step2_dir.mkdir(parents=True)
+    legacy_columns = list(run_step2._SUMMARY_COLUMNS_LEGACY)
+    legacy_rows = pd.DataFrame(
+        [
+            {
+                "run": "tu", "variant": "fusion", "labels": "detected",
+                "conditioning": "pooled", "scorer": "knn", "alpha": 0.05,
+                "per_label_count": 1, "pooled_realized_far": 0.05,
+                "mean_per_state_far": 0.05, "n_low_confidence": 0, "notes": "",
+            },
+            {
+                "run": "000001-tu__to__000002-tu", "variant": "fusion",
+                "labels": "detected", "conditioning": "pooled", "scorer": "knn",
+                "alpha": 0.05, "per_label_count": 1, "pooled_realized_far": 0.07,
+                "mean_per_state_far": 0.07, "n_low_confidence": 0,
+                "notes": "cross-day pooled",
+            },
+        ],
+        columns=legacy_columns,
+    )
+    legacy_rows.to_csv(step2_dir / "summary.csv", index=False)
+
+    exit_code = run_step2.main(
+        ["--protocol", "cross-day-per-state", "--variant", "fusion", "--scorer", "knn"]
+    )
+    assert exit_code == 0
+
+    forward_dir = (
+        results_root / "step2" / "cross-day-per-state" / "000001-tu--to--000002-tu"
+        / "fusion-knn"
+    )
+    backward_dir = (
+        results_root / "step2" / "cross-day-per-state" / "000002-tu--to--000001-tu"
+        / "fusion-knn"
+    )
+    for out_dir in (forward_dir, backward_dir):
+        far_table_path = out_dir / "far_table.csv"
+        assert far_table_path.is_file(), f"missing {far_table_path}"
+        far_table = pd.read_csv(far_table_path)
+        assert len(far_table) > 0
+
+        assert (out_dir / "scores.parquet").is_file()
+        assert (out_dir / "candidates.md").is_file()
+
+        far_by_true_state_path = out_dir / "far_by_true_state.csv"
+        assert far_by_true_state_path.is_file(), f"missing {far_by_true_state_path}"
+        far_by_true_state = pd.read_csv(far_by_true_state_path)
+        assert list(far_by_true_state.columns) == [
+            "true_state", "n_scored", "n_alarms", "realized_far",
+        ]
+
+    summary = pd.read_csv(results_root / "step2" / "summary.csv")
+    assert "protocol" in summary.columns
+    new_rows = summary[summary["protocol"] == "cross-day-per-state"]
+    assert len(new_rows) == 2  # forward + backward pair
+    assert set(new_rows["run"]) == {
+        "000001-tu--to--000002-tu", "000002-tu--to--000001-tu",
+    }
+    assert (new_rows["labels"] == "detected").all()
+    assert (new_rows["conditioning"] == "per-state").all()
+    assert (new_rows["notes"] == "cross-day-per-state transfer").all()
+
+    # Backfill path (Step 5): the two PRE-EXISTING legacy rows survive this run's
+    # append, unchanged apart from the newly-backfilled "protocol" value.
+    old_rows = summary[summary["protocol"] != "cross-day-per-state"].set_index(
+        "run", drop=False
+    )
+    assert len(old_rows) == 2
+    assert old_rows.loc["tu", "protocol"] == "within-day"
+    assert old_rows.loc["000001-tu__to__000002-tu", "protocol"] == "cross-day"
+    legacy_by_run = legacy_rows.set_index("run", drop=False)
+    for run_name in ("tu", "000001-tu__to__000002-tu"):
+        for col in legacy_columns:
+            actual = old_rows.loc[run_name, col]
+            expected = legacy_by_run.loc[run_name, col]
+            # CSV round-trip quirk (unrelated to the backfill logic under test): an
+            # empty-string field (e.g. the "tu" row's own blank "notes") reads back as
+            # NaN, not "" -- both count as "unchanged" here.
+            if pd.isna(actual) and (expected == "" or pd.isna(expected)):
+                continue
+            assert actual == expected, (
+                f"backfilled row for {run_name!r} changed column {col!r}: "
+                f"{actual!r} != {expected!r}"
+            )
+
+    register_text = (results_root / "step2" / "candidate_register.md").read_text()
+    assert "000001-tu--to--000002-tu / fusion-detected / per-state-knn" in register_text
