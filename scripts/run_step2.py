@@ -196,6 +196,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values  # noqa: E402
+from rowii.anomaly.recon import ConvAeScorer, LstmAeScorer, MlpAeScorer  # noqa: E402
 from rowii.anomaly.references import build_references, split_by_segments  # noqa: E402
 from rowii.anomaly.scorers import (  # noqa: E402
     IsolationForestScorer,
@@ -243,17 +244,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ConditioningName = Literal["per-state", "pooled"]
-ScorerName = Literal["knn", "mahalanobis", "ocsvm", "iforest", "lof"]
+ScorerName = Literal[
+    "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae"
+]
 
 _PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
 )
-_SCORER_CHOICES: tuple[str, ...] = ("knn", "mahalanobis", "ocsvm", "iforest", "lof", "all")
+_SCORER_CHOICES: tuple[str, ...] = (
+    "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae", "all",
+)
 _CONDITIONING_CHOICES: tuple[str, ...] = ("per-state", "pooled", "all")
 _LABELS_CHOICES: tuple[str, ...] = ("detected", "gt")
 
-_CONCRETE_SCORERS: tuple[ScorerName, ...] = ("knn", "mahalanobis", "ocsvm", "iforest", "lof")
+_CONCRETE_SCORERS: tuple[ScorerName, ...] = (
+    "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae",
+)
 _CONCRETE_CONDITIONINGS: tuple[ConditioningName, ...] = ("per-state", "pooled")
 
 _INVALID_LABEL = -1
@@ -527,8 +534,15 @@ def _make_scorer(name: str) -> Scorer:
         return IsolationForestScorer()
     if name == "lof":
         return LofScorer()
+    if name == "mlpae":
+        return MlpAeScorer()
+    if name == "lstmae":
+        return LstmAeScorer()
+    if name == "convae":
+        return ConvAeScorer()
     raise ValueError(
-        f"scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', or 'lof', got {name!r}"
+        f"scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', 'lof', 'mlpae', "
+        f"'lstmae', or 'convae', got {name!r}"
     )
 
 

@@ -838,3 +838,23 @@ def test_make_scorer_knows_classical_names() -> None:
     ]:
         scorer = _make_scorer(name)
         assert type(scorer).__name__ == cls_name
+
+
+# ---------------------------------------------------------------------------
+# Registry: _make_scorer resolves the reconstruction baseline names too (Step-2
+# package 3 Task 3, design spec `docs/superpowers/specs/2026-07-15-step2-package3-
+# baselines-design.md` D2) -- constructing a `rowii.anomaly.recon` scorer never
+# imports torch itself (only `fit`/`score` do, module docstring), so this needs
+# no `pytest.importorskip("torch")`/`ROWII_FORCE_CPU` fixture, unlike
+# `tests/test_recon.py`'s own fit/score-exercising suite.
+# ---------------------------------------------------------------------------
+
+
+def test_make_scorer_knows_reconstruction_names() -> None:
+    for name, cls_name in [
+        ("mlpae", "MlpAeScorer"),
+        ("lstmae", "LstmAeScorer"),
+        ("convae", "ConvAeScorer"),
+    ]:
+        scorer = _make_scorer(name)
+        assert type(scorer).__name__ == cls_name
