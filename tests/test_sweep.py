@@ -23,6 +23,7 @@ from rowii.anomaly.sweep import (
     SweepConfig,
     SweepResult,
     _assert_three_way_disjoint,
+    _make_scorer,
     run_sweep,
     scores_and_candidates,
 )
@@ -818,3 +819,22 @@ def test_sweep_config_and_result_are_frozen() -> None:
     result = run_sweep(prepared, labels, cfg)
     with pytest.raises(AttributeError):
         result.far_table = pd.DataFrame()  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Registry: _make_scorer resolves the classical one-class baseline names too
+# (Step-2 package 3 Task 1, design spec `docs/superpowers/specs/
+# 2026-07-15-step2-package3-baselines-design.md` D1) -- the knn/mahalanobis branches
+# are already exercised indirectly by every `run_sweep` test above (`cfg.scorer`
+# defaults to `"knn"`); this is `_make_scorer`'s own first direct test.
+# ---------------------------------------------------------------------------
+
+
+def test_make_scorer_knows_classical_names() -> None:
+    for name, cls_name in [
+        ("ocsvm", "OcSvmScorer"),
+        ("iforest", "IsolationForestScorer"),
+        ("lof", "LofScorer"),
+    ]:
+        scorer = _make_scorer(name)
+        assert type(scorer).__name__ == cls_name

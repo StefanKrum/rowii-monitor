@@ -197,7 +197,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values  # noqa: E402
 from rowii.anomaly.references import build_references, split_by_segments  # noqa: E402
-from rowii.anomaly.scorers import KnnScorer, MahalanobisScorer, Scorer  # noqa: E402
+from rowii.anomaly.scorers import (  # noqa: E402
+    IsolationForestScorer,
+    KnnScorer,
+    LofScorer,
+    MahalanobisScorer,
+    OcSvmScorer,
+    Scorer,
+)
 from rowii.anomaly.sweep import (  # noqa: E402
     FarRow,
     SweepConfig,
@@ -236,17 +243,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ConditioningName = Literal["per-state", "pooled"]
-ScorerName = Literal["knn", "mahalanobis"]
+ScorerName = Literal["knn", "mahalanobis", "ocsvm", "iforest", "lof"]
 
 _PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
 )
-_SCORER_CHOICES: tuple[str, ...] = ("knn", "mahalanobis", "all")
+_SCORER_CHOICES: tuple[str, ...] = ("knn", "mahalanobis", "ocsvm", "iforest", "lof", "all")
 _CONDITIONING_CHOICES: tuple[str, ...] = ("per-state", "pooled", "all")
 _LABELS_CHOICES: tuple[str, ...] = ("detected", "gt")
 
-_CONCRETE_SCORERS: tuple[ScorerName, ...] = ("knn", "mahalanobis")
+_CONCRETE_SCORERS: tuple[ScorerName, ...] = ("knn", "mahalanobis", "ocsvm", "iforest", "lof")
 _CONCRETE_CONDITIONINGS: tuple[ConditioningName, ...] = ("per-state", "pooled")
 
 _INVALID_LABEL = -1
@@ -514,7 +521,15 @@ def _make_scorer(name: str) -> Scorer:
         return KnnScorer()
     if name == "mahalanobis":
         return MahalanobisScorer()
-    raise ValueError(f"scorer must be 'knn' or 'mahalanobis', got {name!r}")
+    if name == "ocsvm":
+        return OcSvmScorer()
+    if name == "iforest":
+        return IsolationForestScorer()
+    if name == "lof":
+        return LofScorer()
+    raise ValueError(
+        f"scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', or 'lof', got {name!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

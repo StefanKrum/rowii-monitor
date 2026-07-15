@@ -4,12 +4,21 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
 
-from rowii.anomaly.scorers import KnnScorer, MahalanobisScorer
+from rowii.anomaly.scorers import (
+    IsolationForestScorer,
+    KnnScorer,
+    LofScorer,
+    MahalanobisScorer,
+    OcSvmScorer,
+    Scorer,
+)
 
 # ---------------------------------------------------------------------------
 # Constructed inliers-vs-outliers (item 1)
@@ -420,3 +429,101 @@ def test_mahalanobis_score_raises_on_inf_in_query() -> None:
     x[1, 0] = np.inf
     with pytest.raises(ValueError, match="non-finite"):
         scorer.score(x)
+
+
+# ---------------------------------------------------------------------------
+# Classical one-class baselines: OcSvmScorer / IsolationForestScorer / LofScorer
+# (Step-2 package 3 Task 1, design spec `docs/superpowers/specs/
+# 2026-07-15-step2-package3-baselines-design.md` D1) -- synthetic-only, no real data,
+# mirroring the constructed inliers-vs-outliers fixture pattern established above.
+# ---------------------------------------------------------------------------
+
+
+class TestClassicalScorers:
+    """One shared behavioural-contract suite for all three sklearn-backed baselines --
+    each wraps a different sklearn one-class estimator behind the same `fit(reference)`
+    / `score(x)` shape `KnnScorer`/`MahalanobisScorer` already establish above."""
+
+    def _reference_and_outliers(
+        self, seed: int = 0
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        reference = rng.normal(0.0, 0.1, (300, 8))
+        inliers = rng.normal(0.0, 0.1, (50, 8))
+        outliers = rng.normal(4.0, 0.1, (10, 8))
+        return reference, inliers, outliers
+
+    @pytest.mark.parametrize(
+        "scorer_factory",
+        [
+            lambda: OcSvmScorer(),
+            lambda: IsolationForestScorer(),
+            lambda: LofScorer(),
+        ],
+        ids=["ocsvm", "iforest", "lof"],
+    )
+    def test_outliers_score_higher_than_inliers(
+        self, scorer_factory: Callable[[], Scorer]
+    ) -> None:
+        reference, inliers, outliers = self._reference_and_outliers()
+        scorer = scorer_factory().fit(reference)
+        s_in = scorer.score(inliers)
+        s_out = scorer.score(outliers)
+        assert s_in.dtype == np.float64
+        assert s_in.shape == (50,)
+        assert s_out.min() > s_in.max()  # explicit polarity: higher = anomalous
+
+    def test_iforest_deterministic_given_seed(self) -> None:
+        reference, inliers, _outliers = self._reference_and_outliers()
+        a = IsolationForestScorer(random_seed=7).fit(reference).score(inliers)
+        b = IsolationForestScorer(random_seed=7).fit(reference).score(inliers)
+        np.testing.assert_array_equal(a, b)
+
+    @pytest.mark.parametrize(
+        "scorer_factory",
+        [
+            lambda: OcSvmScorer(),
+            lambda: IsolationForestScorer(),
+            lambda: LofScorer(),
+        ],
+        ids=["ocsvm", "iforest", "lof"],
+    )
+    def test_non_finite_reference_rejected(
+        self, scorer_factory: Callable[[], Scorer]
+    ) -> None:
+        bad = np.full((30, 4), np.nan)
+        with pytest.raises(ValueError, match="finite"):
+            scorer_factory().fit(bad)
+
+    @pytest.mark.parametrize(
+        "scorer_factory",
+        [
+            lambda: OcSvmScorer(),
+            lambda: IsolationForestScorer(),
+            lambda: LofScorer(),
+        ],
+        ids=["ocsvm", "iforest", "lof"],
+    )
+    def test_non_finite_query_rejected(
+        self, scorer_factory: Callable[[], Scorer]
+    ) -> None:
+        """`score()` rejects a non-finite query the same way `KnnScorer`/
+        `MahalanobisScorer` do (`_check_query`) -- added beyond the brief's own
+        snippet because sklearn's three estimators do NOT agree on this by
+        themselves: verified empirically that `IsolationForest.score_samples`
+        silently accepts a NaN row (no exception at all) while
+        `OneClassSVM.decision_function` and `LocalOutlierFactor.score_samples` both
+        raise their own `ValueError`. Calling `_check_query` explicitly makes all
+        three consistent with every other `Scorer` in this module instead of
+        depending on that per-estimator inconsistency."""
+        reference, _inliers, _outliers = self._reference_and_outliers()
+        scorer = scorer_factory().fit(reference)
+        bad = np.zeros((5, 8))
+        bad[2, 3] = np.nan
+        with pytest.raises(ValueError, match="non-finite"):
+            scorer.score(bad)
+
+    def test_names_match_registry(self) -> None:
+        assert OcSvmScorer().name == "ocsvm"
+        assert IsolationForestScorer().name == "iforest"
+        assert LofScorer().name == "lof"

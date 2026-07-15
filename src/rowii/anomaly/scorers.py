@@ -24,13 +24,31 @@ distance -- the classical alternative that accounts for the normal class's covar
 structure (design §3.5). `shrinkage` (0 = pure per-feature variance, 1 = fully
 isotropic) keeps a reference feature with near-zero variance from letting a
 correspondingly tiny deviation dominate the score; see `MahalanobisScorer.fit`.
+
+Step-2 package 3 (design spec `docs/superpowers/specs/2026-07-15-step2-package3-
+baselines-design.md` D1, plan `docs/superpowers/plans/2026-07-15-step2-package3-
+baselines.md` Task 1) extends this module with three classical one-class baselines on
+the SAME `Scorer` contract: `OcSvmScorer` (sklearn `OneClassSVM`, RBF kernel),
+`IsolationForestScorer` (sklearn `IsolationForest`), and `LofScorer` (sklearn
+`LocalOutlierFactor`, novelty mode). Each wraps its underlying sklearn estimator's own
+anomaly quantity behind an EXPLICIT sign flip (`score = -<sklearn quantity>`,
+documented per class): sklearn's own convention scores all three the opposite way
+round from this module's "higher = more anomalous" contract
+(`OneClassSVM.decision_function`/`IsolationForest.score_samples`/
+`LocalOutlierFactor.score_samples` are all "higher = more NORMAL"). Polarity is fixed
+by construction here and never auto-detected -- an unreliable heuristic for degenerate
+models and heavy-tailed score distributions (this project's own v1 H2/OC-SVM lesson).
+All three reuse `_check_reference` for `fit()` and `_check_query` for `score()`, the
+same two preconditions `KnnScorer`/`MahalanobisScorer` already enforce above.
 """
 from __future__ import annotations
 
 from typing import Protocol
 
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
+from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor, NearestNeighbors
+from sklearn.svm import OneClassSVM
 
 _VAR_FLOOR = 1e-12
 
@@ -258,3 +276,187 @@ class MahalanobisScorer:
             raise ValueError("MahalanobisScorer.score() called before fit()")
         diff_sq = np.square(x - mean)
         return np.sqrt(np.sum(diff_sq / var_shrunk, axis=1))
+
+
+class OcSvmScorer:
+    """One-class SVM baseline (RBF kernel) on the shared Scorer contract (design spec
+    `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md` D1).
+
+    score = -decision_function(x); higher = more anomalous; polarity is set here by
+    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    `OneClassSVM.decision_function` is signed the opposite way (positive = inlier side
+    of the learned boundary, negative = outlier side), so every score this class
+    returns is that quantity's negation.
+    """
+
+    name: str = "ocsvm"
+
+    def __init__(self, nu: float = 0.1, gamma: str = "scale") -> None:
+        """Args:
+            nu: Upper bound on the fraction of reference points allowed to lie
+                outside the learned boundary (and lower bound on the fraction of
+                support vectors) -- sklearn `OneClassSVM`'s own `nu`, unchanged.
+            gamma: RBF kernel coefficient -- sklearn `OneClassSVM`'s own `gamma`,
+                unchanged (`"scale"`, `"auto"`, or a positive value encoded as str).
+        """
+        self.nu = nu
+        self.gamma = gamma
+        self._model = OneClassSVM(nu=nu, gamma=gamma)
+
+    def fit(self, reference: np.ndarray) -> OcSvmScorer:
+        """Fit the one-class SVM boundary on *reference*.
+
+        Args:
+            reference: `(N, F)` finite matrix of normal reference windows.
+
+        Returns:
+            self.
+
+        Raises:
+            ValueError: if `reference` is empty or has a non-finite value (see
+                `_check_reference`); sklearn's own `OneClassSVM.fit` is not otherwise
+                guarded here (unlike `KnnScorer.fit`'s explicit `k`-vs-reference-size
+                check) -- `nu` is a fraction in (0, 1], not a neighbour count, so it
+                has no comparable reference-size failure mode.
+        """
+        _check_reference(reference)
+        self._model.fit(reference)
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        """`(W, F)` windows -> `(W,)` float64 scores, higher = more anomalous
+        (`-decision_function(x)`, see class docstring).
+
+        Raises:
+            ValueError: if `x` contains non-finite values (`_check_query`), or if
+                called before `fit()` (sklearn's own `NotFittedError`, a `ValueError`
+                subclass).
+        """
+        _check_query(x)
+        return np.asarray(-self._model.decision_function(x), dtype=np.float64)
+
+
+class IsolationForestScorer:
+    """Isolation Forest baseline on the shared Scorer contract (design spec
+    `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md` D1).
+
+    score = -score_samples(x); higher = more anomalous; polarity is set here by
+    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    `IsolationForest.score_samples` is signed the opposite way (higher = more normal,
+    i.e. harder to isolate with few random splits), so every score this class returns
+    is that quantity's negation.
+    """
+
+    name: str = "iforest"
+
+    def __init__(self, n_estimators: int = 200, random_seed: int = 7) -> None:
+        """Args:
+            n_estimators: Number of isolation trees -- sklearn `IsolationForest`'s
+                own `n_estimators`, unchanged.
+            random_seed: Seed for tree construction (random split feature/threshold
+                choices) -- passed through as sklearn `IsolationForest`'s own
+                `random_state`, so `fit` + `score` are deterministic given the same
+                *reference*/query and `random_seed` (see
+                `test_iforest_deterministic_given_seed`).
+        """
+        self.n_estimators = n_estimators
+        self.random_seed = random_seed
+        self._model = IsolationForest(n_estimators=n_estimators, random_state=random_seed)
+
+    def fit(self, reference: np.ndarray) -> IsolationForestScorer:
+        """Fit the isolation-tree ensemble on *reference*.
+
+        Args:
+            reference: `(N, F)` finite matrix of normal reference windows.
+
+        Returns:
+            self.
+
+        Raises:
+            ValueError: if `reference` is empty or has a non-finite value (see
+                `_check_reference`).
+        """
+        _check_reference(reference)
+        self._model.fit(reference)
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        """`(W, F)` windows -> `(W,)` float64 scores, higher = more anomalous
+        (`-score_samples(x)`, see class docstring).
+
+        Raises:
+            ValueError: if `x` contains non-finite values (`_check_query`), or if
+                called before `fit()` (sklearn's own `NotFittedError`, a `ValueError`
+                subclass). `_check_query` is load-bearing here, not defensive
+                boilerplate: verified empirically that sklearn's own
+                `IsolationForest.score_samples` does NOT raise on a NaN row (it
+                silently scores it) -- unlike `OneClassSVM.decision_function` and
+                `LocalOutlierFactor.score_samples`, which both raise their own
+                `ValueError` on non-finite input. Without this explicit check, this
+                scorer alone would silently accept invalid input every other scorer
+                in this module rejects.
+        """
+        _check_query(x)
+        return np.asarray(-self._model.score_samples(x), dtype=np.float64)
+
+
+class LofScorer:
+    """Local Outlier Factor baseline (novelty mode) on the shared Scorer contract
+    (design spec `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md`
+    D1).
+
+    score = -score_samples(x); higher = more anomalous; polarity is set here by
+    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    `LocalOutlierFactor.score_samples` (in `novelty=True` mode, required to score
+    points outside the reference set) is signed the opposite way (higher = more
+    normal, i.e. locally as dense as its neighbours), so every score this class
+    returns is that quantity's negation.
+    """
+
+    name: str = "lof"
+
+    def __init__(self, n_neighbors: int = 20) -> None:
+        """Args:
+            n_neighbors: Neighbourhood size for the local density estimate --
+                sklearn `LocalOutlierFactor`'s own `n_neighbors`, unchanged. `fit`
+                does NOT pre-validate this against the reference row count the way
+                `KnnScorer.fit` validates `k` (design spec D1: deliberately left to
+                sklearn). Verified empirically against the installed sklearn version
+                that a `n_neighbors` exceeding the reference row count does NOT raise
+                -- sklearn silently reduces it to `n_reference - 1` and emits a
+                `UserWarning` (spec D1's "raises the sklearn error untouched" does
+                not hold here; see task report). The sweep's `min_ref` floor (default
+                20, matching this class's own default `n_neighbors`) makes a
+                reference smaller than `n_neighbors` structurally rare regardless.
+        """
+        self.n_neighbors = n_neighbors
+        self._model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True)
+
+    def fit(self, reference: np.ndarray) -> LofScorer:
+        """Fit the local-density reference on *reference*.
+
+        Args:
+            reference: `(N, F)` finite matrix of normal reference windows.
+
+        Returns:
+            self.
+
+        Raises:
+            ValueError: if `reference` is empty or has a non-finite value (see
+                `_check_reference`).
+        """
+        _check_reference(reference)
+        self._model.fit(reference)
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        """`(W, F)` windows -> `(W,)` float64 scores, higher = more anomalous
+        (`-score_samples(x)`, see class docstring).
+
+        Raises:
+            ValueError: if `x` contains non-finite values (`_check_query`), or if
+                called before `fit()` (sklearn's own `NotFittedError`, a `ValueError`
+                subclass).
+        """
+        _check_query(x)
+        return np.asarray(-self._model.score_samples(x), dtype=np.float64)
