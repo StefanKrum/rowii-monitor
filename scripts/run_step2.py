@@ -283,10 +283,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run", default="all",
         help=(
-            "Run name to process (within-day only; ignored for --protocol cross-day "
-            "and cross-day-per-state, which always sweep every SCADA-covered run "
-            "pair). 'all' (default) means every SCADA-covered run discovered under "
-            "ROWII_DATA_ROOT."
+            "Run name(s): 'all' (default) or a comma-separated list. within-day: "
+            "process each named run in sequence ('all' = every SCADA-covered run "
+            "discovered under ROWII_DATA_ROOT). cross-day/cross-day-per-state: 'all' "
+            "sweeps every ordered pair of SCADA-covered runs; a list (>= 2 names) "
+            "restricts the sweep to ordered pairs where BOTH days are in the list. "
+            "An unknown name anywhere in the list exits 2 naming the available runs."
         ),
     )
     parser.add_argument("--variant", choices=_VARIANT_CHOICES, default="fusion")
@@ -327,20 +329,44 @@ def _resolve_conditionings(choice: str) -> tuple[ConditioningName, ...]:
 def _scada_covered_runs(index: RecordingIndex) -> list[Run]:
     """Runs whose own day tree has at least one Betriebsdaten file -- the within-day
     default run set (`--run all`) and cross-day's full "day" set alike. A run with no
-    SCADA at all can still be swept in `detected`-labels mode via an explicit
-    `--run <name>`, but contributes no SCADA context/GT view, so it is excluded from
-    this DEFAULT selection.
+    SCADA at all can still be swept WITHIN-DAY in `detected`-labels mode via an
+    explicit `--run` name, but contributes no SCADA context/GT view, so it is excluded
+    from this DEFAULT selection (and, being outside the cross-day protocols' "day"
+    universe, from every cross-day pair set even when explicitly named).
     """
     return [r for r in index.runs if index.betriebsdaten_by_day.get(r.day_root)]
 
 
-def _resolve_runs(choice: str, index: RecordingIndex) -> list[Run]:
-    if choice == "all":
+def _parse_run_names(run_arg: str) -> list[str] | None:
+    """`--run`'s value -> `None` for the `"all"` sentinel, else the comma-split name
+    list (whitespace-stripped, empty tokens dropped -- `"a, b"` and `"a,b"` parse
+    identically; a single bare name is just a one-element list, preserving the
+    pre-package-2 single-name calling convention)."""
+    if run_arg == "all":
+        return None
+    return [name.strip() for name in run_arg.split(",") if name.strip()]
+
+
+def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
+    """Names in *names* with no matching discovered run, de-duplicated, in the
+    order first seen -- empty if every name resolves. Mirrors `scripts/warm_cache.py`'s
+    own private helper of the same name (duplicated rather than imported -- one script
+    must not depend on a SIBLING script's internals, `_betriebsdaten_for_grid`'s
+    docstring)."""
+    known = {r.name for r in index.runs}
+    return list(dict.fromkeys(n for n in names if n not in known))
+
+
+def _resolve_runs(run_names: list[str] | None, index: RecordingIndex) -> list[Run]:
+    """`None` (`--run all`) -> every SCADA-covered run; else the named runs, in the
+    given order. Names are already validated against the index by `main` (an unknown
+    name exits 2 there, mirroring `scripts/warm_cache.py`'s precedent) before this is
+    ever called, so every name resolves. A named run needs no SCADA coverage for
+    within-day (`_scada_covered_runs`' own docstring), so resolution draws from ALL
+    discovered runs, not the SCADA-covered subset."""
+    if run_names is None:
         return _scada_covered_runs(index)
-    matches = [r for r in index.runs if r.name == choice]
-    if not matches:
-        logger.warning("run %r not found in discovered index (no matching Run)", choice)
-    return matches
+    return [r for name in run_names for r in index.runs if r.name == name]
 
 
 def _import_beats_or_exit() -> None:
@@ -1352,11 +1378,17 @@ def _run_cross_day(
     top_k: int,
     *,
     use_cache: bool,
+    run_names: list[str] | None = None,
 ) -> int:
     """Every ordered pair of SCADA-covered runs from DIFFERENT day trees (`Run.
     day_root`), same variant (trivially true -- one variant per invocation), skipping
-    pairs whose feature dims are incompatible (module docstring). Returns the number
-    of (pair, scorer) combos actually written.
+    pairs whose feature dims are incompatible (module docstring). *run_names* (an
+    explicit `--run` list; `None` = `--run all`, the pre-package-2 behavior unchanged)
+    restricts the day set BEFORE anything is prepared: only pairs where BOTH day A and
+    day B are named take part, so unlisted days never even reach `prepare_run` -- the
+    point of the filter (Task 3 follow-up): scoping a sweep to specific pairs without
+    triggering hours of cache-miss feature extraction for every other discovered day.
+    Returns the number of (pair, scorer) combos actually written.
 
     A day whose own `prepare_run` raises `RuntimeError` (too short/sparse for this
     variant, e.g. a real "two stray files" run) is logged and excluded from
@@ -1371,9 +1403,14 @@ def _run_cross_day(
         _import_beats_or_exit()
 
     days = _scada_covered_runs(index)
+    if run_names is not None:
+        selected = set(run_names)
+        days = [r for r in days if r.name in selected]
     if len(days) < 2:
         logger.warning(
-            "run_step2: cross-day needs >= 2 SCADA-covered runs, found %d -- nothing to do",
+            "run_step2: cross-day needs >= 2 SCADA-covered runs%s, found %d -- "
+            "nothing to do",
+            " matching --run" if run_names is not None else "",
             len(days),
         )
         return 0
@@ -1455,26 +1492,33 @@ def _run_cross_day_per_state(
     top_k: int,
     *,
     use_cache: bool,
+    run_names: list[str] | None = None,
 ) -> int:
     """Every ordered pair of SCADA-covered runs from DIFFERENT day trees, same variant,
     scored under the per-state DETECTOR-TRANSFER protocol (`_cross_day_per_state_
     sweep`, module docstring). Mirrors `_run_cross_day`'s own orchestration closely
     (prepare-failure skip-not-crash, feature-dim compatibility check, same-day-root
-    pairs skipped), with two differences specific to this protocol: no `_cross_day_
-    valid_mask` narrowing -- this protocol is detected-labels only (`main`'s `parser.
-    error` guard rejects `--labels gt` before this function is ever called), so every
-    day's own `prepared.valid_mask` is used unchanged -- and, when day B has SCADA
-    coverage, an extra `far_by_true_state.csv` GT-diagnostic write alongside the usual
-    three output files. Returns the number of (pair, scorer) combos actually written.
+    pairs skipped, and the same *run_names* pair-set filter -- see `_run_cross_day`'s
+    docstring for its exact semantics and rationale), with two differences specific to
+    this protocol: no `_cross_day_valid_mask` narrowing -- this protocol is
+    detected-labels only (`main`'s `parser.error` guard rejects `--labels gt` before
+    this function is ever called), so every day's own `prepared.valid_mask` is used
+    unchanged -- and, when day B has SCADA coverage, an extra `far_by_true_state.csv`
+    GT-diagnostic write alongside the usual three output files. Returns the number of
+    (pair, scorer) combos actually written.
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
 
     days = _scada_covered_runs(index)
+    if run_names is not None:
+        selected = set(run_names)
+        days = [r for r in days if r.name in selected]
     if len(days) < 2:
         logger.warning(
-            "run_step2: cross-day-per-state needs >= 2 SCADA-covered runs, found %d "
+            "run_step2: cross-day-per-state needs >= 2 SCADA-covered runs%s, found %d "
             "-- nothing to do",
+            " matching --run" if run_names is not None else "",
             len(days),
         )
         return 0
@@ -1560,14 +1604,48 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Pure argument-shape validation first (no config/index needed): every check here
+    # is a usage error (`parser.error` -> exit 2) a user should hit BEFORE any data
+    # tree is touched.
+    run_names = _parse_run_names(args.run)
+    if run_names is not None and not run_names:
+        parser.error("--run got an empty run-name list")
+    if args.protocol == "cross-day-per-state" and args.labels == "gt":
+        parser.error("--protocol cross-day-per-state is detected-labels only (spec D2)")
+    if (
+        args.protocol in ("cross-day", "cross-day-per-state")
+        and run_names is not None
+        and len(run_names) < 2
+    ):
+        parser.error(
+            f"--protocol {args.protocol} needs --run 'all' or >= 2 comma-separated "
+            "run names (a single run has no cross-day pairs)"
+        )
+
     cfg = load_config()
     index = discover(cfg.data_root)
+
+    if run_names is not None:
+        unknown = _unknown_run_names(run_names, index)
+        if unknown:
+            # Mirrors scripts/warm_cache.py's unknown-run precedent: hard usage error
+            # (exit 2, listing every discovered run) rather than warn-and-skip -- an
+            # explicitly named run silently matching nothing would defeat the point
+            # of scoping the sweep in the first place.
+            available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+            print(
+                f"run_step2: unknown run name(s): {', '.join(unknown)}; "
+                f"available runs: {available}",
+                file=sys.stderr,
+            )
+            return 2
+
     use_cache = not args.no_cache
     scorers = _resolve_scorers(args.scorer)
 
     if args.protocol == "within-day":
         conditionings = _resolve_conditionings(args.conditioning)
-        runs = _resolve_runs(args.run, index)
+        runs = _resolve_runs(run_names, index)
         n_combos = 0
         for run in runs:
             n_combos += _run_within_day_for_run(
@@ -1587,15 +1665,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         n_combos = _run_cross_day(
             args.variant, cfg, index, scorers, args.labels, args.alpha, args.top_k,
-            use_cache=use_cache,
+            use_cache=use_cache, run_names=run_names,
         )
         print(
             f"run_step2: wrote {n_combos} cross-day pair-combo(s) to "
             f"{cfg.results_root / 'step2'}"
         )
     else:
-        if args.labels == "gt":
-            parser.error("--protocol cross-day-per-state is detected-labels only (spec D2)")
         if args.conditioning not in ("all", "per-state"):
             logger.info(
                 "run_step2: --conditioning=%r is ignored for --protocol "
@@ -1605,7 +1681,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.conditioning,
             )
         n_combos = _run_cross_day_per_state(
-            args.variant, cfg, index, scorers, args.alpha, args.top_k, use_cache=use_cache,
+            args.variant, cfg, index, scorers, args.alpha, args.top_k,
+            use_cache=use_cache, run_names=run_names,
         )
         print(
             f"run_step2: wrote {n_combos} cross-day-per-state pair-combo(s) to "
