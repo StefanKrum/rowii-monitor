@@ -52,7 +52,7 @@ import numpy as np
 _CEIL_TOLERANCE = 1e-9
 
 
-def _threshold_index(n: int, alpha: float) -> int:
+def threshold_index(n: int, alpha: float) -> int:
     """1-based rank `idx = ceil((n + 1) * (1 - alpha))` of the calibration order
     statistic `calibrate` needs -- see module docstring. Clamped to >= 1: for any
     `alpha` in `(0, 1)` the true (unperturbed) value is always > 0, so the only way
@@ -131,7 +131,7 @@ def calibrate(calibration_scores: np.ndarray, alpha: float) -> ConformalThreshol
         raise ValueError(f"calibration_scores must have at least 1 element, got {n}")
     _raise_if_non_finite(calibration_scores, "calibration_scores")
 
-    idx = _threshold_index(n, alpha)
+    idx = threshold_index(n, alpha)
     if idx <= n:
         threshold = float(np.sort(calibration_scores)[idx - 1])
         low_confidence = False
