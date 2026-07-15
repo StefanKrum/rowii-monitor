@@ -113,6 +113,11 @@ this protocol's per-state numbers are checked against.
 
 - within-day: `results/step2/within-day/<run>/<variant>-<labels>/<conditioning>-<scorer>/`
   (`far_table.csv`, `scores.parquet`, `candidates.md`) -- exactly the spec's literal path.
+  `--states K` (package-3 Task 6, within-day only) appends a `-k<K>` suffix to the
+  `<variant>-<labels>` segment ONLY when K is non-default (`fusion-detected-k8/`), so a
+  non-default conditioning-granularity run never collides with -- or overwrites -- the
+  default-K layout; `summary.csv`'s own `variant` column carries the same suffix
+  (`_within_day_out_dir`/`_summary_row`).
 - cross-day: the spec only writes `results/step2/cross-day/<variant>/<dayA>__to__<dayB>/`
   literally, with no room for the `--labels`/`--scorer` axes a single invocation can still
   sweep over (`--scorer all`, `--labels gt`) without collision. Binding extension
@@ -333,6 +338,17 @@ def build_parser() -> argparse.ArgumentParser:
              "ground-truth state strings, for diagnostics (design spec §2).",
     )
     parser.add_argument(
+        "--states", type=int, default=None,
+        help=(
+            "Conditioning granularity (package-3 Task 6): number of detected "
+            "sub-clusters (k) the within-day sweep's own detector fits, overriding "
+            "cfg.detect.n_states (default: 4). within-day only (parser.error for any "
+            "other --protocol); must be >= 2. A non-default value suffixes the combo "
+            "out-dir and its summary.csv 'variant' with '-k<K>', so it never collides "
+            "with -- or overwrites -- the default-K layout."
+        ),
+    )
+    parser.add_argument(
         "--no-cache", action="store_true",
         help=(
             "Disable rowii.pipeline.prepare_run's on-disk feature cache "
@@ -494,11 +510,20 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
 
 
 def _detected_labels_and_detector(
-    prepared: PreparedRun, cfg: Config
+    prepared: PreparedRun, cfg: Config, k: int | None = None
 ) -> tuple[np.ndarray, FittedDetector]:
     """`_detected_labels` + the `FittedDetector` behind it (package-2 spec D2:
     `cross-day-per-state` needs day A's detector, not just its labels, to TRANSFER it
-    to day B -- `_apply_detector_labels` below)."""
+    to day B -- `_apply_detector_labels` below).
+
+    `k` (package-3 Task 6, `--states`): overrides `cfg.detect.n_states`'s cluster
+    count for THIS fit only, passed straight through to `FittedDetector.fit`'s own `k`
+    parameter. `None` (every caller except a within-day run given `--states`) is a
+    pure pass-through -- `FittedDetector.fit` already defaults `k=None` to
+    `cfg.n_states` itself, so this adds no new branching, only a wider signature. Both
+    existing callers (`_detected_labels` below, `_cross_day_per_state_sweep`) keep
+    calling this with no `k` argument at all, so their behavior is unchanged.
+    """
     valid_mask = prepared.valid_mask
     features_valid = prepared.features[valid_mask]
     n_valid = int(valid_mask.sum())
@@ -506,7 +531,7 @@ def _detected_labels_and_detector(
         t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns, n_windows=n_valid
     )
     detector, det = FittedDetector.fit(
-        features_valid, valid_grid, cfg.detect, clusterer="kmeans"
+        features_valid, valid_grid, cfg.detect, clusterer="kmeans", k=k
     )
     full_labels = np.full(prepared.features.shape[0], _INVALID_LABEL, dtype=np.int64)
     full_labels[valid_mask] = det.frame_labels
@@ -868,11 +893,19 @@ def _far_by_true_state(scores_df: pd.DataFrame, gt_states: np.ndarray) -> pd.Dat
 
 def _within_day_out_dir(
     results_root: Path, run_name: str, variant: str, labels_mode: str,
-    conditioning: str, scorer: str,
+    conditioning: str, scorer: str, *, states: int | None = None,
 ) -> Path:
+    """`results/step2/within-day/<run>/<variant>-<labels>[-k<states>]/<conditioning>-
+    <scorer>/` -- `states` (package-3 Task 6, `--states`) appends a `-k<states>`
+    suffix to the variant-labels segment ONLY when given (`fusion-detected-k8`), so a
+    non-default conditioning-granularity run never collides with -- or overwrites --
+    the default-K layout. `None` (every call without `--states`) reproduces the
+    pre-Task-6 path byte-for-byte.
+    """
+    k_suffix = f"-k{states}" if states is not None else ""
     return (
         results_root / "step2" / "within-day" / run_name
-        / f"{variant}-{labels_mode}" / f"{conditioning}-{scorer}"
+        / f"{variant}-{labels_mode}{k_suffix}" / f"{conditioning}-{scorer}"
     )
 
 
@@ -1225,14 +1258,20 @@ def _summary_far_metrics(
 
 def _summary_row(
     run_name: str, variant: str, labels_mode: str, conditioning: str, scorer: str,
-    alpha: float, far_table: pd.DataFrame,
+    alpha: float, far_table: pd.DataFrame, *, states: int | None = None,
 ) -> _SummaryRow:
+    """`states` (package-3 Task 6, `--states`): mirrors `_within_day_out_dir`'s own
+    `-k<states>` suffix convention, applied to the `variant` column ONLY when given
+    (`variant="fusion-k8"`) -- the same "no --states -> byte-compatible" guarantee, so
+    a summary row stays traceable to (without literally re-deriving) its combo's own
+    out-dir even though `variant`/`labels` remain two independent columns."""
     per_label_count, pooled_far, mean_far, n_low_conf = _summary_far_metrics(
         far_table, conditioning
     )
+    k_suffix = f"-k{states}" if states is not None else ""
     return _SummaryRow(
-        run=run_name, protocol="within-day", variant=variant, labels=labels_mode,
-        conditioning=conditioning, scorer=scorer, alpha=alpha,
+        run=run_name, protocol="within-day", variant=f"{variant}{k_suffix}",
+        labels=labels_mode, conditioning=conditioning, scorer=scorer, alpha=alpha,
         per_label_count=per_label_count, pooled_realized_far=pooled_far,
         mean_per_state_far=mean_far, n_low_confidence=n_low_conf, notes="",
     )
@@ -1711,6 +1750,7 @@ def _run_within_day_for_run(
     top_k: int,
     *,
     use_cache: bool,
+    states: int | None = None,
     score_fusion: bool = False,
     score_fusion_scorer: str = "knn",
 ) -> int:
@@ -1741,6 +1781,14 @@ def _run_within_day_for_run(
     skipped WITHOUT affecting that combo's own already-written normal sweep outputs
     or `n_written` count -- this view is a strict addition, never a gate on the base
     sweep.
+
+    `states` (`--states`, package-3 Task 6, `None` by default): the conditioning
+    granularity override for THIS run's own detector, forwarded to `_detected_labels_
+    and_detector`'s `k` parameter -- only meaningful for `labels_mode == "detected"`
+    (a `gt`-labels sweep never fits a detector at all, so `states` is simply unused on
+    that branch). Also forwarded to `_within_day_out_dir`/`_summary_row` so a non-
+    default value's combo outputs and summary row stay disambiguated from -- and never
+    overwrite -- the default-K layout (see those functions' own docstrings).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -1771,7 +1819,7 @@ def _run_within_day_for_run(
         valid_mask = prepared.valid_mask & (labels != "unknown")
         sweep_prepared = dataclasses.replace(prepared, valid_mask=valid_mask)
     else:
-        labels = _detected_labels(prepared, cfg)
+        labels, _detector = _detected_labels_and_detector(prepared, cfg, k=states)
         sweep_prepared = prepared
 
     n_written = 0
@@ -1787,13 +1835,15 @@ def _run_within_day_for_run(
             continue
 
         out_dir = _within_day_out_dir(
-            cfg.results_root, run.name, variant, labels_mode, conditioning, scorer
+            cfg.results_root, run.name, variant, labels_mode, conditioning, scorer,
+            states=states,
         )
         _write_sweep_outputs(out_dir, result, sweep_prepared.grid, scada, top_k)
         _append_summary_row(
             cfg.results_root,
             _summary_row(
-                run.name, variant, labels_mode, conditioning, scorer, alpha, result.far_table
+                run.name, variant, labels_mode, conditioning, scorer, alpha,
+                result.far_table, states=states,
             ),
         )
         _append_candidate_register(
@@ -2082,6 +2132,13 @@ def main(argv: list[str] | None = None) -> int:
             "--score-fusion requires --protocol within-day and --variant fusion "
             f"(got --protocol {args.protocol!r} --variant {args.variant!r})"
         )
+    if args.states is not None and args.states < 2:
+        parser.error(f"--states must be >= 2, got {args.states}")
+    if args.states is not None and args.protocol != "within-day":
+        parser.error(
+            "--states requires --protocol within-day (conditions the within-day "
+            f"sweep's own detector only) -- got --protocol {args.protocol!r}"
+        )
 
     cfg = load_config()
     index = discover(cfg.data_root)
@@ -2112,6 +2169,7 @@ def main(argv: list[str] | None = None) -> int:
             n_combos += _run_within_day_for_run(
                 run, args.variant, cfg, index, scorers, conditionings,
                 args.labels, args.alpha, args.top_k, use_cache=use_cache,
+                states=args.states,
                 score_fusion=args.score_fusion,
                 score_fusion_scorer=args.score_fusion_scorer,
             )

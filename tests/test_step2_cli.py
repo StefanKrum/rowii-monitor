@@ -199,7 +199,7 @@ def test_run_step2_help_exits_zero(capsys) -> None:
     out = capsys.readouterr().out
     for flag in (
         "--protocol", "--run", "--variant", "--scorer", "--conditioning",
-        "--alpha", "--top-k", "--labels", "--no-cache",
+        "--alpha", "--top-k", "--labels", "--states", "--no-cache",
     ):
         assert flag in out, f"missing {flag!r} in --help output"
 
@@ -1173,3 +1173,156 @@ def test_score_fusion_requires_within_day_and_fusion_variant(
         )
     assert exc_info2.value.code == 2
     assert "requires --protocol within-day and --variant fusion" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# 12. --states K conditioning-granularity flag (within-day, package-3 Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_states_flag_conditions_on_k_and_suffixes_out_dir(tmp_path, monkeypatch) -> None:
+    """`--states 3` overrides the default k=4 detector granularity for within-day
+    detected-label sweeps: the combo out-dir gains a `-k3` suffix on its variant-labels
+    segment (so it never collides with -- or overwrites -- the default-K layout), the
+    resulting far_table has at most 3 distinct (non-aggregate) detected-state rows, and
+    the summary.csv row carries the same suffixed `variant` string (task brief binding
+    detail 3)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+            "--conditioning", "per-state", "--scorer", "knn", "--states", "3",
+        ]
+    )
+    assert exit_code == 0
+
+    results_root = tmp_path / "results"
+    combo_dir = (
+        results_root / "step2" / "within-day" / "tu" / "fusion-detected-k3"
+        / "per-state-knn"
+    )
+    far_table_path = combo_dir / "far_table.csv"
+    assert far_table_path.is_file(), f"missing {far_table_path}"
+    far_table = pd.read_csv(far_table_path)
+    non_pooled = far_table[far_table["label"] != "pooled"]
+    assert len(non_pooled) <= 3
+
+    default_dir = results_root / "step2" / "within-day" / "tu" / "fusion-detected"
+    assert not default_dir.exists(), (
+        "--states 3 must not write into (or collide with) the default-K layout"
+    )
+
+    summary = pd.read_csv(results_root / "step2" / "summary.csv")
+    assert (summary["variant"] == "fusion-k3").all()
+    assert (summary["labels"] == "detected").all()
+
+
+def test_states_below_two_rejected(tmp_path, monkeypatch, capsys) -> None:
+    """`--states 1` leaves nothing to condition on (need >= 2 clusters) -- rejected up
+    front, same `parser.error` pattern as `test_score_fusion_requires_within_day_and_
+    fusion_variant`."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--states", "1"])
+    assert exc_info.value.code == 2
+    # Specific enough to only match main()'s own semantic parser.error, not argparse's
+    # generic "unrecognized arguments" rejection (which would also exit 2 and also
+    # contain the substring "--states" if the flag did not exist at all).
+    assert "must be >= 2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("protocol", ["cross-day", "cross-day-per-state"])
+def test_states_requires_within_day_protocol(
+    tmp_path, monkeypatch, capsys, protocol
+) -> None:
+    """`--states` conditions the WITHIN-DAY detected-label detector only -- neither
+    cross-day protocol ever calls `_detected_labels_and_detector` with a caller-
+    supplied `k` (module docstring's cross-day/cross-day-per-state sections), so
+    combining `--states` with either is a usage error, same `parser.error` pattern as
+    `test_cross_day_single_run_name_rejected`."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--protocol", protocol, "--variant", "fusion", "--states", "3"])
+    assert exc_info.value.code == 2
+    # Specific enough to only match main()'s own semantic parser.error, not argparse's
+    # generic "unrecognized arguments" rejection (same reasoning as
+    # test_states_below_two_rejected above).
+    assert "requires --protocol within-day" in capsys.readouterr().err
+
+
+def test_states_flag_passes_k_to_fitted_detector_fit(tmp_path, monkeypatch) -> None:
+    """`--states K` must actually reach `FittedDetector.fit`'s own `k` parameter --
+    the real mechanism that changes how many detected sub-clusters the sweep
+    conditions on. Spies on `FittedDetector.fit` (delegating to the real
+    implementation, so the sweep still runs correctly) rather than relying only on
+    `far_table` row counts, which could coincidentally satisfy the test above even if
+    `k` were silently dropped somewhere along the way."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    captured_k: list[int | None] = []
+    original_fit = run_step2.FittedDetector.fit
+
+    def _spy_fit(
+        features: np.ndarray, grid: WindowGrid, cfg: object, clusterer: str = "kmeans",
+        k: int | None = None,
+    ) -> object:
+        captured_k.append(k)
+        return original_fit(features, grid, cfg, clusterer=clusterer, k=k)
+
+    monkeypatch.setattr(run_step2.FittedDetector, "fit", _spy_fit)
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+            "--conditioning", "pooled", "--scorer", "knn", "--states", "3",
+        ]
+    )
+    assert exit_code == 0
+    assert captured_k == [3]
+
+
+def test_states_default_produces_unsuffixed_dir(tmp_path, monkeypatch) -> None:
+    """No `--states` (the default, `None` -> `cfg.detect.n_states`) must reproduce the
+    pre-Task-6 unsuffixed out-dir and summary `variant` string byte-for-byte -- the
+    binding byte-compatibility requirement (package-3 Task 6 brief)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+            "--conditioning", "pooled", "--scorer", "knn",
+        ]
+    )
+    assert exit_code == 0
+
+    results_root = tmp_path / "results"
+    combo_dir = (
+        results_root / "step2" / "within-day" / "tu" / "fusion-detected" / "pooled-knn"
+    )
+    assert (combo_dir / "far_table.csv").is_file()
+
+    summary = pd.read_csv(results_root / "step2" / "summary.csv")
+    assert (summary["variant"] == "fusion").all()
