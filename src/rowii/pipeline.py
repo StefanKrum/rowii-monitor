@@ -48,6 +48,7 @@ from rowii.config import Config
 from rowii.io.dataset import BurstFile, Run, run_utc_offset_ns
 from rowii.io.gantner import GantnerHeader, read_gantner, read_header
 from rowii.signals.features import AudioFeaturizer, VibFeaturizer, fuse
+from rowii.signals.logmel import LogmelFeaturizer
 from rowii.signals.windows import WindowGrid, common_grid, coverage, window_slices
 
 if TYPE_CHECKING:
@@ -61,11 +62,13 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Streams per variant (spec: audio streams = both mic files' channels;
-# vibration = both vib streams' live channels; fusion = all four).
+# vibration = both vib streams' live channels; fusion = all four; logmel = the
+# primary (generator) mic ONLY, package-3 spec D3: size bound, documented).
 # ---------------------------------------------------------------------------
 
 _AUDIO_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0", "RAWTurbineMic__1")
 _VIB_STREAMS: tuple[str, ...] = ("RAWGeneratorVib__2", "RAWTurbineVib__3")
+_LOGMEL_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0",)
 
 _COVERAGE_THRESHOLD = 0.8
 _MAX_INVALID_FRACTION = 0.05
@@ -84,8 +87,9 @@ def _streams_for_variant(variant: str) -> tuple[str, ...]:
     """The stream ids *variant* needs, in the exact order every downstream per-variant
     assembly (`assemble_variant_features`, `_assemble_feature_names`) concatenates
     columns in. Also determines `PreparedRun.segment_ids`' primary stream: the first
-    entry is always the first mic stream for every audio-bearing variant and the first
-    vib stream for `"vibration"` -- see that field's own docstring.
+    entry is always the first mic stream for every audio-bearing variant (including
+    `"logmel"`, whose ONLY stream is that mic) and the first vib stream for
+    `"vibration"` -- see that field's own docstring.
     """
     if variant in ("audio", "audio-beats"):
         return _AUDIO_STREAMS
@@ -93,6 +97,8 @@ def _streams_for_variant(variant: str) -> tuple[str, ...]:
         return _VIB_STREAMS
     if variant in ("fusion", "fusion-beats"):
         return _AUDIO_STREAMS + _VIB_STREAMS
+    if variant == "logmel":
+        return _LOGMEL_STREAMS
     raise ValueError(f"unknown variant {variant!r}")
 
 
@@ -102,23 +108,27 @@ def _is_beats_variant(variant: str) -> bool:
 
 def _featurizer_for_stream(
     stream: str, variant: str, cfg: Config
-) -> AudioFeaturizer | VibFeaturizer | BeatsFeaturizer:
+) -> AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer:
     """One featurizer instance for *stream*, given *variant*.
 
     Vibration streams always get a fresh `VibFeaturizer` regardless of
     variant (there is no "vib-beats" variant -- `BeatsFeaturizer` is
-    audio-branch only per the design). Audio streams get `BeatsFeaturizer`
-    for the two beats variants and `AudioFeaturizer` otherwise. One
-    `BeatsFeaturizer` (and therefore one loaded copy of the frozen
-    checkpoint) is constructed PER audio stream, not shared between the two
-    -- mirroring how handcrafted `audio`/`fusion` already construct one
-    `AudioFeaturizer` per stream, at the cost of loading the checkpoint
-    twice for a beats variant that uses both mic streams. This keeps the
-    per-stream featurizer lifecycle uniform across every variant rather than
-    special-casing beats to share a single loaded model.
+    audio-branch only per the design). Audio streams get `LogmelFeaturizer`
+    for the `logmel` variant (whose only stream is the primary mic,
+    `_streams_for_variant`), `BeatsFeaturizer` for the two beats variants,
+    and `AudioFeaturizer` otherwise. One `BeatsFeaturizer` (and therefore
+    one loaded copy of the frozen checkpoint) is constructed PER audio
+    stream, not shared between the two -- mirroring how handcrafted
+    `audio`/`fusion` already construct one `AudioFeaturizer` per stream, at
+    the cost of loading the checkpoint twice for a beats variant that uses
+    both mic streams. This keeps the per-stream featurizer lifecycle uniform
+    across every variant rather than special-casing beats to share a single
+    loaded model.
     """
     if stream not in _AUDIO_STREAMS:
         return VibFeaturizer()
+    if variant == "logmel":
+        return LogmelFeaturizer()
     if _is_beats_variant(variant):
         from rowii.signals.beats import BeatsFeaturizer
 
@@ -253,7 +263,7 @@ def _shift_ts_ns(ts_ns: np.ndarray, offset_ns: int) -> np.ndarray:
 def _extract_stream_features(
     files: list[BurstFile],
     grid: WindowGrid,
-    featurizer: AudioFeaturizer | VibFeaturizer | BeatsFeaturizer,
+    featurizer: AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer,
     offset_ns: int = 0,
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
@@ -414,8 +424,9 @@ def assemble_variant_features(
 ) -> np.ndarray:
     """Combine per-stream feature matrices into the variant's (W, F) matrix.
 
-    audio/vibration: `np.hstack` of the variant's stream matrices (z-scoring
-    happens inside `run_detection`). fusion(-beats): `fuse()` on the raw audio
+    audio/vibration/logmel: `np.hstack` of the variant's stream matrices
+    (z-scoring happens inside `run_detection`; for logmel that is a single
+    primary-mic matrix, hstack of one). fusion(-beats): `fuse()` on the raw audio
     and vibration matrices (fuse z-scores each side internally before
     concatenating) -- `run_detection`'s own `zscore` call on already-z-scored
     fusion input is then an idempotent-ish re-standardization (mean ~0, std ~1
@@ -431,6 +442,9 @@ def assemble_variant_features(
         audio_mat = np.hstack([stream_results[s].features for s in _AUDIO_STREAMS])
         vib_mat = np.hstack([stream_results[s].features for s in _VIB_STREAMS])
         return fuse(audio_mat, vib_mat)
+    if variant == "logmel":
+        mats = [stream_results[s].features for s in _LOGMEL_STREAMS]
+        return np.hstack(mats)
     raise ValueError(f"unknown variant {variant!r}")
 
 
@@ -477,8 +491,9 @@ class PreparedRun:
     segment_ids: np.ndarray
     """(W,) int64 -- index of the 12-min source burst segment (file) that contributed
     a window's samples, read off the PRIMARY stream of the variant: the first mic
-    stream (`RAWGeneratorMic__0`) for audio/audio-beats/fusion/fusion-beats, the first
-    vib stream (`RAWGeneratorVib__2`) for vibration -- i.e. `_streams_for_variant(
+    stream (`RAWGeneratorMic__0`) for audio/audio-beats/fusion/fusion-beats/logmel
+    (logmel's ONLY stream is that mic), the first vib stream (`RAWGeneratorVib__2`)
+    for vibration -- i.e. `_streams_for_variant(
     variant)[0]` in every case (that tuple's own ordering already puts the right
     stream first for every variant, so no separate lookup is needed). Segments are
     indexed 0-based, in ascending start-time order, per that ONE stream's own file
@@ -657,7 +672,7 @@ def prepare_run(
     Args:
         run: The `Run` (burst files by stream) to prepare.
         variant: One of the concrete variant strings (`"audio"`, `"audio-beats"`,
-            `"vibration"`, `"fusion"`, `"fusion-beats"`).
+            `"vibration"`, `"fusion"`, `"fusion-beats"`, `"logmel"`).
         cfg: Project configuration (`cfg.window.window_s`, `cfg.beats_checkpoint`,
             `cfg.results_root` for the cache location).
         betriebsdaten: Accepted for signature symmetry with callers that already have

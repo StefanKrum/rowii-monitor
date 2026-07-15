@@ -247,7 +247,7 @@ ScorerName = Literal["knn", "mahalanobis", "ocsvm", "iforest", "lof"]
 
 _PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
 )
 _SCORER_CHOICES: tuple[str, ...] = ("knn", "mahalanobis", "ocsvm", "iforest", "lof", "all")
 _CONDITIONING_CHOICES: tuple[str, ...] = ("per-state", "pooled", "all")

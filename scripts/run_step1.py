@@ -87,6 +87,7 @@ _VARIANT_CHOICES: tuple[str, ...] = (
     "vibration",
     "fusion",
     "fusion-beats",
+    "logmel",
     "all",
 )
 _CLUSTERER_CHOICES: tuple[str, ...] = ("kmeans", "gmm", "all")
@@ -97,6 +98,7 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     "vibration",
     "fusion",
     "fusion-beats",
+    "logmel",
 )
 _CONCRETE_CLUSTERERS: tuple[ClustererName, ...] = ("kmeans", "gmm")
 _K_SWEEP_VALUES: tuple[int, ...] = (3, 4, 5, 6)

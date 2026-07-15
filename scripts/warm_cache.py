@@ -66,7 +66,7 @@ _DEFAULT_RUNS: tuple[str, ...] = (
 )
 _DEFAULT_VARIANTS: tuple[str, ...] = ("audio-beats", "fusion-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
 )
 
 
