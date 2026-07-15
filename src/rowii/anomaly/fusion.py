@@ -62,13 +62,35 @@ one-unit p-granularity residual (LOO reference has n-1 points vs the scoring sid
 n, so the smallest LOO p is `1/n` vs `1/(n+1)`); that residual can only inflate the
 calibration-side statistic, i.e. raise the threshold, i.e. suppress alarms
 (conservative direction -- `loo_p_values`' docstring carries the pointwise
-derivation). Validated empirically: mean realized FAR at or below alpha within
-Monte-Carlo precision across independent, shared-latent-correlated (rho ~ 0.78),
-anti-correlated, and identical branches at n in {39, 159} (`tests/test_fusion.py`'s
-multi-regime validity test, one-sided `alpha + 3*SE` bound; additionally at n=319 in
-the review-time simulation). Verified separately (scratch, not committed) that the
-classical NON-recalibrated chi2(4) threshold's realized FAR drifts well above alpha
-under branch correlation -- the re-calibration is load-bearing, not decorative.
+derivation). Validated empirically FOR THE FISHER RULE: mean realized FAR at or below
+alpha within Monte-Carlo precision across independent, shared-latent-correlated
+(rho ~ 0.78), anti-correlated, and identical branches at n in {39, 159}
+(`tests/test_fusion.py`'s multi-regime validity test, one-sided `alpha + 3*SE` bound;
+additionally at n=319 in the review-time simulation). Verified separately (scratch,
+not committed) that the classical NON-recalibrated chi2(4) threshold's realized FAR
+drifts well above alpha under branch correlation -- the re-calibration is
+load-bearing, not decorative.
+
+TIPPETT does not get the same clean statement (review round 2, 2026-07-15): a
+min-rule combination cannot be exactly calibrated when the calibration set doubles as
+the branches' p-value reference. The LOO rescaling is a strictly monotone map of the
+calibration-side min-rank, so it never changes a single Tippett alarm decision
+(verified bit-identical to the self-referential construction) -- the residual is
+INTRINSIC, not a construction bug the LOO switch could fix. Under shared-latent
+POSITIVE correlation the measured mean realized FAR carries a small excess: +0.007
+absolute at alpha=0.05, n=39, decaying roughly like 1/n (0.0518 at n=159, 0.0512 at
+n=319); independent, anti-correlated, and identical branches measure within
+`alpha + 3*SE`. A dedicated p-reference split (branch p-values for calibration AND
+scoring windows both computed against a third, held-out reference set) would restore
+exactness -- deliberately NOT adopted: per-state calibration pools are the binding
+resource in this project's data (the package-2 scarcity results, `rowii.anomaly.
+scarcity`/spec D3, already put several states near the `1/(n+1)` achievability floor;
+carving a third split out of every per-state pool would push them under it).
+`far_table_scorefusion.csv`'s tippett rows are therefore reported as the max-rule
+CONTRAST to Fisher, carrying this documented caveat -- NOT as guaranteed-FAR rows --
+and `tests/test_fusion.py` pins the excess at `alpha + 0.010` (n=39) /
+`alpha + 0.005` (n=159) under positive correlation so any regression beyond the
+documented level fails loudly.
 
 No clipping: `rowii.anomaly.conformal.p_values` guarantees its output lies in `(0, 1]`
 (see that function's own docstring for the exact formula establishing the bound), so
@@ -207,6 +229,14 @@ def tippett_statistic(p_a: np.ndarray, p_v: np.ndarray) -> np.ndarray:
     ranking windows by THIS function descending is order-equivalent to ranking by the
     textbook rule ascending (module docstring; `tests/test_fusion.py`'s ordering
     test).
+
+    Calibration caveat: unlike the Fisher rule, a min-rule statistic cannot be
+    exactly split-conformal-calibrated when the calibration set doubles as the
+    branches' p-value reference -- under POSITIVELY correlated branches the realized
+    FAR carries a small intrinsic excess (~+0.007 at n=39, decaying ~1/n; the module
+    docstring's Statistical note carries the full story and the deliberate
+    no-third-split trade-off), so downstream views report Tippett as the max-rule
+    CONTRAST to Fisher, not as a guaranteed-FAR rule.
 
     Args:
         p_a: `(W,)` audio-branch conformal p-values, one per window.

@@ -170,7 +170,8 @@ def _draw_branch_pair(
     raise ValueError(f"unknown regime {regime!r}")
 
 
-def _fisher_far_over_reps(
+def _combined_far_over_reps(
+    statistic_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     regime: str,
     n_calibration: int,
     calibration_p_fn: Callable[[np.ndarray], np.ndarray],
@@ -179,19 +180,26 @@ def _fisher_far_over_reps(
     alpha: float = 0.05,
 ) -> tuple[float, float]:
     """`(mean realized FAR, standard error of that mean)` of the full score-fusion
-    Fisher path over *n_reps* seeded repetitions: per rep, draw one regime's branch
-    pair, compute CALIBRATION-side branch p-values via *calibration_p_fn* and
-    SCORING-side branch p-values via `p_values(scoring, calibration)`, Fisher-combine
-    both sides, `calibrate` the calibration-side combined statistic, and count
-    scoring-side alarms.
+    path for one combination rule over *n_reps* seeded repetitions: per rep, draw one
+    regime's branch pair, compute CALIBRATION-side branch p-values via
+    *calibration_p_fn* and SCORING-side branch p-values via `p_values(scoring,
+    calibration)`, combine both sides with *statistic_fn* (`fisher_statistic` or
+    `tippett_statistic`), `calibrate` the calibration-side combined statistic, and
+    count scoring-side alarms.
 
     *calibration_p_fn* is the calibration-side construction under test: the fixed
     code passes `loo_p_values` (leave-one-out, each point evaluated against the other
     n-1 -- the same footing a scoring point gets); the review-time mutant check
-    passes the DEFECTIVE self-referential `lambda s: p_values(s, s)` (each point in
-    its own reference) to demonstrate this test catches exactly that defect (scratch
-    run, see the task-5 fix report: the mutant fails 6 of the 8 (regime, n) cases,
-    worst mean FAR ~0.10 at alpha=0.05 for anti-correlated branches at n=39).
+    passed the DEFECTIVE self-referential `lambda s: p_values(s, s)` (each point in
+    its own reference) through the Fisher path to demonstrate the Fisher test catches
+    exactly that defect (scratch run, see the task-5 fix report: the mutant fails 6
+    of the 8 (regime, n) cases, worst mean FAR ~0.10 at alpha=0.05 for
+    anti-correlated branches at n=39). For `tippett_statistic` the choice of
+    *calibration_p_fn* is decision-neutral -- a min-rule statistic is a strictly
+    monotone transform of the calibration-side min-rank either way, so LOO and
+    self-referential produce bit-identical alarms (verified, review round 2) -- which
+    is exactly why Tippett's residual excess under positive correlation is intrinsic
+    rather than fixable by the LOO switch (see the class docstring below).
     """
     fars = np.empty(n_reps)
     for rep in range(n_reps):
@@ -205,8 +213,8 @@ def _fisher_far_over_reps(
         p_a_score = p_values(audio_score, audio_conf)
         p_v_score = p_values(vib_score, vib_conf)
 
-        threshold = calibrate(fisher_statistic(p_a_conf, p_v_conf), alpha)
-        combined_score = fisher_statistic(p_a_score, p_v_score)
+        threshold = calibrate(statistic_fn(p_a_conf, p_v_conf), alpha)
+        combined_score = statistic_fn(p_a_score, p_v_score)
         fars[rep] = float(np.mean(combined_score > threshold.threshold))
     return float(fars.mean()), float(fars.std(ddof=1) / np.sqrt(n_reps))
 
@@ -229,17 +237,35 @@ class TestFarValidityAcrossDependenceRegimes:
     review finding 2026-07-15, reproduced in this test's own mutant check, task-5 fix
     report). The LOO form leaves a one-unit granularity residual (LOO min p = 1/n vs
     scoring 1/(n+1)) whose direction is conservative -- hence the one-sided sharp
-    bound below.
+    bound for Fisher.
+
+    TIPPETT gets a narrower pin, not the same clean claim (review round 2): a
+    min-rule statistic is a strictly monotone transform of the calibration-side
+    min-rank under ANY shared-reference p construction (LOO vs self-referential is
+    bit-identical in alarms), so its residual excess under POSITIVELY correlated
+    branches is intrinsic to the calibration set doubling as the p-value reference --
+    measured +0.007 absolute at alpha=0.05, n=39, decaying roughly like 1/n (0.0518
+    at n=159, 0.0512 at n=319); independent/anti-correlated/identical stay within
+    alpha + 3*SE. The Tippett test below asserts the strict bound where validity
+    holds and PINS the documented excess where it does not (`rowii.anomaly.fusion`
+    module docstring's Statistical note carries the full story).
     """
+
+    _TIPPETT_CORR_EXCESS_BAND = {39: 0.010, 159: 0.005}
+    """Absolute FAR excess allowed for Tippett under the positive-correlation regime
+    -- these bands PIN the known, documented intrinsic excess (measured +0.0074 at
+    n=39, +0.0017 at n=159 with this harness's exact seeds): a regression ABOVE them
+    is a NEW defect; a drop back to within alpha + 3*SE means someone fixed Tippett
+    properly (a dedicated p-reference split) and this carve-out should be deleted."""
 
     @pytest.mark.parametrize("n_calibration", [39, 159])
     @pytest.mark.parametrize("regime", list(_VALIDITY_REGIMES))
-    def test_mean_realized_far_at_most_alpha_plus_three_se(
+    def test_fisher_mean_realized_far_at_most_alpha_plus_three_se(
         self, regime: str, n_calibration: int
     ) -> None:
         alpha = 0.05
-        mean_far, se = _fisher_far_over_reps(
-            regime, n_calibration, loo_p_values, alpha=alpha
+        mean_far, se = _combined_far_over_reps(
+            fisher_statistic, regime, n_calibration, loo_p_values, alpha=alpha
         )
         # Rep-count sanity: 500 reps must push the Monte-Carlo SE of the mean to
         # ~0.002 or below (per-rep FAR sd is ~0.035 at n=39, ~0.019 at n=159, both
@@ -249,6 +275,34 @@ class TestFarValidityAcrossDependenceRegimes:
         assert mean_far <= alpha + 3.0 * se, (
             f"{regime}/n={n_calibration}: mean realized FAR {mean_far:.4f} exceeds "
             f"alpha + 3*SE = {alpha + 3.0 * se:.4f} -- FAR validity broken"
+        )
+
+    @pytest.mark.parametrize("n_calibration", [39, 159])
+    @pytest.mark.parametrize("regime", list(_VALIDITY_REGIMES))
+    def test_tippett_mean_realized_far_within_documented_bounds(
+        self, regime: str, n_calibration: int
+    ) -> None:
+        alpha = 0.05
+        mean_far, se = _combined_far_over_reps(
+            tippett_statistic, regime, n_calibration, loo_p_values, alpha=alpha
+        )
+        assert se <= 2.0e-3, f"{regime}/n={n_calibration}: SE {se:.5f} too large"
+        if regime == "corr":
+            # NOT a validity claim: under shared-latent positive correlation Tippett
+            # is mildly anti-conservative BY CONSTRUCTION (class docstring; the
+            # strict alpha + 3*SE bound genuinely fails here -- 0.0574 vs 0.0553 at
+            # n=39 with these exact seeds). These bands pin the known, documented
+            # intrinsic excess: a failure above them is a NEW defect; a pass back
+            # under alpha + 3*SE means it was properly fixed (dedicated p-reference
+            # split) and this branch should be collapsed into the one below.
+            bound = alpha + self._TIPPETT_CORR_EXCESS_BAND[n_calibration]
+            reason = "documented intrinsic Tippett excess regressed"
+        else:
+            bound = alpha + 3.0 * se
+            reason = "FAR validity broken"
+        assert mean_far <= bound, (
+            f"tippett {regime}/n={n_calibration}: mean realized FAR {mean_far:.4f} "
+            f"exceeds {bound:.4f} -- {reason}"
         )
 
     def test_regime_constructions_have_the_claimed_dependence(self) -> None:

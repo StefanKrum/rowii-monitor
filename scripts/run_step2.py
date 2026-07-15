@@ -1632,17 +1632,37 @@ anti-conservative (mean realized FAR up to ~0.10 at alpha=0.05, n=39, anti-corre
 branches -- review finding, 2026-07-15). With LOO calibration p-values,
 exchangeability is restored up to a one-unit p-granularity difference (LOO minimum
 p-value 1/n vs scoring-side 1/(n+1)) whose direction is conservative; validated
-empirically at mean realized FAR <= alpha (within Monte-Carlo precision, one-sided
-alpha + 3*SE bound) across independent, shared-latent-correlated (rho ~ 0.78),
-anti-correlated, and identical branches at n in {39, 159} (`tests/test_fusion.py`'s
-multi-regime validity test; additionally at n=319 in the review-time simulation). See
-`rowii.anomaly.fusion`'s module docstring for the full argument.
+empirically FOR THE FISHER RULE at mean realized FAR <= alpha (within Monte-Carlo
+precision, one-sided alpha + 3*SE bound) across independent, shared-latent-correlated
+(rho ~ 0.78), anti-correlated, and identical branches at n in {39, 159}
+(`tests/test_fusion.py`'s multi-regime validity test; additionally at n=319 in the
+review-time simulation). See `rowii.anomaly.fusion`'s module docstring for the full
+argument.
+
+The `tippett` rows carry a NARROWER claim (review round 2): a min-rule combination
+cannot be exactly calibrated when the calibration set doubles as the p-value
+reference -- the LOO construction is decision-neutral for a min rule (bit-identical
+alarms to the self-referential form), so this residual is intrinsic, not fixable by
+the LOO switch. Under positively correlated branches Tippett's measured mean realized
+FAR carries a small excess: +0.007 absolute at alpha=0.05, n=39, decaying roughly
+like 1/n (0.0518 at n=159, 0.0512 at n=319); independent, anti-correlated, and
+identical branches measure within alpha + 3*SE. A dedicated p-reference split would
+restore exactness but is deliberately not adopted: per-state calibration pools are
+the binding resource (package-2 scarcity results, spec D3 -- several states already
+sit near the achievability floor, and a third split would push them under it).
+Tippett rows are therefore the max-rule CONTRAST to Fisher, carrying this caveat --
+not guaranteed-FAR rows; `tests/test_fusion.py` pins the documented excess so a
+regression beyond it fails loudly.
 
 ## Honesty notes
 
 - `audio-only`/`vib-only` rows go through the EXACT SAME p-value-then-re-calibrate
   pipeline as `fisher`/`tippett` (not a shortcut through the branch's raw score), so
   every row in this table is comparable on equal footing.
+- Only the `fisher` rows (and, via the single-branch monotone-cancellation argument,
+  the `audio-only`/`vib-only` rows) carry the restored distribution-free FAR claim;
+  `tippett` rows carry the documented intrinsic excess under positive branch
+  correlation instead (see "Guarantee restoration" above).
 - No claim is made that Fisher dominates Tippett or vice versa in general: Fisher
   requires corroboration from both branches (a single very anomalous branch is damped
   by the other branch's own p-value), Tippett fires on the single most extreme branch
