@@ -44,7 +44,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.config import Config, load_config  # noqa: E402
 from rowii.eval.metrics import _majority_mapping  # noqa: E402
-from rowii.io.dataset import RecordingIndex, Run, discover  # noqa: E402
+from rowii.io.dataset import (  # noqa: E402
+    RecordingIndex,
+    Run,
+    betriebsdaten_utc_offset_ns,
+    discover,
+    run_utc_offset_ns,
+)
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
@@ -145,13 +151,27 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
     """Betriebsdaten files whose hourly span intersects the grid's UTC time range --
     identical logic to `scripts/run_step1.py`'s and `scripts/run_step2.py`'s own
     private helper of the same name (duplicated, not imported -- see this module's
-    own docstring)."""
+    own docstring).
+
+    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
+    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
+    header`, straight off disk) is still the raw DAQ axis -- shifted here by
+    *betriebsdaten*'s own derived offset (`rowii.io.dataset.
+    betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
+    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
+    comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
+    sides shared the SAME axis by construction, so selection worked correctly by
+    accident, not because either side was ever true UTC (see the task report for
+    the full derivation).
+    """
     grid_end_ns = int(grid.edges_ns()[-1])
+    offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
     matched = []
     for path in betriebsdaten:
         header = read_header(path)
-        file_end_ns = header.t0_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
-        if header.t0_ns < grid_end_ns and file_end_ns > grid.t0_ns:
+        file_start_ns = header.t0_ns + offset_ns
+        file_end_ns = file_start_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
+        if file_start_ns < grid_end_ns and file_end_ns > grid.t0_ns:
             matched.append(path)
     return sorted(matched)
 
@@ -188,7 +208,9 @@ def _fit_detector_and_mapping(
         )
         return detector, {}
 
-    scada = load_scada_window_means(matched, prepared.grid)
+    scada = load_scada_window_means(
+        matched, prepared.grid, audio_run_offset_ns=run_utc_offset_ns(fit_run)
+    )
     gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
     gt = gt.copy()
     gt.loc[~valid_mask, "state"] = _UNKNOWN_GT_STATE

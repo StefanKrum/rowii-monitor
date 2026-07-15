@@ -38,7 +38,13 @@ from rowii import pipeline as _pipeline  # noqa: E402
 from rowii.config import Config, load_config  # noqa: E402
 from rowii.eval.metrics import EvalResult, evaluate  # noqa: E402
 from rowii.eval.report import write_report  # noqa: E402
-from rowii.io.dataset import RecordingIndex, Run, discover  # noqa: E402
+from rowii.io.dataset import (  # noqa: E402
+    RecordingIndex,
+    Run,
+    betriebsdaten_utc_offset_ns,
+    discover,
+    run_utc_offset_ns,
+)
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
@@ -181,19 +187,32 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
 
     Cheap (header-only) intersection test: a file (nominally one hour) overlaps
     the grid iff its own [t0, t_end) intersects [grid.t0_ns, grid_end_ns).
+
+    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
+    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
+    header`, straight off disk) is still the raw DAQ axis -- shifted here by
+    *betriebsdaten*'s own derived offset (`rowii.io.dataset.
+    betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
+    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
+    comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
+    sides shared the SAME axis by construction, so selection worked correctly by
+    accident, not because either side was ever true UTC (see the task report for
+    the full derivation).
     """
     grid_end_ns = int(grid.edges_ns()[-1])
+    offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
     matched = []
     for path in betriebsdaten:
         header = read_header(path)
-        file_end_ns = header.t0_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
-        if header.t0_ns < grid_end_ns and file_end_ns > grid.t0_ns:
+        file_start_ns = header.t0_ns + offset_ns
+        file_end_ns = file_start_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
+        if file_start_ns < grid_end_ns and file_end_ns > grid.t0_ns:
             matched.append(path)
     return sorted(matched)
 
 
 def load_run_gt(
-    betriebsdaten: list[Path], grid: WindowGrid, cfg: Config, valid_mask: np.ndarray
+    run: Run, betriebsdaten: list[Path], grid: WindowGrid, cfg: Config, valid_mask: np.ndarray
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """SCADA window means + GT labels for *grid*, with invalid windows forced to "unknown".
 
@@ -202,9 +221,16 @@ def load_run_gt(
     detector meaningfully), so their GT state is overwritten to "unknown"
     regardless of what the rule-based labeler decided from SCADA alone; the
     count of windows newly marked this way is left to the caller to log.
+
+    *run* is used only to derive `run_utc_offset_ns(run)`, passed to
+    `load_scada_window_means` as the audio-side cross-check (D3: never used to
+    derive the SCADA-side shift itself, which `load_scada_window_means` always
+    derives independently from *betriebsdaten*).
     """
     matched_files = _betriebsdaten_for_grid(betriebsdaten, grid)
-    scada = load_scada_window_means(matched_files, grid)
+    scada = load_scada_window_means(
+        matched_files, grid, audio_run_offset_ns=run_utc_offset_ns(run)
+    )
     gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
     gt = gt.copy()
     gt.loc[~valid_mask, "state"] = "unknown"
@@ -323,7 +349,7 @@ def _prepare_run_features(
     prepared: PreparedRun = prepare_run(
         run, variant, cfg, betriebsdaten=betriebsdaten, use_cache=use_cache
     )
-    scada, gt = load_run_gt(betriebsdaten, prepared.grid, cfg, prepared.valid_mask)
+    scada, gt = load_run_gt(run, betriebsdaten, prepared.grid, cfg, prepared.valid_mask)
 
     return _RunFeatures(
         grid=prepared.grid,

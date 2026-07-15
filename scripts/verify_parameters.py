@@ -30,7 +30,7 @@ from scipy import signal
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.config import Config, GtRules, load_config  # noqa: E402
-from rowii.io.dataset import RecordingIndex, discover  # noqa: E402
+from rowii.io.dataset import RecordingIndex, betriebsdaten_utc_offset_ns, discover  # noqa: E402
 from rowii.io.gantner import GantnerHeader, read_gantner, read_header  # noqa: E402
 from rowii.scada.labels import GT_CHANNELS, gt_labels, load_scada_window_means  # noqa: E402
 from rowii.signals.features import MACHINE_HZ  # noqa: E402
@@ -338,14 +338,25 @@ def _build_whole_day_grid(betriebsdaten: list[Path], window_s: float) -> WindowG
     empty by construction for a sequence of back-to-back, non-overlapping hourly
     files -- `common_grid` is designed for OVERLAPPING burst streams, not consecutive
     SCADA hours).
+
+    Task 10 (D3 consequence): this is a standalone grid builder, bypassing `rowii.
+    pipeline.build_run_grid` entirely (no audio run involved) -- `load_scada_window_
+    means` (module-docstring's only caller of this function, `measure_phase_shifter_
+    channels`) now always shifts its OWN raw SCADA timestamps onto true UTC (D3), so
+    this grid's `t0_ns` must be shifted by the SAME *betriebsdaten*-derived offset
+    (`rowii.io.dataset.betriebsdaten_utc_offset_ns`) to stay on that same axis --
+    otherwise every window here would search for true-UTC timestamps against a
+    grid still on the raw ~30-years-earlier axis and find nothing.
     """
     sorted_files = sorted(betriebsdaten)
     first_h = read_header(sorted_files[0])
     last_h = read_header(sorted_files[-1])
-    last_end_ns = last_h.t0_ns + round(last_h.n_frames / last_h.sample_rate_hz * 1e9)
+    offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
+    first_start_ns = first_h.t0_ns + offset_ns
+    last_end_ns = last_h.t0_ns + offset_ns + round(last_h.n_frames / last_h.sample_rate_hz * 1e9)
     window_ns = round(window_s * 1e9)
-    n_windows = (last_end_ns - first_h.t0_ns) // window_ns
-    return WindowGrid(t0_ns=first_h.t0_ns, window_ns=window_ns, n_windows=n_windows)
+    n_windows = (last_end_ns - first_start_ns) // window_ns
+    return WindowGrid(t0_ns=first_start_ns, window_ns=window_ns, n_windows=n_windows)
 
 
 def _channel_distribution(values: np.ndarray) -> ChannelDistribution:
@@ -648,11 +659,17 @@ def _render_report(
         "UTC offset applied, unlike `rowii.io.dataset`'s `start_utc_hint`, which explicitly "
         "treats burst filenames as LOCAL Europe/Vienna time and converts -2h to a (necessarily "
         "different) UTC value for SORTING/GROUPING purposes only. Confirmed consistent across "
-        "all 4 TU streams and 3 independent Betriebsdaten hours during Task 13. This does not "
-        "affect `run_step1.py`'s actual SCADA<->burst alignment (`common_grid`/"
-        "`_betriebsdaten_for_grid` compare raw `t0_ns` values directly, never "
-        "`start_utc_hint`), so no pipeline fix is needed -- but any future code that "
-        "interprets `t0_ns` as a real calendar date must NOT do so naively."
+        "all 4 TU streams and 3 independent Betriebsdaten hours during Task 13. "
+        "**Update (Task 10, epoch-2000 clock quirk fix):** the quirk described above IS now "
+        "corrected in the pipeline -- `rowii.io.dataset.run_utc_offset_ns`/"
+        "`betriebsdaten_utc_offset_ns` derive this same offset from exactly the filename-hint-"
+        "vs-`t0_ns` relationship documented here, and `rowii.pipeline.build_run_grid`/"
+        "`rowii.scada.labels.load_scada_window_means`/every script's own "
+        "`_betriebsdaten_for_grid` apply it before any SCADA<->burst alignment; the pipeline's "
+        "grid, segment, and report timestamps are true UTC from that commit on. Any code that "
+        "still reads `header.t0_ns` directly (as the measurements in this report do, for "
+        "diagnostic purposes) must continue to NOT interpret it as a real calendar date without "
+        "applying that same derived offset first."
     )
     lines.append("")
 

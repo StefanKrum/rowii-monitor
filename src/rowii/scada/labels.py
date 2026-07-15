@@ -30,10 +30,18 @@ import numpy as np
 import pandas as pd
 
 from rowii.config import GtRules
+from rowii.io.dataset import betriebsdaten_utc_offset_ns
 from rowii.io.gantner import read_gantner
 from rowii.signals.windows import WindowGrid, window_slices
 
 logger = logging.getLogger(__name__)
+
+_OFFSET_WARN_TOLERANCE_NS = 2_000_000_000
+"""Max disagreement between the SCADA file set's own derived UTC offset and an
+optional `audio_run_offset_ns` cross-check before `load_scada_window_means` logs a
+WARNING -- mirrors `rowii.io.dataset._OFFSET_WARN_TOLERANCE_NS`'s own per-file
+tolerance (2 s), applied here to the two INDEPENDENTLY DERIVED offsets themselves
+rather than to one offset's per-file scatter."""
 
 GT_CHANNELS: Mapping[str, str] = {
     "power": "1_P_Ist",
@@ -66,16 +74,62 @@ _PH_STATE = "phase-shifter"
 _TRANSITION_STATE = "transition"
 
 
+def _shift_ts_ns(ts_ns: np.ndarray, offset_ns: int) -> np.ndarray:
+    """`ts_ns + offset_ns`, staying in `uint64` throughout (never round-tripping
+    through `int64`) -- `ts_ns` is `uint64` (as produced by `read_gantner`) and so
+    is `WindowGrid.edges_ns()`, which `window_slices` compares it against; mixing
+    `int64` and `uint64` numpy arrays silently upcasts BOTH to `float64` for the
+    comparison, losing precision above `2**53` (~9.007e15) -- far below these
+    ~1e18 ns timestamps, so that path would corrupt every window boundary. Real
+    quirky-clock offsets are always positive (raw axis is ~30 years BEHIND true
+    UTC); the negative branch exists only for defensive completeness (a
+    hypothetical raw axis AHEAD of true UTC), never exercised by real data.
+    """
+    if offset_ns >= 0:
+        return ts_ns + np.uint64(offset_ns)
+    return ts_ns - np.uint64(-offset_ns)
+
+
 def load_scada_window_means(
     files: list[Path],
     grid: WindowGrid,
     channels: Mapping[str, str] = GT_CHANNELS,
+    *,
+    audio_run_offset_ns: int | None = None,
 ) -> pd.DataFrame:
     """Per-window mean of each GT channel across one or more (hourly) Betriebsdaten files.
 
     Each file is read once; *files* are assumed already time-sorted (hourly Betriebsdaten
     files from `dataset.discover`) and are concatenated in the given order before slicing
     into *grid*'s windows. Windows with zero SCADA samples get NaN in every column.
+
+    Task 10 (D3, DAQ epoch-2000 clock quirk): *files*' raw on-disk timestamps carry
+    the SAME quirk as burst audio/vibration files (`rowii.io.dataset` module
+    docstring) -- before slicing, this function shifts them onto true UTC by
+    *files*' OWN derived offset (`rowii.io.dataset.betriebsdaten_utc_offset_ns`),
+    never by `audio_run_offset_ns` (SCADA is independent hardware from the
+    audio/vibration DAQ, even though the two clocks are expected to agree closely
+    for the same day -- D3's "do not blindly reuse the audio run's offset").
+    *grid* is assumed to already be on the true-UTC axis (as
+    `rowii.pipeline.build_run_grid` now produces, D2); passing a raw-axis grid here
+    would misalign every window against these now-true-UTC timestamps.
+
+    Args:
+        files: Betriebsdaten file paths, already time-sorted.
+        grid: The window grid to slice against -- true-UTC for every real caller
+            post-D2 (`scripts/run_step1.py`/`run_step2.py`/`apply_detector.py`'s
+            `load_run_gt`/`_load_run_scada`/`_fit_detector_and_mapping`, all of
+            which pass a `rowii.pipeline.prepare_run`-derived grid).
+        channels: GT channel name mapping.
+        audio_run_offset_ns: Optional cross-check ONLY -- the corresponding audio
+            run's own derived offset (`rowii.io.dataset.run_utc_offset_ns`). When
+            given, one WARNING is logged if it disagrees with this file set's own
+            independently-derived offset by more than 2 s; never used to derive or
+            override the SCADA-side shift itself. `None` (the default) skips the
+            cross-check -- every caller with no run offset on hand uses this
+            (most unit tests, `scripts/verify_parameters.py`'s own diagnostic
+            grids, which build their own raw-axis grid and therefore must not
+            receive a true-UTC-vs-raw cross-check that would never agree).
     """
     ts_parts: list[np.ndarray] = []
     data_parts: list[np.ndarray] = []
@@ -102,6 +156,20 @@ def load_scada_window_means(
         if data_parts
         else np.zeros((0, len(keys)), dtype=np.float32)
     )
+
+    scada_offset_ns = betriebsdaten_utc_offset_ns(files)
+    if audio_run_offset_ns is not None:
+        disagreement_ns = scada_offset_ns - audio_run_offset_ns
+        if abs(disagreement_ns) > _OFFSET_WARN_TOLERANCE_NS:
+            logger.warning(
+                "load_scada_window_means: SCADA-derived UTC offset (%.3fs) and the "
+                "audio run's own offset (%.3fs) disagree by %.3fs (> 2s tolerance) "
+                "across %d file(s)",
+                scada_offset_ns / 1e9, audio_run_offset_ns / 1e9,
+                disagreement_ns / 1e9, len(files),
+            )
+    if scada_offset_ns:
+        ts_ns = _shift_ts_ns(ts_ns, scada_offset_ns)
 
     slices = window_slices(ts_ns, grid)
     means = np.full((grid.n_windows, len(keys)), np.nan, dtype=np.float64)

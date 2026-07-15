@@ -2,7 +2,17 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rowii.io.dataset import _parse_burst_filename, discover
+import numpy as np
+
+from rowii.io.dataset import (
+    BurstFile,
+    Run,
+    _parse_burst_filename,
+    betriebsdaten_utc_offset_ns,
+    discover,
+    run_utc_offset_ns,
+)
+from tests.fixtures.gantner_builder import build_gantner_file
 
 
 def _touch(path) -> None:
@@ -331,3 +341,156 @@ def test_parent_root_with_no_scada_day_has_empty_betriebsdaten_for_that_day(tmp_
 
     assert index.betriebsdaten_by_day.get(day_root, []) == []
     assert index.betriebsdaten == []
+
+
+# ---------------------------------------------------------------------------
+# run_utc_offset_ns / betriebsdaten_utc_offset_ns (Task 10: DAQ epoch-2000 clock
+# quirk -- every Gantner file's binary frame timestamps count seconds since
+# 2000-01-01 LOCAL time but are labelled as Unix (1970) nanoseconds; both functions
+# derive the constant per-file-set offset that maps the raw axis onto true UTC)
+# ---------------------------------------------------------------------------
+
+
+def _naive_unix_decode_ns(dt: datetime) -> int:
+    """Nanoseconds since the Unix epoch that *dt* decodes to when its own digits are
+    read naively AS IF it already were a Unix timestamp -- i.e. the raw on-disk
+    `header.t0_ns` a quirky DAQ file would carry for a recording whose true local
+    wall-clock reads *dt*'s own digits (see `rowii.io.dataset.run_utc_offset_ns`'s
+    docstring for the full quirk model). Whole-second *dt* only (no microseconds) so
+    this stays exact integer arithmetic, with no float-precision noise to reason
+    about in the assertions below -- the function under test is robust to that noise
+    anyway (its final rounding-to-the-hour step swallows anything under 30 minutes),
+    but keeping the fixtures exact makes the expected constants easy to verify by
+    hand.
+    """
+    return int((dt - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
+
+
+def _burst_run(
+    tmp_path: Path, files_spec: list[tuple[str, int, datetime]], name: str = "quirky-run"
+) -> Run:
+    """A `Run` with one minimal single-channel Gantner file per `(stream, raw_t0_ns,
+    start_utc_hint)` triple in *files_spec* -- channel content is irrelevant to
+    `run_utc_offset_ns`, which only ever reads `header.t0_ns` (`read_header`, cheap)."""
+    files: dict[str, list[BurstFile]] = {}
+    for i, (stream, raw_t0_ns, hint) in enumerate(files_spec):
+        path = tmp_path / f"{stream}_{i}.dat"
+        build_gantner_file(
+            path, ["ch0"], np.zeros((1, 1), dtype=np.float32), t0_ns=raw_t0_ns, rate_hz=1.0
+        )
+        burst = BurstFile(path=path, stream=stream, start_utc_hint=hint)
+        files.setdefault(stream, []).append(burst)
+    return Run(name=name, files=files, day_root=tmp_path)
+
+
+# CEST (UTC+2) worked example, verified against the real June-2026 delivery (module
+# docstring above / task-10-brief.md): raw header.t0_ns decodes (naively, as Unix ns)
+# to 1996-06-27T06:41:03Z; the true instant is 2026-06-27T04:41:03Z (local
+# Europe/Vienna wall-clock digits 06:41:03 on 2026-06-27, CEST = UTC+2). Offset =
+# 946_684_800 s epoch-2000 shift - 7_200 s CEST = 946_677_600 s -- exactly a whole
+# number of hours (262,966), so the nearest-hour rounding step is a no-op here.
+_CEST_RAW_DT = datetime(1996, 6, 27, 6, 41, 3, tzinfo=UTC)
+_CEST_HINT = datetime(2026, 6, 27, 4, 41, 3, tzinfo=UTC)
+_CEST_OFFSET_NS = 946_677_600 * 10**9
+
+
+def test_run_utc_offset_ns_quirky_clock_derives_documented_offset(tmp_path):
+    raw_t0_ns = _naive_unix_decode_ns(_CEST_RAW_DT)
+    run = _burst_run(
+        tmp_path,
+        [
+            ("RAWGeneratorMic__0", raw_t0_ns, _CEST_HINT),
+            ("RAWTurbineMic__1", raw_t0_ns, _CEST_HINT),
+        ],
+    )
+
+    assert run_utc_offset_ns(run) == _CEST_OFFSET_NS
+
+
+def test_run_utc_offset_ns_correct_clock_returns_zero(tmp_path):
+    # A future/already-correct-clock dataset: header.t0_ns is a genuine UTC
+    # nanosecond value a few seconds off its own filename hint (ordinary DAQ
+    # jitter), well under the 1-hour plausibility gate -- the offset must come out
+    # as exactly 0, never some tiny rounded-to-an-hour artifact invented for data
+    # that was never quirky to begin with.
+    hint = datetime(2030, 3, 1, 12, 0, 0, tzinfo=UTC)
+    raw_t0_ns = _naive_unix_decode_ns(hint) + 5 * 10**9  # 5 s of ordinary DAQ jitter
+    run = _burst_run(
+        tmp_path,
+        [
+            ("RAWGeneratorMic__0", raw_t0_ns, hint),
+            ("RAWTurbineMic__1", raw_t0_ns, hint),
+        ],
+    )
+
+    assert run_utc_offset_ns(run) == 0
+
+
+def test_run_utc_offset_ns_warns_on_file_deviating_from_rounded_offset(tmp_path, caplog):
+    # Two files exactly matching the CEST worked example (median stays pinned at
+    # 946_677_600 s, 2 out of 3 entries agree) plus a THIRD file whose raw t0_ns is
+    # shifted an extra 5 s off that same hour -- the median is untouched, but the
+    # deviant file's OWN raw offset differs from the rounded value by > 2 s and must
+    # be named, alongside the run, in a WARNING.
+    clean_raw_t0_ns = _naive_unix_decode_ns(_CEST_RAW_DT)
+    noisy_raw_t0_ns = clean_raw_t0_ns - 5 * 10**9
+    run = _burst_run(
+        tmp_path,
+        [
+            ("RAWGeneratorMic__0", clean_raw_t0_ns, _CEST_HINT),
+            ("RAWGeneratorMic__0", clean_raw_t0_ns, _CEST_HINT),
+            ("RAWTurbineMic__1", noisy_raw_t0_ns, _CEST_HINT),
+        ],
+        name="noisy-run",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        offset = run_utc_offset_ns(run)
+
+    assert offset == _CEST_OFFSET_NS
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "noisy-run" in w and "RAWTurbineMic__1_2.dat" in w for w in warnings
+    ), warnings
+
+
+def test_run_utc_offset_ns_empty_run_returns_zero(tmp_path):
+    # No files at all (degenerate, but must not crash) -- nothing to derive from.
+    run = Run(name="empty-run", files={}, day_root=tmp_path)
+
+    assert run_utc_offset_ns(run) == 0
+
+
+def test_betriebsdaten_utc_offset_ns_quirky_clock_derives_documented_offset(tmp_path):
+    # Same CEST worked example, but via the Betriebsdaten filename convention
+    # (`_BETRIEBSDATEN_RE`: "<date>_<hour>-00-00[_<n>].dat", local time, whole hours
+    # only) rather than a pre-parsed `BurstFile.start_utc_hint` -- the function must
+    # derive its own hint from the filename before deriving the offset.
+    raw_t0_ns = _naive_unix_decode_ns(datetime(1996, 6, 27, 6, 0, 0, tzinfo=UTC))
+    p1 = tmp_path / "2026-06-27_06-00-00.dat"
+    p2 = tmp_path / "2026-06-27_07-00-00.dat"
+    build_gantner_file(
+        p1, ["ch0"], np.zeros((1, 1), dtype=np.float32), t0_ns=raw_t0_ns, rate_hz=1.0
+    )
+    build_gantner_file(
+        p2, ["ch0"], np.zeros((1, 1), dtype=np.float32),
+        t0_ns=raw_t0_ns + round(3600 * 1e9), rate_hz=1.0,
+    )
+
+    assert betriebsdaten_utc_offset_ns([p1, p2]) == _CEST_OFFSET_NS
+
+
+def test_betriebsdaten_utc_offset_ns_files_not_matching_pattern_return_zero(tmp_path):
+    # Existing unit-test fixtures across the codebase (tests/test_gt_labels.py etc.)
+    # build Betriebsdaten-shaped `.dat` files under arbitrary names ("bd.dat",
+    # "h1.dat", ...) that were never meant to model the DAQ-clock quirk at all --
+    # `load_scada_window_means` must stay a safe no-op (offset 0) for those, not
+    # crash or invent a bogus derived offset from an unparseable filename.
+    p = tmp_path / "not-a-betriebsdaten-filename.dat"
+    build_gantner_file(p, ["ch0"], np.zeros((1, 1), dtype=np.float32), t0_ns=0, rate_hz=1.0)
+
+    assert betriebsdaten_utc_offset_ns([p]) == 0
+
+
+def test_betriebsdaten_utc_offset_ns_empty_list_returns_zero() -> None:
+    assert betriebsdaten_utc_offset_ns([]) == 0

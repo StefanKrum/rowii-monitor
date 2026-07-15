@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -160,6 +161,111 @@ def test_gt_channel_names_with_spaces_and_dots_round_trip_through_gantner_reader
     scada = load_scada_window_means([p], grid)
 
     assert not scada.isna().any().any()
+
+
+# ---------------------------------------------------------------------------
+# load_scada_window_means: DAQ epoch-2000 clock quirk (Task 10, D3) -- the raw
+# Betriebsdaten timestamps carry the SAME quirk as burst files (module docstring
+# of rowii.io.dataset); load_scada_window_means must shift them onto true UTC
+# before slicing against a (by then already true-UTC, D2) grid.
+# ---------------------------------------------------------------------------
+
+
+def _naive_unix_decode_ns(dt: datetime) -> int:
+    """Nanoseconds since the Unix epoch that *dt* decodes to when its own digits are
+    read naively AS IF it already were a Unix timestamp -- mirrors `tests.
+    test_dataset._naive_unix_decode_ns` (duplicated, not imported -- each test
+    module builds its own fixtures, matching this codebase's "no cross-script
+    dependency" convention extended to tests)."""
+    return int((dt - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
+
+
+# CEST (UTC+2) worked example, identical constant to tests/test_dataset.py's own
+# (task-10-brief.md's numeric example): local hour 06 on 2026-06-27 -> true UTC
+# 04:00:00Z; offset = 946_684_800 s epoch-2000 shift - 7_200 s CEST = 946_677_600 s.
+_CEST_OFFSET_NS = 946_677_600 * 10**9
+
+
+def test_load_scada_window_means_shifts_raw_scada_axis_onto_true_utc(tmp_path) -> None:
+    # Betriebsdaten filename encodes local hour 06 (CEST) -> true UTC start
+    # 2026-06-27T04:00:00Z; the file's own raw header.t0_ns instead carries the
+    # QUIRKY axis (decodes naively to 1996-06-27T06:00:00Z). A grid built on the
+    # TRUE UTC axis (as `rowii.pipeline.build_run_grid` now produces, D2) must still
+    # capture every sample once load_scada_window_means derives and applies the
+    # SCADA file's own offset -- without the fix, the window would see zero samples
+    # (raw ts ~30 years earlier than the grid) and come out all-NaN instead.
+    rate_hz = 10.0
+    data = np.full((10, 7), 7.0, dtype=np.float32)
+    raw_t0_ns = _naive_unix_decode_ns(datetime(1996, 6, 27, 6, 0, 0, tzinfo=UTC))
+    p = build_gantner_file(
+        tmp_path / "2026-06-27_06-00-00.dat", GT_CHANNEL_NAMES, data,
+        t0_ns=raw_t0_ns, rate_hz=rate_hz,
+    )
+    true_utc_t0_ns = _naive_unix_decode_ns(datetime(2026, 6, 27, 4, 0, 0, tzinfo=UTC))
+    grid = WindowGrid(t0_ns=true_utc_t0_ns, window_ns=1_000_000_000, n_windows=1)
+
+    scada = load_scada_window_means([p], grid)
+
+    assert scada.loc[0, "power"] == pytest.approx(7.0)
+    assert not scada.isna().any().any()
+
+
+def test_load_scada_window_means_files_not_matching_pattern_stay_unshifted(tmp_path) -> None:
+    # Backward-compat guard: every OTHER test in this file (and elsewhere) uses
+    # arbitrarily-named files ("bd.dat", "h1.dat", ...) that were never meant to
+    # model the DAQ-clock quirk -- load_scada_window_means must still align them
+    # against a raw (unshifted) grid exactly as before (offset 0, the existing
+    # behaviour), not silently reinterpret their timestamps.
+    rate_hz = 10.0
+    data = np.full((10, 7), 7.0, dtype=np.float32)
+    p = build_gantner_file(tmp_path / "bd.dat", GT_CHANNEL_NAMES, data, t0_ns=0, rate_hz=rate_hz)
+    grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=1)
+
+    scada = load_scada_window_means([p], grid)
+
+    assert scada.loc[0, "power"] == pytest.approx(7.0)
+
+
+def test_load_scada_window_means_warns_when_audio_offset_disagrees(tmp_path, caplog) -> None:
+    # The SCADA-derived offset must never blindly copy the audio run's own offset
+    # (D3) -- but the two ARE expected to agree closely for the same day, so a
+    # caller that has both must be warned when they do not. Winter-vs-summer
+    # offsets (946_681_200 s vs 946_677_600 s, a 3600 s disagreement) stand in for
+    # "something is wrong" here.
+    rate_hz = 10.0
+    data = np.full((10, 7), 7.0, dtype=np.float32)
+    raw_t0_ns = _naive_unix_decode_ns(datetime(1996, 6, 27, 6, 0, 0, tzinfo=UTC))
+    p = build_gantner_file(
+        tmp_path / "2026-06-27_06-00-00.dat", GT_CHANNEL_NAMES, data,
+        t0_ns=raw_t0_ns, rate_hz=rate_hz,
+    )
+    true_utc_t0_ns = _naive_unix_decode_ns(datetime(2026, 6, 27, 4, 0, 0, tzinfo=UTC))
+    grid = WindowGrid(t0_ns=true_utc_t0_ns, window_ns=1_000_000_000, n_windows=1)
+    winter_offset_ns = 946_681_200 * 10**9
+
+    with caplog.at_level(logging.WARNING):
+        load_scada_window_means([p], grid, audio_run_offset_ns=winter_offset_ns)
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("disagree" in w.lower() for w in warnings), warnings
+
+
+def test_load_scada_window_means_no_warning_when_audio_offset_agrees(tmp_path, caplog) -> None:
+    rate_hz = 10.0
+    data = np.full((10, 7), 7.0, dtype=np.float32)
+    raw_t0_ns = _naive_unix_decode_ns(datetime(1996, 6, 27, 6, 0, 0, tzinfo=UTC))
+    p = build_gantner_file(
+        tmp_path / "2026-06-27_06-00-00.dat", GT_CHANNEL_NAMES, data,
+        t0_ns=raw_t0_ns, rate_hz=rate_hz,
+    )
+    true_utc_t0_ns = _naive_unix_decode_ns(datetime(2026, 6, 27, 4, 0, 0, tzinfo=UTC))
+    grid = WindowGrid(t0_ns=true_utc_t0_ns, window_ns=1_000_000_000, n_windows=1)
+
+    with caplog.at_level(logging.WARNING):
+        load_scada_window_means([p], grid, audio_run_offset_ns=_CEST_OFFSET_NS)
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("disagree" in w.lower() for w in warnings), warnings
 
 
 # ---------------------------------------------------------------------------

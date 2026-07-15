@@ -38,14 +38,14 @@ import gc
 import hashlib
 import logging
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from rowii.config import Config
-from rowii.io.dataset import BurstFile, Run
+from rowii.io.dataset import BurstFile, Run, run_utc_offset_ns
 from rowii.io.gantner import GantnerHeader, read_gantner, read_header
 from rowii.signals.features import AudioFeaturizer, VibFeaturizer, fuse
 from rowii.signals.windows import WindowGrid, common_grid, coverage, window_slices
@@ -156,12 +156,55 @@ def _synthesize_run_header(files: list[BurstFile]) -> GantnerHeader:
     )
 
 
-def build_run_grid(run: Run, streams: tuple[str, ...], window_s: float) -> WindowGrid:
-    """Common window grid across *streams*, computed from header-only reads."""
+def build_run_grid(
+    run: Run, streams: tuple[str, ...], window_s: float, *, offset_ns: int | None = None
+) -> WindowGrid:
+    """Common window grid across *streams*, computed from header-only reads.
+
+    Task 10 (D2, DAQ epoch-2000 clock quirk): before `common_grid`, every stream's
+    synthesized header t0 is shifted by *run*'s derived UTC offset -- ONE value for
+    the whole run, applied identically to every stream, so the returned grid's
+    `t0_ns` (and therefore every `WindowGrid.edges_ns()`/`to_segments`-derived
+    timestamp downstream) is true UTC, not the raw DAQ axis. A constant per-run
+    shift moves every stream's header t0 (and end, since `n_frames`/
+    `sample_rate_hz` are untouched) by the same amount, so `common_grid`'s
+    intersection-based `t0_ns`/`n_windows` selection is unaffected in every way
+    except the absolute axis itself: relative sample alignment, and everything
+    `run_detection`/`run_sweep` compute from it (labels, scores, FAR), are
+    invariant under this shift by construction (see
+    `tests/test_detect_e2e.py`'s/`tests/test_sweep.py`'s dedicated invariance
+    tests) -- only RENDERED times move. `prepare_run` also needs this SAME offset
+    for `_extract_stream_features`'s own per-file timestamp shift (every raw
+    on-disk sample timestamp must move onto the identical true-UTC axis as this
+    grid, or nothing in it would ever match a window again -- see that function's
+    own docstring); *offset_ns* lets a caller that already derived it
+    (`rowii.io.dataset.run_utc_offset_ns(run)`) pass it straight through instead
+    of this function deriving it a second time (still cheap either way -- header
+    reads only -- but redundant work with no reason to duplicate it when a caller
+    already has the value).
+
+    Args:
+        run: The `Run` (burst files by stream) to build the grid for.
+        streams: The stream ids to build the grid across (a variant's own subset,
+            `_streams_for_variant`) -- ALL of *run*'s streams still contribute to
+            the offset derivation when *offset_ns* is `None` (see
+            `run_utc_offset_ns`'s own docstring on why it is not scoped to just
+            these streams).
+        window_s: Window duration in seconds.
+        offset_ns: Precomputed `run_utc_offset_ns(run)`, if the caller already has
+            it (`prepare_run`). `None` (the default -- every other caller, e.g.
+            `scripts/analyze_step1.py`'s own direct `build_run_grid` call) derives
+            it internally.
+    """
+    if offset_ns is None:
+        offset_ns = run_utc_offset_ns(run)
     synth_headers = []
     for stream in streams:
         files = sorted(run.files[stream], key=lambda f: f.start_utc_hint)
-        synth_headers.append(_synthesize_run_header(files))
+        header = _synthesize_run_header(files)
+        if offset_ns:
+            header = replace(header, t0_ns=header.t0_ns + offset_ns)
+        synth_headers.append(header)
     return common_grid(synth_headers, window_s)
 
 
@@ -192,12 +235,43 @@ class _StreamFeatureResult:
     `_extract_stream_features`."""
 
 
+def _shift_ts_ns(ts_ns: np.ndarray, offset_ns: int) -> np.ndarray:
+    """`ts_ns + offset_ns`, staying in `uint64` throughout -- mirrors `rowii.scada.
+    labels._shift_ts_ns` (duplicated, not imported: a small, self-contained utility,
+    not worth a new cross-module dependency for). `ts_ns` is `uint64` (as produced
+    by `read_gantner`) and so is `WindowGrid.edges_ns()`, which `window_slices`/
+    `coverage` compare it against; mixing `int64` and `uint64` numpy arrays silently
+    upcasts BOTH to `float64`, losing precision above `2**53` (~9.007e15) -- far
+    below these ~1e18 ns timestamps, so a naive `ts_ns.astype(np.int64) + offset_ns`
+    would corrupt every window boundary.
+    """
+    if offset_ns >= 0:
+        return ts_ns + np.uint64(offset_ns)
+    return ts_ns - np.uint64(-offset_ns)
+
+
 def _extract_stream_features(
     files: list[BurstFile],
     grid: WindowGrid,
     featurizer: AudioFeaturizer | VibFeaturizer | BeatsFeaturizer,
+    offset_ns: int = 0,
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
+
+    Task 10 (D2, DAQ epoch-2000 clock quirk): *grid* is already on the true-UTC
+    axis (`build_run_grid`), but each file's OWN raw `timestamps_ns` (`read_gantner`,
+    read straight off disk) still carries the raw DAQ axis -- *offset_ns* (the same
+    run-level `rowii.io.dataset.run_utc_offset_ns` value `build_run_grid` baked into
+    *grid*'s own `t0_ns`) is added to a file's timestamps before EVERY comparison
+    against *grid* (`window_slices`, `coverage`) below, so both sides of every
+    comparison share one axis again. Shifting both `grid` and every file's
+    timestamps by the identical constant leaves every window's sample SET
+    unchanged (a pure translation), which is exactly what makes `features`/
+    `coverage`/`segment_ids` -- and everything downstream that is built from them
+    (labels, scores, FAR) -- invariant under this shift; only the grid's own
+    absolute `t0_ns` (and therefore every RENDERED time) moves. Defaults to `0`
+    (no-op) for callers that already hand-align a `WindowGrid` to their own raw
+    fixture data (this function's own direct unit tests).
 
     A window is FULL (and gets featurized) if its sample count is within
     `_SAMPLE_JITTER_TOLERANCE` of the expected count for the file's own rate;
@@ -257,8 +331,9 @@ def _extract_stream_features(
         gf = read_gantner(bf.path)
         rate_hz = gf.header.sample_rate_hz
         expected_samples = round(rate_hz * (grid.window_ns / 1e9))
-        slices = window_slices(gf.timestamps_ns, grid)
-        file_coverage = coverage(gf.timestamps_ns, grid, rate_hz)
+        ts_ns = _shift_ts_ns(gf.timestamps_ns, offset_ns) if offset_ns else gf.timestamps_ns
+        slices = window_slices(ts_ns, grid)
+        file_coverage = coverage(ts_ns, grid, rate_hz)
         coverage_acc += file_coverage
 
         for w, sl in enumerate(slices):
@@ -464,12 +539,35 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _load_cached_prepared_run(cache_path: Path, fingerprint: str) -> PreparedRun | None:
+def _load_cached_prepared_run(
+    cache_path: Path,
+    fingerprint: str,
+    run: Run,
+    streams: tuple[str, ...],
+    window_s: float,
+    offset_ns: int,
+) -> PreparedRun | None:
     """`PreparedRun` from *cache_path* iff it exists, is readable, and its stored
     fingerprint equals *fingerprint*; `None` otherwise (cache miss -- caller
     recomputes and overwrites). A corrupt or partially-written cache file (e.g. from
     an interrupted previous run) is treated as a miss, not a crash: logged as a
     warning, never raised.
+
+    Task 10 (D4, DAQ epoch-2000 clock quirk -- cache compatibility WITHOUT
+    recompute): a cache npz written before this task's fix stores `grid_t0_ns` on
+    the RAW axis; a BEATs cache costs hours to rebuild and must never be
+    invalidated just to fix a timestamp. On every fingerprint-matched hit, this
+    function recomputes the run's grid fresh via `build_run_grid` (headers only,
+    cheap -- the EXACT computation the compute path performs, given the SAME
+    *run*/*streams*/*window_s*/*offset_ns* `prepare_run` already derived once for
+    this call) and OVERRIDES the loaded grid's `t0_ns` with the fresh value when
+    they differ, logging one INFO line. `window_ns`/`n_windows` are shift-invariant
+    (a constant t0 shift changes neither, `build_run_grid`'s own docstring) so they
+    are kept exactly as cached, never taken from the fresh recompute --
+    `features`/`valid_mask`/`segment_ids` are likewise shift-invariant and are
+    returned exactly as cached, never recomputed. A cache already written POST-fix
+    (t0_ns already true-UTC) is a silent no-op here: the freshly computed t0
+    matches the cached one exactly, so nothing changes and nothing is logged.
     """
     if not cache_path.is_file():
         return None
@@ -482,6 +580,18 @@ def _load_cached_prepared_run(cache_path: Path, fingerprint: str) -> PreparedRun
                 window_ns=int(data["grid_window_ns"][0]),
                 n_windows=int(data["grid_n_windows"][0]),
             )
+            fresh_grid = build_run_grid(run, streams, window_s, offset_ns=offset_ns)
+            if fresh_grid.t0_ns != grid.t0_ns:
+                logger.info(
+                    "prepare_run: cache at %s carries a raw-axis grid_t0_ns=%d -- "
+                    "overriding with the true-UTC t0_ns=%d (window_ns/n_windows/"
+                    "features/valid_mask/segment_ids are shift-invariant, kept as "
+                    "cached)",
+                    cache_path, grid.t0_ns, fresh_grid.t0_ns,
+                )
+                grid = WindowGrid(
+                    t0_ns=fresh_grid.t0_ns, window_ns=grid.window_ns, n_windows=grid.n_windows
+                )
             return PreparedRun(
                 features=data["features"],
                 grid=grid,
@@ -575,20 +685,29 @@ def prepare_run(
     streams = _streams_for_variant(variant)
     cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
     fingerprint = _cache_fingerprint(run, variant, cfg)
+    # Derived ONCE per call (Task 10, D2/D4) -- header-only reads, cheap -- and
+    # threaded through every place below that needs the run's true-UTC axis:
+    # build_run_grid (both the cache-hit override recompute and the compute
+    # path), and _extract_stream_features's own per-file timestamp shift.
+    offset_ns = run_utc_offset_ns(run)
 
     if use_cache:
-        cached = _load_cached_prepared_run(cache_path, fingerprint)
+        cached = _load_cached_prepared_run(
+            cache_path, fingerprint, run, streams, cfg.window.window_s, offset_ns
+        )
         if cached is not None:
             logger.info("prepare_run: cache hit for %s/%s (%s)", run.name, variant, cache_path)
             return cached
         logger.info("prepare_run: cache miss for %s/%s -- recomputing", run.name, variant)
 
-    grid = build_run_grid(run, streams, cfg.window.window_s)
+    grid = build_run_grid(run, streams, cfg.window.window_s, offset_ns=offset_ns)
 
     stream_results: dict[str, _StreamFeatureResult] = {}
     for stream in streams:
         featurizer = _featurizer_for_stream(stream, variant, cfg)
-        stream_results[stream] = _extract_stream_features(run.files[stream], grid, featurizer)
+        stream_results[stream] = _extract_stream_features(
+            run.files[stream], grid, featurizer, offset_ns
+        )
 
     valid_mask = compute_validity_mask(list(stream_results.values()))
     features = assemble_variant_features(variant, stream_results)

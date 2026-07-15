@@ -211,7 +211,13 @@ from rowii.anomaly.sweep import (  # noqa: E402
     scores_and_candidates,
 )
 from rowii.config import Config, load_config  # noqa: E402
-from rowii.io.dataset import RecordingIndex, Run, discover  # noqa: E402
+from rowii.io.dataset import (  # noqa: E402
+    RecordingIndex,
+    Run,
+    betriebsdaten_utc_offset_ns,
+    discover,
+    run_utc_offset_ns,
+)
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
@@ -393,13 +399,26 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
     Step-1/Step-2 logic lives in the `rowii` package instead, and this ~10-line
     time-overlap filter is small enough that duplicating it costs less than adding a
     script-to-script coupling would).
+
+    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
+    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
+    header`, straight off disk) is still the raw DAQ axis -- shifted here by
+    *betriebsdaten*'s own derived offset (`rowii.io.dataset.
+    betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
+    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
+    comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
+    sides shared the SAME axis by construction, so selection worked correctly by
+    accident, not because either side was ever true UTC (see the task report for
+    the full derivation).
     """
     grid_end_ns = int(grid.edges_ns()[-1])
+    offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
     matched = []
     for path in betriebsdaten:
         header = read_header(path)
-        file_end_ns = header.t0_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
-        if header.t0_ns < grid_end_ns and file_end_ns > grid.t0_ns:
+        file_start_ns = header.t0_ns + offset_ns
+        file_end_ns = file_start_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
+        if file_start_ns < grid_end_ns and file_end_ns > grid.t0_ns:
             matched.append(path)
     return sorted(matched)
 
@@ -410,6 +429,10 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
     (or none whose time range actually overlaps the grid) -- used both for candidate/
     register context columns (P/rpm/KS/Q, any label mode) and, by the caller, to derive
     `gt` labels.
+
+    *run* also supplies the D3 audio-side cross-check (`run_utc_offset_ns(run)`,
+    passed to `load_scada_window_means` as `audio_run_offset_ns` -- never used to
+    derive the SCADA-side shift itself).
     """
     day_betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
     if not day_betriebsdaten:
@@ -417,7 +440,9 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
     matched = _betriebsdaten_for_grid(day_betriebsdaten, prepared.grid)
     if not matched:
         return None
-    return load_scada_window_means(matched, prepared.grid)
+    return load_scada_window_means(
+        matched, prepared.grid, audio_run_offset_ns=run_utc_offset_ns(run)
+    )
 
 
 # ---------------------------------------------------------------------------

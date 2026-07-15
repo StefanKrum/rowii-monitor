@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -248,7 +249,17 @@ _E2E_MIC_RATE_HZ = 800.0
 _E2E_VIB_RATE_HZ = 400.0
 _E2E_SCADA_RATE_HZ = 10.0
 _E2E_DURATION_S = 60
-_E2E_T0_NS = 1_750_000_000_000_000_000  # arbitrary but fixed UTC epoch, ns
+_E2E_LOCAL_HOUR_UTC = datetime(2026, 6, 25, 4, 0, 0, tzinfo=UTC)
+"""The true UTC instant every `_E2E_T0_NS`-based file's own filename hour ("...
+2026-06-25_06-00-00...") resolves to: local Europe/Vienna 06:00:00 (CEST, UTC+2)."""
+_E2E_T0_NS = int((_E2E_LOCAL_HOUR_UTC - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
+"""Task 10 (DAQ epoch-2000 clock quirk): every synthetic file below's real UDBF
+header t0_ns must agree with its OWN filename's local-time hint (`rowii.io.dataset.
+run_utc_offset_ns`/`betriebsdaten_utc_offset_ns` now derive a per-file-set offset
+from exactly that hint-vs-header relationship) -- an "already correct clock"
+fixture (offset 0, the D1 plausibility gate), not the pre-Task-10 arbitrary
+constant this used to be (`header.t0_ns` used to be the ONLY source of truth for
+alignment, filenames only needed to PARSE, never to agree numerically)."""
 
 # Pinned pre-refactor values (Step-2 Task S1's regression guard): captured 2026-07-09 by
 # running this exact scenario against `scripts/run_step1.py` @ HEAD cdcf513, BEFORE the
@@ -274,9 +285,12 @@ _PRE_REFACTOR_N_EVAL = 60
 def _build_e2e_data_root(root: Path) -> Path:
     """A tiny synthetic data_root: 2 mic + 2 vib streams (~60 s) + one Betriebsdaten
     file with a clear standstill -> turbine step at t=30s, all sharing the same UTC
-    time base (`_E2E_T0_NS`). Filenames use plausible (but otherwise arbitrary) local
-    timestamps -- only `dataset.discover`'s filename PARSING needs to succeed; actual
-    time alignment comes from each file's real UDBF header t0_ns.
+    time base (`_E2E_T0_NS`, an "already correct clock" file set -- filename hour and
+    real UDBF header t0_ns agree, so `run_utc_offset_ns`/`betriebsdaten_utc_offset_ns`
+    both derive offset 0, D1's plausibility gate). The Betriebsdaten file's own
+    filename hour ("06-00-00") matches the burst files' so all three streams anchor to
+    the identical true-UTC instant, preserving the SCADA/burst time overlap the GT
+    step below needs.
     """
     from tests.fixtures.gantner_builder import build_gantner_file
 
@@ -342,7 +356,7 @@ def _build_e2e_data_root(root: Path) -> Path:
         [power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1
     )
     build_gantner_file(
-        bd / "2026-06-25_08-00-00.dat",
+        bd / "2026-06-25_06-00-00.dat",
         [
             "1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU",
             "Durchfluss PU", "1_Q_Ist", "1_KS Stellung",
@@ -712,14 +726,16 @@ def _build_one_day_tree(
     SINGLE burst run and a SINGLE, internally-homogeneous Betriebsdaten hour
     whose GT state is entirely *state* ("standstill" or "turbine").
 
-    Deliberately reuses the exact SAME `_E2E_T0_NS` epoch for every day tree
-    built this way (unlike `_build_e2e_data_root`, which is free to use any
-    fixed epoch since it only ever builds one day) -- this makes every day's
-    burst/Betriebsdaten files overlap in absolute UTC time with every OTHER
-    day's, so `_betriebsdaten_for_grid`'s time-overlap filter alone could never
-    correctly disambiguate which Betriebsdaten file belongs to which run: the
-    only thing that can keep the days from cross-contaminating each other's GT
-    is `main()` actually scoping by `Run.day_root` via
+    Deliberately reuses the exact SAME filename hour ("...06-00-00...") and
+    `_E2E_T0_NS` header value for every day tree built this way (unlike
+    `_build_e2e_data_root`, which is free to use any fixed epoch since it only
+    ever builds one day) -- both derive offset 0 (D1's plausibility gate, an
+    already-correct clock), so every day's burst/Betriebsdaten files land on the
+    exact SAME true-UTC instant as every OTHER day's, overlapping in absolute
+    time. `_betriebsdaten_for_grid`'s time-overlap filter alone could therefore
+    never correctly disambiguate which Betriebsdaten file belongs to which run:
+    the only thing that can keep the days from cross-contaminating each other's
+    GT is `main()` actually scoping by `Run.day_root` via
     `RecordingIndex.betriebsdaten_by_day`, not a lucky non-overlapping-time
     coincidence.
     """
@@ -770,7 +786,7 @@ def _build_one_day_tree(
         [power, speed, guide_vane, flow_tu, flow_pu, reactive, ks_valve], axis=1
     )
     build_gantner_file(
-        bd / "2026-06-25_08-00-00.dat",
+        bd / "2026-06-25_06-00-00.dat",
         [
             "1_P_Ist", "1_Drehzahl UPM", "1_Leitapparat Stell.", "Durchfluss TU",
             "Durchfluss PU", "1_Q_Ist", "1_KS Stellung",

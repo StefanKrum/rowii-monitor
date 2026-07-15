@@ -96,12 +96,13 @@ from rowii.anomaly.overlap import (  # noqa: E402
     top_candidates,
 )
 from rowii.config import Config, load_config  # noqa: E402
-from rowii.io.dataset import discover  # noqa: E402
+from rowii.io.dataset import discover, run_utc_offset_ns  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _cache_fingerprint,
     _cache_npz_path,
     _is_beats_variant,
     _load_cached_prepared_run,
+    _streams_for_variant,
     prepare_run,
 )
 from rowii.signals.windows import WindowGrid  # noqa: E402
@@ -249,7 +250,12 @@ def _grid_for_combo(day_name: str, variant: str, cfg: Config) -> WindowGrid:
     if _is_beats_variant(variant):
         cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
         fingerprint = _cache_fingerprint(run, variant, cfg)
-        if _load_cached_prepared_run(cache_path, fingerprint) is None:
+        streams = _streams_for_variant(variant)
+        offset_ns = run_utc_offset_ns(run)
+        cached = _load_cached_prepared_run(
+            cache_path, fingerprint, run, streams, cfg.window.window_s, offset_ns
+        )
+        if cached is None:
             raise SystemExit(
                 f"analyze_step2: no warm cache for {run.name} x {variant} (expected "
                 f"{cache_path} with a matching fingerprint) -- run `python scripts/"
