@@ -222,12 +222,20 @@ def loo_p_values(calibration_scores: np.ndarray) -> np.ndarray:
     combined statistics are weakly INFLATED relative to a perfectly-shared
     transform and the calibrated threshold sits weakly higher -- the residual can
     only SUPPRESS scoring-side alarms relative to that ideal, never add them
-    (conservative direction). Validated empirically: mean realized FAR at or below
-    alpha within Monte-Carlo precision (one-sided `alpha + 3*SE` bound, SE <= 0.002)
-    across dependence regimes -- independent, shared-latent-correlated (rho ~ 0.78),
-    anti-correlated, and identical branches -- at n in {39, 159}
-    (`tests/test_fusion.py`'s multi-regime validity test) and additionally at n=319
-    in the review-time simulation.
+    (conservative direction). Validated empirically FOR THE FISHER-combined
+    statistic: mean realized FAR at or below alpha within Monte-Carlo precision
+    (one-sided `alpha + 3*SE` bound, SE <= 0.002) across dependence regimes --
+    independent, shared-latent-correlated (rho ~ 0.78), anti-correlated, and
+    identical branches -- at n in {39, 159} (`tests/test_fusion.py`'s multi-regime
+    validity test) and additionally at n=319 in the review-time simulation. For the
+    TIPPETT (min-rule) statistic this LOO rescaling is decision-neutral: it is a
+    strictly monotone transform of the calibration-side min-rank, so every alarm
+    decision is bit-identical to the self-referential construction's -- and Tippett
+    retains a small intrinsic excess under positively correlated branches (measured
+    ~+0.007 at n=39, decaying ~1/n) that NO calibration-side p-value construction
+    sharing the calibration set as reference can remove; see `rowii.anomaly.fusion`'s
+    module docstring for the scoped claim and the deliberate no-third-split
+    trade-off.
 
     Args:
         calibration_scores: `(n,)` finite calibration scores, at least 1 element,
