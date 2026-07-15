@@ -82,7 +82,14 @@ import pandas as pd
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values
 from rowii.anomaly.references import build_references, split_by_segments
-from rowii.anomaly.scorers import KnnScorer, MahalanobisScorer, Scorer
+from rowii.anomaly.scorers import (
+    IsolationForestScorer,
+    KnnScorer,
+    LofScorer,
+    MahalanobisScorer,
+    OcSvmScorer,
+    Scorer,
+)
 from rowii.pipeline import PreparedRun
 
 _FAR_TABLE_COLUMNS = [
@@ -117,7 +124,7 @@ class SweepConfig:
     min_ref: int = 20
     top_k: int = 20
     conditioning: Literal["per-state", "pooled"] = "per-state"
-    scorer: Literal["knn", "mahalanobis"] = "knn"
+    scorer: Literal["knn", "mahalanobis", "ocsvm", "iforest", "lof"] = "knn"
 
 
 @dataclass(frozen=True)
@@ -209,20 +216,33 @@ def _validate_labels(labels: np.ndarray) -> None:
 def _make_scorer(name: str) -> Scorer:
     """A fresh, unfitted scorer instance for `cfg.scorer`, at the exact constructor
     defaults named in the consumed interface (`KnnScorer(k=1, metric="cosine",
-    chunk_size=4096)`, `MahalanobisScorer(shrinkage=0.1)`).
+    chunk_size=4096)`, `MahalanobisScorer(shrinkage=0.1)`, `OcSvmScorer(nu=0.1,
+    gamma="scale")`, `IsolationForestScorer(n_estimators=200, random_seed=7)`,
+    `LofScorer(n_neighbors=20)` -- the three classical one-class baselines added by
+    package 3, design spec `docs/superpowers/specs/2026-07-15-step2-package3-
+    baselines-design.md` D1).
 
     Raises:
-        ValueError: if `name` is neither `"knn"` nor `"mahalanobis"` -- a runtime-only
-            guard, since `SweepConfig.scorer`'s `Literal` type does not stop an
-            arbitrary string reaching here at runtime (matches `KnnScorer.__init__`'s
-            own `metric` validation and `pipeline._streams_for_variant`'s `variant`
-            validation).
+        ValueError: if `name` is none of `"knn"`, `"mahalanobis"`, `"ocsvm"`,
+            `"iforest"`, `"lof"` -- a runtime-only guard, since `SweepConfig.scorer`'s
+            `Literal` type does not stop an arbitrary string reaching here at runtime
+            (matches `KnnScorer.__init__`'s own `metric` validation and
+            `pipeline._streams_for_variant`'s `variant` validation).
     """
     if name == "knn":
         return KnnScorer()
     if name == "mahalanobis":
         return MahalanobisScorer()
-    raise ValueError(f"cfg.scorer must be 'knn' or 'mahalanobis', got {name!r}")
+    if name == "ocsvm":
+        return OcSvmScorer()
+    if name == "iforest":
+        return IsolationForestScorer()
+    if name == "lof":
+        return LofScorer()
+    raise ValueError(
+        f"cfg.scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', or 'lof', "
+        f"got {name!r}"
+    )
 
 
 def _assert_three_way_disjoint(
