@@ -9,39 +9,28 @@ here unlike this package's own `OcSvmScorer`/`IsolationForestScorer`/
 `LofScorer`, which negate an underlying "higher = more normal" sklearn
 quantity).
 
-Torch is imported lazily, INSIDE `fit`/`score` only -- importing this module
-never requires the `[beats]` extra (matches `rowii.signals.beats`'s own
-lazy-import story, the only other torch consumer in this project). Calling
+Torch never appears at this module's import time: the `torch.nn.Module`
+architectures live in `rowii.anomaly._recon_models` (the one module under
+`rowii.anomaly` that imports torch at module level), imported lazily INSIDE
+`fit()` after `_require_torch()` has confirmed torch is importable -- so
+importing THIS module never requires the `[beats]` extra, and calling
 `fit`/`score` without torch installed raises `RuntimeError` with the same
-install hint as `scripts/run_step2.py`'s `_import_beats_or_exit` guard.
-`_require_torch()` itself returns `None` (not the module, despite the
-tempting `torch = _require_torch()` shorthand) -- every method instead
-follows it with its OWN plain `import torch` (cheap: guaranteed to hit
-`sys.modules` once `_require_torch()` has already succeeded once). This
-mirrors `rowii.signals.beats`/`rowii.signals.beats_model`'s own established
-per-function local-import convention, and is not just a style choice: with
-`mypy --strict`, a shared helper that IMPORTS torch and RETURNS the module
-object can only be typed `Any` (torch is a real module, not a class -- there
-is no way to spell "the torch module, fully typed" as a return annotation),
-and `LstmAeScorer`/`ConvAeScorer` below define a `torch.nn.Module` subclass
-per `fit()` call (the model's `forward` needs this module's own
-`n_frames`/`n_mels` closed over, and building it lazily is the only way to
-keep the module-level "no torch import" promise) -- mypy flatly rejects
-subclassing a value of static type `Any` ("Class cannot subclass ... has
-type Any"). A real local `import torch` statement, by contrast, gives mypy
-torch's own installed type stubs for everything reached from that point in
-the function, subclass included -- verified against this exact pattern
-before writing the classes below.
+install hint as `scripts/run_step2.py`'s `_import_beats_or_exit` guard. The
+two-module split mirrors `rowii.signals.beats` (torch-free until called)
+delegating to `rowii.signals.beats_model` (eager torch), and is also what
+keeps `mypy --strict` clean: a lazily-acquired torch handle can only be typed
+`Any`, and mypy rejects subclassing a value of type `Any` ("Class cannot
+subclass ... has type Any"), so nn.Module subclasses need a REAL top-level
+`import torch` somewhere -- `_recon_models` is that place, and nothing in
+THIS module ever needs to subclass torch at all (its own lazy `import torch`
+statements resolve against torch's real installed stubs for everything they
+touch).
 
-`score()` called before `fit()` raises `AssertionError`, not the `ValueError`
-`rowii.anomaly.scorers`' five scorers use for the same precondition --
-deliberate (orchestrator resolution 6): every `score()` below needs an
-`assert self._model is not None` immediately afterward purely to narrow
-`self._model`'s type from `torch.nn.Module | None` to `torch.nn.Module` for
-`mypy --strict` (no `TYPE_CHECKING`-only trick avoids this), so re-raising
-that same assertion as a hand-rolled `ValueError` would just be duplicate
-work for an identical guarantee; every class's `score()` docstring calls
-this out explicitly.
+`score()` before `fit()` raises `ValueError("<Class>.score() called before
+fit()")` -- the same exception type, precondition, and message shape as
+`rowii.anomaly.scorers`' own scorers (`KnnScorer.score`,
+`MahalanobisScorer.score`), one convention across the whole Scorer family
+(Task-3 review follow-up; the first cut raised AssertionError here).
 
 Device: `_device()` delegates to `rowii.signals.beats.best_device()` --
 identical `ROWII_FORCE_CPU` env > mps > cuda > cpu priority as the BEATs
@@ -60,7 +49,7 @@ that backend's own determinism guarantees, never verified here.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -76,9 +65,9 @@ _TORCH_HINT = (
 
 def _require_torch() -> None:
     """Raise `RuntimeError` (with the shared install hint) if torch is not
-    importable; a no-op otherwise. See module docstring for why this does
-    NOT return the imported module -- every caller follows this with its own
-    `import torch` instead.
+    importable; a no-op otherwise. Callers follow this with their own local
+    `import torch` and/or `from rowii.anomaly import _recon_models` (module
+    docstring: the lazy-import story).
     """
     try:
         import torch  # noqa: F401
@@ -112,7 +101,8 @@ def _train_autoencoder(
     Args:
         model: An already-constructed, already-`.to(device)`'d autoencoder
             (any `torch.nn.Module` whose `forward` maps a `(N, F)` batch to
-            an `(N, F)` reconstruction of the SAME shape).
+            an `(N, F)` reconstruction of the SAME shape -- the three
+            `rowii.anomaly._recon_models` architectures all do).
         reference_t: `(N, F)` float32 tensor, already on *device* (the
             caller's own `torch.as_tensor(reference, ..., device=device)`).
         epochs: Full passes over *reference_t*.
@@ -157,9 +147,9 @@ def _train_autoencoder(
 
 
 class MlpAeScorer:
-    """MLP autoencoder baseline reconstruction scorer (package-3 spec D2) --
-    see module docstring for score polarity/definition and the lazy-torch
-    story.
+    """MLP autoencoder baseline reconstruction scorer (package-3 spec D2;
+    architecture: `rowii.anomaly._recon_models._MlpAe`) -- see module
+    docstring for score polarity/definition and the lazy-torch story.
 
     Works on ANY `(N, F)` feature vector (embeddings, handcrafted stats, or a
     flattened logmel patch) -- unlike `LstmAeScorer`/`ConvAeScorer`, it
@@ -222,20 +212,13 @@ class MlpAeScorer:
         _require_torch()
         import torch
 
+        from rowii.anomaly import _recon_models
+
         torch.manual_seed(self.seed)
         device = _device()
-        f = reference.shape[1]
-        dims = [f, *self.hidden]
-        enc: list[torch.nn.Module] = []
-        for a, b in zip(dims[:-1], dims[1:], strict=True):
-            enc += [torch.nn.Linear(a, b), torch.nn.ReLU()]
-        dec: list[torch.nn.Module] = []
-        rdims = list(reversed(dims))
-        for i, (a, b) in enumerate(zip(rdims[:-1], rdims[1:], strict=True)):
-            dec.append(torch.nn.Linear(a, b))
-            if i < len(rdims) - 2:
-                dec.append(torch.nn.ReLU())
-        model: torch.nn.Module = torch.nn.Sequential(*enc, *dec).to(device)
+        model: torch.nn.Module = _recon_models._MlpAe(
+            n_features=reference.shape[1], hidden=self.hidden
+        ).to(device)
         x = torch.as_tensor(reference, dtype=torch.float32, device=device)
         _train_autoencoder(model, x, self.epochs, self.lr, self.batch_size, self.seed, device)
         self._model, self._device = model, device
@@ -246,27 +229,30 @@ class MlpAeScorer:
         (mean-squared reconstruction error per row).
 
         Raises:
-            ValueError: if `x` contains non-finite values (`_check_query`).
+            ValueError: if `x` contains non-finite values (`_check_query`),
+                or if called before `fit()` (module docstring's consistency
+                note).
             RuntimeError: if torch is not installed (`_require_torch`).
-            AssertionError: if called before `fit()` (module docstring's
-                "score() called before fit()" note).
         """
         _check_query(x)
+        model = self._model
+        if model is None:
+            raise ValueError("MlpAeScorer.score() called before fit()")
         _require_torch()
         import torch
 
-        assert self._model is not None, "MlpAeScorer.score() called before fit()"
         with torch.no_grad():
             t = torch.as_tensor(x, dtype=torch.float32, device=self._device)
-            recon = self._model(t)
+            recon = model(t)
             mse = ((recon - t) ** 2).mean(dim=1)
         return np.asarray(mse.cpu().numpy(), dtype=np.float64)
 
 
 class LstmAeScorer:
     """LSTM autoencoder baseline reconstruction scorer for `logmel` patches
-    (package-3 spec D2) -- see module docstring for score polarity/definition
-    and the lazy-torch story.
+    (package-3 spec D2; architecture: `rowii.anomaly._recon_models._LstmAe`)
+    -- see module docstring for score polarity/definition and the lazy-torch
+    story.
 
     Reshapes each `(F,)` flattened logmel row back into its own `(n_frames,
     n_mels)` patch (`n_frames = F // n_mels`, frame-major -- `rowii.signals.
@@ -350,32 +336,13 @@ class LstmAeScorer:
         _require_torch()
         import torch
 
+        from rowii.anomaly import _recon_models
+
         torch.manual_seed(self.seed)
         device = _device()
-        n_mels = self.n_mels
-        hidden = self.hidden
-
-        class _LstmAe(torch.nn.Module):
-            """Encoder LSTM -> last hidden state -> repeated across frames ->
-            decoder LSTM -> per-step Linear projection (class docstring)."""
-
-            def __init__(self) -> None:
-                super().__init__()
-                self.encoder = torch.nn.LSTM(n_mels, hidden, batch_first=True)
-                self.decoder = torch.nn.LSTM(hidden, hidden, batch_first=True)
-                self.output = torch.nn.Linear(hidden, n_mels)
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                n = x.shape[0]
-                patches = x.reshape(n, n_frames, n_mels)
-                _, (h_n, _c_n) = self.encoder(patches)
-                latent = h_n[-1]  # (N, hidden) -- final layer's hidden state
-                repeated = latent.unsqueeze(1).repeat(1, n_frames, 1)
-                decoded, _ = self.decoder(repeated)
-                recon = self.output(decoded)  # (N, n_frames, n_mels)
-                return cast(torch.Tensor, recon.reshape(n, n_frames * n_mels))
-
-        model: torch.nn.Module = _LstmAe().to(device)
+        model: torch.nn.Module = _recon_models._LstmAe(
+            n_frames=n_frames, n_mels=self.n_mels, hidden=self.hidden
+        ).to(device)
         x = torch.as_tensor(reference, dtype=torch.float32, device=device)
         _train_autoencoder(model, x, self.epochs, self.lr, self.batch_size, self.seed, device)
         self._model, self._device = model, device
@@ -387,26 +354,29 @@ class LstmAeScorer:
         `(n_frames, n_mels)` patch).
 
         Raises:
-            ValueError: if `x` contains non-finite values (`_check_query`).
+            ValueError: if `x` contains non-finite values (`_check_query`),
+                or if called before `fit()` (module docstring's consistency
+                note).
             RuntimeError: if torch is not installed (`_require_torch`).
-            AssertionError: if called before `fit()` (module docstring's
-                "score() called before fit()" note).
         """
         _check_query(x)
+        model = self._model
+        if model is None:
+            raise ValueError("LstmAeScorer.score() called before fit()")
         _require_torch()
         import torch
 
-        assert self._model is not None, "LstmAeScorer.score() called before fit()"
         with torch.no_grad():
             t = torch.as_tensor(x, dtype=torch.float32, device=self._device)
-            recon = self._model(t)
+            recon = model(t)
             mse = ((recon - t) ** 2).mean(dim=1)
         return np.asarray(mse.cpu().numpy(), dtype=np.float64)
 
 
 class ConvAeScorer:
     """2-D convolutional autoencoder baseline reconstruction scorer for
-    `logmel` patches (package-3 spec D2) -- see module docstring for score
+    `logmel` patches (package-3 spec D2; architecture:
+    `rowii.anomaly._recon_models._ConvAe`) -- see module docstring for score
     polarity/definition and the lazy-torch story.
 
     Reshapes each `(F,)` flattened logmel row back into its own `(n_frames,
@@ -415,18 +385,15 @@ class ConvAeScorer:
     image -- mel (frequency) as height, frame (window-internal time) as
     width. A 2-layer strided `Conv2d` encoder downsamples this to a small
     spatial bottleneck; a mirrored `ConvTranspose2d` decoder upsamples back
-    toward the original size. `stride=2` convolutions do not always invert to
-    EXACTLY the original spatial size -- `Conv2d`/`ConvTranspose2d`'s own
-    output-size formulas can differ from the input size by a pixel or two
-    depending on `n_mels`/`n_frames`' parity (verified for both this class's
-    test geometry, mels=8/frames=7, and the real logmel geometry,
-    mels=64/frames=49) -- so the decoder's raw output is resized to the exact
-    `(n_mels, n_frames)` target with `torch.nn.functional.interpolate(...,
-    mode="nearest")` before computing the reconstruction loss: an
-    unconditional crop/pad step, applied every `forward()` call regardless of
-    whether the raw decoder output already matches (in which case it is a
-    no-op -- nearest-neighbor resizing to an unchanged target size leaves the
-    tensor unchanged).
+    to EXACTLY the original `(n_mels, n_frames)` shape: stride-2 transposes
+    alone do not always invert a stride-2 conv's floor-division downsampling
+    (the two layers' output-size formulas disagree by input parity), so each
+    decoder layer's `output_padding` is computed per dimension in closed form
+    (`rowii.anomaly._recon_models._transpose_output_padding`:
+    `output_padding = l_target - (2*l_in - 1)`, always 0 or 1 here) -- no
+    interpolate/crop/pad step anywhere, verified exact at both the test
+    geometry (8 mels x 7 frames) and the real logmel geometry (64 x 49) by
+    `tests/test_recon.py`'s raw-decoder-shape test.
     """
 
     name: str = "convae"
@@ -496,40 +463,13 @@ class ConvAeScorer:
         _require_torch()
         import torch
 
+        from rowii.anomaly import _recon_models
+
         torch.manual_seed(self.seed)
         device = _device()
-        n_mels = self.n_mels
-        c1, c2 = self.channels
-        target_size = (n_mels, n_frames)
-
-        class _ConvAe(torch.nn.Module):
-            """Conv2d/Conv2d encoder -> ConvTranspose2d/ConvTranspose2d
-            decoder -> resize-to-exact-shape (class docstring)."""
-
-            def __init__(self) -> None:
-                super().__init__()
-                self.enc1 = torch.nn.Conv2d(1, c1, kernel_size=3, stride=2, padding=1)
-                self.enc2 = torch.nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1)
-                self.dec1 = torch.nn.ConvTranspose2d(
-                    c2, c1, kernel_size=3, stride=2, padding=1, output_padding=1
-                )
-                self.dec2 = torch.nn.ConvTranspose2d(
-                    c1, 1, kernel_size=3, stride=2, padding=1, output_padding=1
-                )
-                self.relu = torch.nn.ReLU()
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                n = x.shape[0]
-                patch = x.reshape(n, n_frames, n_mels).transpose(1, 2).unsqueeze(1)
-                h = self.relu(self.enc1(patch))
-                h = self.relu(self.enc2(h))
-                h = self.relu(self.dec1(h))
-                h = self.dec2(h)
-                h = torch.nn.functional.interpolate(h, size=target_size, mode="nearest")
-                recon = h.squeeze(1).transpose(1, 2).reshape(n, n_frames * n_mels)
-                return recon
-
-        model: torch.nn.Module = _ConvAe().to(device)
+        model: torch.nn.Module = _recon_models._ConvAe(
+            n_frames=n_frames, n_mels=self.n_mels, channels=self.channels
+        ).to(device)
         x = torch.as_tensor(reference, dtype=torch.float32, device=device)
         _train_autoencoder(model, x, self.epochs, self.lr, self.batch_size, self.seed, device)
         self._model, self._device = model, device
@@ -541,18 +481,20 @@ class ConvAeScorer:
         `(n_mels, n_frames)` patch).
 
         Raises:
-            ValueError: if `x` contains non-finite values (`_check_query`).
+            ValueError: if `x` contains non-finite values (`_check_query`),
+                or if called before `fit()` (module docstring's consistency
+                note).
             RuntimeError: if torch is not installed (`_require_torch`).
-            AssertionError: if called before `fit()` (module docstring's
-                "score() called before fit()" note).
         """
         _check_query(x)
+        model = self._model
+        if model is None:
+            raise ValueError("ConvAeScorer.score() called before fit()")
         _require_torch()
         import torch
 
-        assert self._model is not None, "ConvAeScorer.score() called before fit()"
         with torch.no_grad():
             t = torch.as_tensor(x, dtype=torch.float32, device=self._device)
-            recon = self._model(t)
+            recon = model(t)
             mse = ((recon - t) ** 2).mean(dim=1)
         return np.asarray(mse.cpu().numpy(), dtype=np.float64)

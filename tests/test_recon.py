@@ -6,6 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from rowii.anomaly._recon_models import _ConvAe  # noqa: E402
 from rowii.anomaly.recon import ConvAeScorer, LstmAeScorer, MlpAeScorer  # noqa: E402
 
 
@@ -63,10 +64,10 @@ class TestPatchAes:
 
 
 # ---------------------------------------------------------------------------
-# score() before fit() (orchestrator resolution 6): AssertionError, matching
-# this module's own `assert self._model is not None` guard (see module
-# docstring for why this scorer family diverges from `rowii.anomaly.scorers`'
-# ValueError convention here).
+# score() before fit() -> ValueError, wording-consistent with
+# rowii.anomaly.scorers' own precondition errors ("<Class>.score() called
+# before fit()", e.g. KnnScorer.score) -- Task-3 review follow-up (the first
+# cut raised AssertionError here; one convention across the Scorer family now).
 # ---------------------------------------------------------------------------
 
 
@@ -79,6 +80,30 @@ class TestScoreBeforeFit:
             lambda: ConvAeScorer(n_mels=8),
         ],
     )
-    def test_raises_assertion_error(self, factory):
-        with pytest.raises(AssertionError):
+    def test_raises_value_error(self, factory):
+        with pytest.raises(ValueError, match="called before fit"):
             factory().score(np.zeros((5, 56)))
+
+
+# ---------------------------------------------------------------------------
+# Conv-AE decoder hits the input patch shape EXACTLY via closed-form
+# output_padding (Task-3 review refinement; replaces the earlier
+# interpolate-based resize) -- asserted on the RAW decoder output, layer by
+# layer, so no resampling step could mask a mismatch. Covers both the test
+# geometry (8 mels x 7 frames) and the real logmel geometry (64 mels x 49
+# frames, Task 2).
+# ---------------------------------------------------------------------------
+
+
+class TestConvAeDecoderShape:
+    @pytest.mark.parametrize("mels,frames", [(8, 7), (64, 49)])
+    def test_raw_decoder_output_matches_input_patch_shape(self, mels, frames):
+        model = _ConvAe(n_frames=frames, n_mels=mels, channels=(4, 8))
+        patch = torch.zeros(2, 1, mels, frames)
+
+        h = model.relu(model.enc1(patch))
+        h = model.relu(model.enc2(h))
+        h = model.relu(model.dec1(h))
+        raw = model.dec2(h)
+
+        assert raw.shape == (2, 1, mels, frames)
