@@ -17,11 +17,12 @@ mirrors `rowii.anomaly.sweep.run_sweep`'s exact three-way split -- top
 calibration side (`cfg.seed` then `cfg.seed + 1`, `run_sweep`'s own construction) --
 so the leakage-safety guarantee is identical: fit/conformal/scoring windows are
 three-way disjoint. Detected labels come from `FittedDetector.fit` on valid-compacted
-features, the SAME compaction `scripts/run_step2.py::_detected_labels` uses
-(run_step2.py:309) -- reimplemented locally below (`_detected_labels`) rather than
-imported, since a script must not depend on a SIBLING script's internals (that
-module's own docstring). Per state with a `min_ref`-sized fit reference
-(`rowii.anomaly.references.build_references`, same default as `SweepConfig.min_ref`):
+features, the SAME compaction `scripts/run_step2.py`'s `_detected_labels` (via its
+`_detected_labels_and_detector`) uses -- reimplemented locally below
+(`_detected_labels`) rather than imported, since a script must not depend on a
+SIBLING script's internals (that module's own docstring). Per state with a
+`min_ref`-sized fit reference (`rowii.anomaly.references.build_references`, same
+default as `SweepConfig.min_ref`):
 fit ONE scorer on that state's fit-part reference, score its own conformal-part and
 (fixed) scoring-part windows ONCE -- only the calibration SIZE is resampled
 downstream, inside `scarcity_curve` itself, which is what makes a 50-repetition sweep
@@ -239,16 +240,16 @@ def _import_beats_or_exit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detected labels (mirrors scripts/run_step2.py::_detected_labels, run_step2.py:309)
+# Detected labels (mirrors _detected_labels_and_detector in scripts/run_step2.py)
 # ---------------------------------------------------------------------------
 
 
 def _detected_labels(prepared: PreparedRun, cfg: Config) -> np.ndarray:
     """Full-length `(W,)` int64 detected cluster-id labels, `_INVALID_LABEL` on
-    invalid windows -- reimplements `scripts/run_step2.py::_detected_labels`'s exact
-    valid-window compaction (run_step2.py:309; duplicated, not imported, per this
-    module's own "no sibling-script dependency" rule). Keep this in sync with
-    run_step2.py:309 if either changes.
+    invalid windows -- reimplements the exact valid-window compaction of
+    `_detected_labels`/`_detected_labels_and_detector` in `scripts/run_step2.py`
+    (duplicated, not imported, per this module's own "no sibling-script dependency"
+    rule). Keep this in sync with that pair if either side changes.
     """
     valid_mask = prepared.valid_mask
     features_valid = prepared.features[valid_mask]

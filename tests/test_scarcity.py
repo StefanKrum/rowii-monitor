@@ -82,6 +82,31 @@ class TestBetaBand:
         assert hi == pytest.approx(beta_dist.ppf(0.95, n + 1 - idx, idx))
 
 
+class _RecordingScorer:
+    """`KnnScorer` wrapper recording every `fit()` reference matrix and every
+    `score()` input -- the observability seam
+    `TestSegmentAccumulation.test_scoring_segments_never_in_prefix` uses to pin the
+    scoring-exclusion invariant: a mutant that drops the `np.setdiff1d` exclusion
+    from `segment_accumulation_curve`'s segment pool feeds scoring-segment rows
+    into fit references / conformal calibration, which an output-only `n_scored`
+    check cannot see (review finding, 2026-07-15)."""
+
+    def __init__(self, log: list[_RecordingScorer]) -> None:
+        log.append(self)
+        self._inner = KnnScorer()
+        self.fit_matrix: np.ndarray | None = None
+        self.score_inputs: list[np.ndarray] = []
+
+    def fit(self, reference: np.ndarray) -> _RecordingScorer:
+        self.fit_matrix = reference.copy()
+        self._inner.fit(reference)
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        self.score_inputs.append(x.copy())
+        return self._inner.score(x)
+
+
 class TestSegmentAccumulation:
     def _run(self, n_segments=12, seg_len=60, seed=0):
         rng = np.random.default_rng(seed)
@@ -95,18 +120,53 @@ class TestSegmentAccumulation:
                 np.ones(n_segments * seg_len, dtype=bool))
 
     def test_scoring_segments_never_in_prefix(self):
+        # Scoring segments carry a DISTINCTIVE +1000 offset (non-scoring pool tops
+        # out around 5), so any leak of a scoring-segment row into a fit reference
+        # or a conformal-calibration score() input is directly observable through
+        # `_RecordingScorer` -- this is what actually pins the `np.setdiff1d`
+        # scoring-exclusion: an n_scored-only check passes even with the exclusion
+        # removed, since n_scored is computed from the fixed `scoring_windows`
+        # argument regardless of the pool (review finding, 2026-07-15).
         features, labels, segment_ids, valid = self._run()
-        scoring_windows = np.flatnonzero(np.isin(segment_ids, [10, 11]))
+        scoring_mask = np.isin(segment_ids, [10, 11])
+        features[scoring_mask] += 1000.0
+        scoring_windows = np.flatnonzero(scoring_mask)
+
+        recorded: list[_RecordingScorer] = []
         cfg = SegmentAccumulationConfig(n_reps=3)
         df = segment_accumulation_curve(
             features, labels, segment_ids, valid,
-            lambda: KnnScorer(), scoring_windows, cfg,
+            lambda: _RecordingScorer(recorded), scoring_windows, cfg,
         )
+
         # every row's n_scored equals the fixed scoring-side count for its label
         for label in (0, 1):
             expected = int((labels[scoring_windows] == label).sum())
             got = df[df["label"] == label]["n_scored"].unique()
             assert list(got) == [expected]
+
+        # THE invariant: no fit reference and no conformal score() input ever
+        # contains a scoring-segment row (all marked > 999; pool rows < 500).
+        assert recorded  # the seam fired: at least one real (non-starved) fit
+        for scorer in recorded:
+            assert scorer.fit_matrix is not None
+            assert len(scorer.score_inputs) == 2  # conformal first, scoring second
+            assert (scorer.fit_matrix < 500.0).all(), (
+                "scoring-segment row leaked into a fit reference"
+            )
+            assert (scorer.score_inputs[0] < 500.0).all(), (
+                "scoring-segment row leaked into conformal calibration"
+            )
+            assert (scorer.score_inputs[1] > 500.0).all()  # marker really flows through
+
+        # Output-level bound, deterministic for ANY permutation: a label's
+        # fit+conformal window counts can never exceed its own NON-SCORING total
+        # (with the exclusion removed, the full prefix drags the label's scoring
+        # segment in too and overshoots this bound at every rep).
+        for label in (0, 1):
+            non_scoring_total = int(((labels == label) & valid & ~scoring_mask).sum())
+            sub = df[df["label"] == label]
+            assert ((sub["n_fit"] + sub["n_conformal"]) <= non_scoring_total).all()
 
     def test_deterministic_and_monotone_minutes(self):
         features, labels, segment_ids, valid = self._run()
