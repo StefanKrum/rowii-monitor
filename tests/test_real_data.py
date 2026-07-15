@@ -25,12 +25,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from rowii.config import load_config
 from rowii.io.dataset import discover
 from rowii.io.gantner import read_header
+from rowii.pipeline import prepare_run
 from rowii.scada.labels import GT_CHANNELS
+from rowii.signals.windows import WindowGrid
+from rowii.state.detect import FittedDetector
 
 _DATA_ROOT = load_config().data_root
 _HAS_DATA_ROOT = _DATA_ROOT.is_dir()
@@ -173,3 +177,35 @@ def test_betriebsdaten_file_contains_all_gt_channel_names(data_root: Path) -> No
             f"GT_CHANNELS[{key!r}] = {channel_name!r} not found in "
             f"{target.name}; available channels: {header.channel_names}"
         )
+
+
+def test_fitted_detector_apply_equals_fit_on_cached_run(data_root: Path) -> None:
+    """Same-day apply == fit labels on a real cached PreparedRun (spec D1 gate).
+
+    No dedicated real-run fixture exists yet in this file, so this builds the
+    `PreparedRun` inline via `prepare_run(..., use_cache=True)`, exactly like
+    every other test here calls `discover(data_root)` fresh -- for the
+    010726-tu_ph_tu fusion variant, which already has an on-disk cache entry
+    (`results/cache/010726-tu_ph_tu--fusion.npz`), so this stays fast (cache
+    hit, no raw file re-read). Compacts to valid windows exactly like
+    `scripts/run_step2.py::_detected_labels`, then checks that
+    `FittedDetector.apply` reproduces `FittedDetector.fit`'s own labels when
+    given the SAME features -- the same-day-equivalence contract already
+    covered on synthetic data by `tests/test_detect_e2e.py::TestFittedDetector`,
+    proven here end-to-end on a real multi-stream recording.
+    """
+    cfg = load_config()
+    index = discover(data_root)
+    run = next(r for r in index.runs if r.name == "010726-tu_ph_tu")
+    prepared = prepare_run(run, "fusion", cfg, use_cache=True)
+
+    valid = prepared.valid_mask
+    feats = prepared.features[valid]
+    grid = WindowGrid(
+        t0_ns=prepared.grid.t0_ns,
+        window_ns=prepared.grid.window_ns,
+        n_windows=int(valid.sum()),
+    )
+    det, fit_result = FittedDetector.fit(feats, grid, cfg.detect, clusterer="kmeans")
+    applied = det.apply(feats, grid)
+    np.testing.assert_array_equal(applied.frame_labels, fit_result.frame_labels)

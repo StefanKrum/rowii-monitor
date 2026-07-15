@@ -8,10 +8,10 @@ import pytest
 from sklearn.metrics import adjusted_rand_score
 
 from rowii.config import DetectConfig
-from rowii.signals.features import zscore
+from rowii.signals.features import apply_zscore, zscore, zscore_stats
 from rowii.signals.windows import WindowGrid
 from rowii.state.cluster import GmmClusterer, KMeansClusterer
-from rowii.state.detect import DetectionResult, run_detection
+from rowii.state.detect import DetectionResult, FittedDetector, run_detection
 from rowii.state.segments import duration_filter, to_segments
 from rowii.state.smooth import StickyHmmSmoother
 
@@ -449,3 +449,85 @@ def test_raises_value_error_on_unknown_clusterer_string() -> None:
 
     with pytest.raises(ValueError, match="clusterer"):
         run_detection(features, grid, cfg, clusterer="not-a-real-clusterer")  # type: ignore[arg-type]
+
+
+class TestFittedDetector:
+    def _three_state_run(
+        self, seed: int = 0, n_per_state: int = 120, offset: float = 0.0
+    ) -> tuple[np.ndarray, WindowGrid]:
+        rng = np.random.default_rng(seed)
+        blocks = [
+            rng.normal(0 + offset, 0.15, (n_per_state, 2)),
+            rng.normal(4 + offset, 0.15, (n_per_state, 2)),
+            rng.normal(8 + offset, 0.15, (n_per_state, 2)),
+        ]
+        features = np.vstack(blocks)
+        grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=len(features))
+        return features, grid
+
+    def _cfg(self) -> DetectConfig:
+        return DetectConfig(n_states=3, self_transition=0.98, min_dwell_s=3, random_seed=7)
+
+    def test_fit_result_identical_to_run_detection(self) -> None:
+        features, grid = self._three_state_run()
+        cfg = self._cfg()
+        legacy = run_detection(features, grid, cfg, clusterer="kmeans")
+        _, fitted_result = FittedDetector.fit(features, grid, cfg, clusterer="kmeans")
+        np.testing.assert_array_equal(fitted_result.frame_labels, legacy.frame_labels)
+        assert fitted_result.k == legacy.k
+
+    def test_apply_same_day_reproduces_fit_labels(self) -> None:
+        features, grid = self._three_state_run()
+        det, fit_result = FittedDetector.fit(features, grid, self._cfg())
+        applied = det.apply(features, grid)
+        np.testing.assert_array_equal(applied.frame_labels, fit_result.frame_labels)
+
+    def test_apply_uses_fit_day_statistics(self) -> None:
+        features_a, grid = self._three_state_run(seed=0)
+        det, _ = FittedDetector.fit(features_a, grid, self._cfg())
+        mean_a, std_a = zscore_stats(features_a)
+        np.testing.assert_array_equal(det.mean, mean_a)
+        np.testing.assert_array_equal(det.std, std_a)
+        # Day B = day A shifted by a constant; with A's stats the z-features shift,
+        # with B's own stats they would be identical to A's. Verify A's stats in use:
+        features_b = features_a + 2.0
+        z_expected = apply_zscore(features_b, mean_a, std_a)
+        assert not np.allclose(z_expected, apply_zscore(features_b, *zscore_stats(features_b)))
+        applied = det.apply(features_b, grid)  # must run through A-stats path
+        assert applied.frame_labels.shape == (len(features_b),)
+
+    def test_apply_never_refits_hmm(self) -> None:
+        features_a, grid = self._three_state_run(seed=0)
+        det, _ = FittedDetector.fit(features_a, grid, self._cfg())
+        means_before = det.smoother.last_model_.means_.copy()  # type: ignore[union-attr]
+        features_b, grid_b = self._three_state_run(seed=1, offset=0.3)
+        det.apply(features_b, grid_b)
+        np.testing.assert_array_equal(
+            det.smoother.last_model_.means_,  # type: ignore[union-attr]
+            means_before,
+        )
+
+    def test_apply_transfers_label_space(self) -> None:
+        # B presents the states in a different order/proportion; labels must come
+        # from A's id space and follow the feature values, not the position.
+        features_a, grid_a = self._three_state_run(seed=0)
+        det, fit_result = FittedDetector.fit(features_a, grid_a, self._cfg())
+        # B: only the "middle" (value 4) state, long enough to survive min_dwell
+        rng = np.random.default_rng(9)
+        features_b = rng.normal(4, 0.15, (100, 2))
+        grid_b = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=100)
+        applied = det.apply(features_b, grid_b)
+        a_middle_label = fit_result.frame_labels[150]  # deep inside A's value-4 block
+        assert set(np.unique(applied.frame_labels)) == {a_middle_label}
+
+    def test_apply_raises_value_error_on_feature_count_mismatch(self) -> None:
+        """Orchestrator resolution (Task-1 review): hmmlearn's `decode` silently
+        accepts a wrong feature count and returns garbage rather than raising, and
+        `apply` is exactly the entry point that receives a FOREIGN day's feature
+        array -- a column-count typo/bug must fail loudly, not decode garbage."""
+        features_a, grid_a = self._three_state_run(seed=0)  # 2 features
+        det, _ = FittedDetector.fit(features_a, grid_a, self._cfg())
+        features_wrong = np.zeros((len(features_a), 3), dtype=np.float64)
+        grid_wrong = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=len(features_a))
+        with pytest.raises(ValueError, match="features"):
+            det.apply(features_wrong, grid_wrong)
