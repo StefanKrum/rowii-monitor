@@ -60,6 +60,17 @@ class FittedDetector:
     z-scores per run, so transfer MUST carry these), labeling is Viterbi decode
     with the FIT day's HMM. Not serialized to disk in this package (spec D1:
     future runtime-prototype serialization point).
+
+    Two usage caveats (final whole-branch review, 2026-07-15): the per-window
+    labeler on BOTH the fit and apply paths is `StickyHmmSmoother.decode`
+    (Viterbi with fit-day emissions) — `KMeansClusterer.predict` /
+    `GmmClusterer.predict` are reserved transfer primitives that `apply`
+    deliberately does NOT call, since Viterbi discards any init assignment and
+    decode-only is what makes `apply(fit_features) == fit` hold. And although
+    this dataclass is `frozen=True`, `smoother` is a mutable object: freezing
+    blocks field REASSIGNMENT only — never call `fit_decode` on a
+    `FittedDetector`'s smoother directly, or the captured emission model is
+    silently re-estimated in place.
     """
 
     mean: np.ndarray
