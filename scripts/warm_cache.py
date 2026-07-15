@@ -47,7 +47,11 @@ from rowii.pipeline import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RUNS: tuple[str, ...] = (
-    "250526-tu", "290626-tu", "010726-tu_ph_tu", "270626-pu_ph_pu_ph_pu_ph",
+    # The 27.06 day tree gap-splits into THREE discovered runs (>15-min pauses between
+    # its PU/PH blocks -- `rowii.io.dataset._split_on_gaps`/`_group_name`), so all three
+    # are listed individually; a bare "270626-pu_ph_pu_ph_pu_ph" matches nothing.
+    "250526-tu", "290626-tu", "010726-tu_ph_tu",
+    "270626-pu_ph_pu_ph_pu_ph-1", "270626-pu_ph_pu_ph_pu_ph-2", "270626-pu_ph_pu_ph_pu_ph-3",
 )
 _DEFAULT_VARIANTS: tuple[str, ...] = ("audio-beats", "fusion-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (

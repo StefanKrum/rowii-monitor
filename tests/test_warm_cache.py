@@ -49,8 +49,12 @@ def test_build_parser_defaults_match_the_documented_defaults() -> None:
     assert args.runs == list(warm_cache._DEFAULT_RUNS)
     assert args.variants == list(warm_cache._DEFAULT_VARIANTS)
     assert args.dry_run is False
+    # 27.06 gap-splits into three discovered runs (-1/-2/-3) -- the pre-fix default
+    # named the nonexistent unsuffixed run and correctly exited 2 on real data.
     assert list(warm_cache._DEFAULT_RUNS) == [
-        "250526-tu", "290626-tu", "010726-tu_ph_tu", "270626-pu_ph_pu_ph_pu_ph",
+        "250526-tu", "290626-tu", "010726-tu_ph_tu",
+        "270626-pu_ph_pu_ph_pu_ph-1", "270626-pu_ph_pu_ph_pu_ph-2",
+        "270626-pu_ph_pu_ph_pu_ph-3",
     ]
     assert list(warm_cache._DEFAULT_VARIANTS) == ["audio-beats", "fusion-beats"]
 
