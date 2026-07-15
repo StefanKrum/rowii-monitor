@@ -213,6 +213,23 @@ def test_run_step1_parser_accepts_arbitrary_day_prefixed_run_names() -> None:
     assert args.run == "010726-tu_ph_tu"
 
 
+def test_run_step1_variant_all_excludes_logmel_but_logmel_stays_selectable() -> None:
+    # Package-3 spec D3 scopes logmel as a Step-2 autoencoder INPUT, not a Step-1
+    # clustering candidate: `--variant all` must NOT sweep it (a 3136-dim z-scored
+    # matrix into the full-covariance GMM is statistically underdetermined at typical
+    # per-run window counts), while `--variant logmel` stays explicitly selectable.
+    import run_step1
+
+    assert "logmel" not in run_step1._CONCRETE_VARIANTS
+    assert "logmel" in run_step1._VARIANT_CHOICES
+
+    args = run_step1.build_parser().parse_args(["--variant", "logmel"])
+    assert args.variant == "logmel"
+
+    expanded = run_step1._resolve_choice("all", "all", run_step1._CONCRETE_VARIANTS)
+    assert "logmel" not in expanded
+
+
 # ---------------------------------------------------------------------------
 # 4. beats variant without the extra installed -> SystemExit with install hint
 # ---------------------------------------------------------------------------

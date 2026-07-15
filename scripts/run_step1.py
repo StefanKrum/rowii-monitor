@@ -98,7 +98,12 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     "vibration",
     "fusion",
     "fusion-beats",
-    "logmel",
+    # "logmel" is deliberately NOT expanded by `--variant all` (though it stays
+    # explicitly selectable via _VARIANT_CHOICES): package-3 spec D3 scopes logmel
+    # as a Step-2 autoencoder INPUT, not a Step-1 clustering candidate -- a
+    # 3136-dim z-scored matrix into the full-covariance GMM is statistically
+    # underdetermined at typical per-run window counts (and measured at 4.6-8.2 s
+    # per fit even on trivial synthetic data).
 )
 _CONCRETE_CLUSTERERS: tuple[ClustererName, ...] = ("kmeans", "gmm")
 _K_SWEEP_VALUES: tuple[int, ...] = (3, 4, 5, 6)
