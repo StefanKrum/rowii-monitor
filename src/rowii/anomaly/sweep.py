@@ -81,6 +81,7 @@ import numpy as np
 import pandas as pd
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values
+from rowii.anomaly.recon import ConvAeScorer, LstmAeScorer, MlpAeScorer
 from rowii.anomaly.references import build_references, split_by_segments
 from rowii.anomaly.scorers import (
     IsolationForestScorer,
@@ -124,7 +125,9 @@ class SweepConfig:
     min_ref: int = 20
     top_k: int = 20
     conditioning: Literal["per-state", "pooled"] = "per-state"
-    scorer: Literal["knn", "mahalanobis", "ocsvm", "iforest", "lof"] = "knn"
+    scorer: Literal[
+        "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae"
+    ] = "knn"
 
 
 @dataclass(frozen=True)
@@ -220,13 +223,18 @@ def _make_scorer(name: str) -> Scorer:
     gamma="scale")`, `IsolationForestScorer(n_estimators=200, random_seed=7)`,
     `LofScorer(n_neighbors=20)` -- the three classical one-class baselines added by
     package 3, design spec `docs/superpowers/specs/2026-07-15-step2-package3-
-    baselines-design.md` D1).
+    baselines-design.md` D1 -- and `MlpAeScorer(hidden=(128, 32), epochs=200,
+    lr=1e-3, batch_size=256, seed=7)`, `LstmAeScorer(hidden=64, epochs=100,
+    lr=1e-3, batch_size=128, seed=7, n_mels=64)`, `ConvAeScorer(channels=(16, 32),
+    epochs=100, lr=1e-3, batch_size=128, seed=7, n_mels=64)` -- the three
+    reconstruction baselines added by package 3 Task 3, same design spec, D2).
 
     Raises:
         ValueError: if `name` is none of `"knn"`, `"mahalanobis"`, `"ocsvm"`,
-            `"iforest"`, `"lof"` -- a runtime-only guard, since `SweepConfig.scorer`'s
-            `Literal` type does not stop an arbitrary string reaching here at runtime
-            (matches `KnnScorer.__init__`'s own `metric` validation and
+            `"iforest"`, `"lof"`, `"mlpae"`, `"lstmae"`, `"convae"` -- a
+            runtime-only guard, since `SweepConfig.scorer`'s `Literal` type does
+            not stop an arbitrary string reaching here at runtime (matches
+            `KnnScorer.__init__`'s own `metric` validation and
             `pipeline._streams_for_variant`'s `variant` validation).
     """
     if name == "knn":
@@ -239,9 +247,15 @@ def _make_scorer(name: str) -> Scorer:
         return IsolationForestScorer()
     if name == "lof":
         return LofScorer()
+    if name == "mlpae":
+        return MlpAeScorer()
+    if name == "lstmae":
+        return LstmAeScorer()
+    if name == "convae":
+        return ConvAeScorer()
     raise ValueError(
-        f"cfg.scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', or 'lof', "
-        f"got {name!r}"
+        f"cfg.scorer must be 'knn', 'mahalanobis', 'ocsvm', 'iforest', 'lof', "
+        f"'mlpae', 'lstmae', or 'convae', got {name!r}"
     )
 
 
