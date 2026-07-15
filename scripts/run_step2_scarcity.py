@@ -113,7 +113,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_RUNS: tuple[str, ...] = ("010726-tu_ph_tu", "290626-tu")
 _DEFAULT_VARIANTS: tuple[str, ...] = ("fusion", "audio-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
 )
 """Duplicated from `scripts/run_step2.py`'s own `_VARIANT_CHOICES` (and `scripts/
 warm_cache.py`'s) -- scripts must not import from a sibling script, see this

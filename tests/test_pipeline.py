@@ -21,7 +21,8 @@ from rowii import pipeline
 from rowii.config import Config
 from rowii.io.dataset import BurstFile, Run
 from rowii.pipeline import PreparedRun, prepare_run
-from rowii.signals.features import AudioFeaturizer
+from rowii.signals.features import AudioFeaturizer, VibFeaturizer
+from rowii.signals.logmel import LogmelFeaturizer
 from rowii.signals.windows import WindowGrid
 from tests.fixtures.gantner_builder import build_gantner_file
 
@@ -417,3 +418,96 @@ def test_prepare_run_cache_hit_is_a_no_op_when_t0_ns_already_true_utc(
     assert second.grid.t0_ns == first.grid.t0_ns
     messages = [r.message for r in caplog.records]
     assert not any("overriding" in m.lower() for m in messages), messages
+
+
+# ---------------------------------------------------------------------------
+# 6. logmel variant (package-3 spec D3): stream mapping, featurizer dispatch, and a
+# cache round-trip for the logmel-shaped (W, 49 * 64 = 3136) feature matrix.
+# ---------------------------------------------------------------------------
+
+_LOGMEL_RATE_HZ = 50_000.0
+"""The plant's real mic rate -- the geometry at which logmel produces exactly
+49 frames x 64 mels = 3136 features per 1-s window."""
+
+
+def test_streams_for_variant_logmel_is_primary_mic_only() -> None:
+    assert pipeline._streams_for_variant("logmel") == ("RAWGeneratorMic__0",)
+
+
+def test_featurizer_for_stream_dispatches_logmel_variant(tmp_path) -> None:
+    cfg = _cfg(tmp_path / "results")
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorMic__0", "logmel", cfg),
+        LogmelFeaturizer,
+    )
+    # The pre-existing dispatch stays untouched: audio -> AudioFeaturizer, vib
+    # streams -> VibFeaturizer regardless of variant.
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio", cfg),
+        AudioFeaturizer,
+    )
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorVib__2", "vibration", cfg),
+        VibFeaturizer,
+    )
+
+
+def _single_file_logmel_run(burst_dir: Path, *, n_seconds: int = 3) -> Run:
+    """One 50 kHz single-channel file for the primary mic stream ONLY --
+    `_streams_for_variant("logmel")` needs no other stream (spec D3: primary mic,
+    size bound)."""
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    path = burst_dir / "gen_mic.dat"
+    n_samples = round(_LOGMEL_RATE_HZ * n_seconds)
+    data = np.ones((n_samples, 1), dtype=np.float32)
+    build_gantner_file(path, ["mic0"], data, t0_ns=0, rate_hz=_LOGMEL_RATE_HZ)
+    files = {
+        "RAWGeneratorMic__0": [
+            BurstFile(
+                path=path,
+                stream="RAWGeneratorMic__0",
+                start_utc_hint=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        ],
+    }
+    return Run(name="unit-test-logmel-run", files=files, day_root=burst_dir)
+
+
+def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:
+    """End-to-end `prepare_run(run, "logmel", ...)` over real (synthetic) 50 kHz
+    burst data: (W, 3136) features, stream-prefixed logmel feature names, and a
+    cache round-trip (second call is a HIT -- no re-extraction; same pattern as
+    the audio-variant cache tests above)."""
+    run = _single_file_logmel_run(tmp_path / "burst", n_seconds=3)
+    cfg = _cfg(tmp_path / "results")
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    first = prepare_run(run, "logmel", cfg, use_cache=True)
+    assert call_count["n"] == 1, "logmel uses exactly ONE stream (primary mic)"
+
+    assert first.features.shape == (3, 49 * 64)
+    assert first.valid_mask.all()
+    assert len(first.feature_names) == 49 * 64
+    assert first.feature_names[0] == "RAWGeneratorMic__0::logmel_f0_m0"
+    assert first.feature_names[64] == "RAWGeneratorMic__0::logmel_f1_m0"
+    assert (first.segment_ids == 0).all()
+
+    cache_path = tmp_path / "results" / "cache" / "unit-test-logmel-run--logmel.npz"
+    assert cache_path.is_file()
+
+    second = prepare_run(run, "logmel", cfg, use_cache=True)
+    assert call_count["n"] == 1, "second call must be a cache HIT -- no new extraction"
+
+    np.testing.assert_array_equal(first.features, second.features)
+    np.testing.assert_array_equal(first.valid_mask, second.valid_mask)
+    np.testing.assert_array_equal(first.segment_ids, second.segment_ids)
+    assert first.feature_names == second.feature_names
+    assert first.grid == second.grid

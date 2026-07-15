@@ -69,7 +69,7 @@ ClustererName = Literal["kmeans", "gmm"]
 """Matches `rowii.state.detect.FittedDetector.fit`'s own `clusterer` parameter type."""
 
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
 )
 """Duplicated from `scripts/run_step2.py`'s own `_VARIANT_CHOICES` (and `scripts/
 run_step2_scarcity.py`'s) -- a script must not depend on a sibling script's
