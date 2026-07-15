@@ -46,6 +46,25 @@ class TestMatchByTime:
         assert len(m) == 1
         assert abs(m["dt_s"].iloc[0]) == pytest.approx(1.0)
 
+    def test_exact_dt_tie_resolved_deterministically_by_row_order(self):
+        """Two pairs tied at EXACTLY |dt| = 1 s, both competing for the same
+        candidate: `match_by_time`'s stable sort preserves the row-major
+        (a-row, b-row) pair enumeration order, so among tied pairs the earlier
+        row of the other side wins -- pinned here in both directions so the
+        `kind="stable"` choice is locked in (its docstring's tie rule; Task 7
+        review finding 3)."""
+        one_a, two_b = self._cands([100]), self._cands([99, 101])
+        m = match_by_time(one_a, two_b, tol_s=5.0)
+        assert len(m) == 1
+        assert m["t_utc_ns_b"].iloc[0] == 99 * 1_000_000_000  # b row 0 wins the tie
+        assert m["dt_s"].iloc[0] == pytest.approx(1.0)
+
+        two_a, one_b = self._cands([99, 101]), self._cands([100])
+        m = match_by_time(two_a, one_b, tol_s=5.0)
+        assert len(m) == 1
+        assert m["t_utc_ns_a"].iloc[0] == 99 * 1_000_000_000  # a row 0 wins the tie
+        assert m["dt_s"].iloc[0] == pytest.approx(-1.0)
+
     def test_columns_and_empty_inputs(self):
         """Column contract (brief interface spec) + the degenerate empty-set case
         (no real sweep ever produces zero candidates for a non-excluded label, but
@@ -159,11 +178,16 @@ def test_analyze_step2_writes_overlap_report_and_needs_listening_check(
     would otherwise touch `rowii.io.dataset.discover`/`rowii.pipeline.prepare_run`)
     -- one `--check-utc` timestamp that hits both combos and one that misses both.
 
-    ComboA ("fusion-knn") windows 10/500/900 map to a DIFFERENT grid than comboB's
-    ("audio-beats-knn") windows 503/901 -- window 500 (comboA) and window 503
-    (comboB) are 3s apart in absolute UTC time (within the 5s default tolerance)
-    despite their raw indices disagreeing by 3, proving the match goes through UTC
-    time, not raw window equality (module docstring's central point).
+    ComboA ("fusion-knn") and comboB ("audio-beats-knn") get genuinely DIFFERENT
+    grids: comboB's grid starts 100 windows (100 s) LATER (Task 7 review finding 2
+    -- value-identical grids cannot exercise per-combo grid selection at all).
+    ComboA's candidate window 500 (-> T0+500 s) and comboB's candidate window 403
+    (-> T0+503 s via comboB's own shifted grid) land 3 s apart in absolute UTC --
+    a match -- despite raw indices disagreeing by 97. Had the script wrongly used
+    comboA's grid for comboB, comboB's candidates would land at T0+403 s / T0+801 s
+    and NOTHING would match (97 s >> the 5 s tolerance), so the `matched: 1`
+    assertion below genuinely pins that each combo's candidates go through its OWN
+    grid (module docstring's central point).
     """
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
@@ -173,7 +197,7 @@ def test_analyze_step2_writes_overlap_report_and_needs_listening_check(
     combo_a, combo_b = "fusion-knn", "audio-beats-knn"
     window_ns = 1_000_000_000
     grid_a = WindowGrid(t0_ns=_T0_NS, window_ns=window_ns, n_windows=1000)
-    grid_b = WindowGrid(t0_ns=_T0_NS, window_ns=window_ns, n_windows=1000)
+    grid_b = WindowGrid(t0_ns=_T0_NS + 100 * window_ns, window_ns=window_ns, n_windows=1000)
 
     _write_scores_parquet(
         results_root / "step2" / "within-day" / run / "fusion-detected" / "per-state-knn"
@@ -184,7 +208,7 @@ def test_analyze_step2_writes_overlap_report_and_needs_listening_check(
     _write_scores_parquet(
         results_root / "step2" / "within-day" / run / "audio-beats-detected" / "per-state-knn"
         / "scores.parquet",
-        window=[503, 901], label=["0", "1"], score=[7.0, 1.0],
+        window=[403, 801], label=["0", "1"], score=[7.0, 1.0],
         p_value=[0.01, 0.6], alarm=[True, False],
     )
 
@@ -220,6 +244,10 @@ def test_analyze_step2_writes_overlap_report_and_needs_listening_check(
     assert "Jaccard: 0.333" in report_text
     assert "## Matches" in report_text
     assert "No matches within tolerance" not in report_text
+    # dt = (T0+500s, comboA grid) - (T0+503s, comboB's 100-window-shifted grid):
+    # a real, non-zero offset that only comes out as -3.000 when each combo's
+    # candidates were converted through its OWN grid.
+    assert "| -3.000 |" in report_text
     assert f"Unmatched ({combo_a} only)" in report_text
     assert f"Unmatched ({combo_b} only)" in report_text
 
@@ -278,3 +306,30 @@ def test_analyze_step2_partner_failure_does_not_drop_the_successful_combo(
     listening_text = (overlap_dir / "needs_listening_check.md").read_text()
     assert f"| {hit_utc} | {run} | {combo_a} | hit |" in listening_text
     assert combo_b not in listening_text  # never successfully analyzed -- no row at all
+
+
+def test_analyze_step2_malformed_pair_combo_exits_2_before_any_io(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """A `--pairs` combo without a known scorer suffix must be rejected UP FRONT
+    (argparse usage error, exit 2, message naming the bad combo) BEFORE the overlap
+    directory is even created -- not crash with a raw `ValueError` traceback midway
+    through the pair loop, potentially after earlier pairs already wrote reports
+    (Task 7 review finding 1)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    results_root = tmp_path / "results"
+
+    import analyze_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        analyze_step2.main([
+            "--results-root", str(results_root),
+            "--runs", "test-day",
+            "--pairs", "notavalidcombo:alsoNotValid",
+        ])
+
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "notavalidcombo" in err
+    assert not (results_root / "step2" / "overlap").exists()

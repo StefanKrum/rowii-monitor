@@ -132,7 +132,11 @@ def match_by_time(a: pd.DataFrame, b: pd.DataFrame, tol_s: float = 5.0) -> pd.Da
     matching, not a nearest-neighbour assignment that could reuse a candidate on
     both sides). Because pairs are visited in ascending `|dt|` order, the first
     excess-tolerance pair encountered means every remaining pair also exceeds
-    `tol_s`, so the scan stops there.
+    `tol_s`, so the scan stops there. An EXACT `|dt|` tie between competing pairs
+    is itself deterministic: the sort is stable (`np.argsort(..., kind="stable")`)
+    over the row-major `(a-row, b-row)` pair enumeration, so among tied pairs the
+    one with the smaller `a` row index -- then the smaller `b` row index -- is
+    accepted first, every run.
 
     Args:
         a: Candidate set A, at least columns `t_utc_ns` (int64), `label`,
