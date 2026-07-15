@@ -22,8 +22,8 @@ from rowii.anomaly.sweep import (
     SweepConfig,
     SweepResult,
     _assert_three_way_disjoint,
-    _scores_and_candidates,
     run_sweep,
+    scores_and_candidates,
 )
 from rowii.pipeline import PreparedRun
 from rowii.signals.windows import WindowGrid
@@ -116,7 +116,7 @@ def test_injected_outliers_dominate_candidates_and_far_holds_on_non_injected() -
     # calibration, which is a legitimate split outcome but not what this test needs.
     # Also deliberately NOT seed=0: at seed=0 every injected window already happens to
     # rank in the top 10 even with the WRONG tie-break (ascending window index instead
-    # of descending score, see `_scores_and_candidates`), so it would not catch a
+    # of descending score, see `scores_and_candidates`), so it would not catch a
     # regression of that fix; seed=8 has four non-injected windows exactly tied with
     # the injected ones at the achievable-minimum p-value, and only ranks correctly
     # with the score-descending tie-break -- see task report for the mutation-testing
@@ -173,14 +173,14 @@ def test_candidate_p_value_ties_are_broken_by_descending_score_hand_computed() -
     p-values collapse to the SAME achievable minimum for every score that exceeds the
     whole calibration set (`p_values` module docstring), so ties at that minimum are
     common, not a corner case, whenever more than a couple of windows are genuinely
-    extreme. `_scores_and_candidates` must rank ties by descending raw score (more
+    extreme. `scores_and_candidates` must rank ties by descending raw score (more
     extreme first), not by window index."""
     windows = np.array([10, 20, 30, 40])
     scores = np.array([5.0, 1.0, 3.0, 100.0])
     p_vals = np.array([0.02, 0.02, 0.02, 0.02])  # all four tied
     alarms = np.array([True, True, True, True])
 
-    _score_rows, candidate_rows = _scores_and_candidates(
+    _score_rows, candidate_rows = scores_and_candidates(
         label=0, windows=windows, scores=scores, p_vals=p_vals, alarms=alarms, top_k=2
     )
 
@@ -693,7 +693,7 @@ def test_empty_scoring_side_row_has_zero_n_scored_and_nan_far() -> None:
 # ---------------------------------------------------------------------------
 # Bonus: label passes min_ref on the fit-part but has zero conformal-part windows
 # (defensive edge case beyond the dispatch's 8 numbered items -- see `sweep.py`'s
-# `_no_conformal_data_row` docstring)
+# `far_row_no_conformal_data` docstring)
 # ---------------------------------------------------------------------------
 
 
