@@ -575,7 +575,7 @@ def _cross_day_sweep(
             `prepared_a.valid_mask` unchanged).
         prepared_b: Day B's `PreparedRun` (scoring target).
         valid_b: Day B's effective valid mask, same convention as `valid_a`.
-        scorer_name: `"knn"` or `"mahalanobis"`.
+        scorer_name: Any scorer name `_make_scorer` accepts.
         alpha: Nominal false-alarm rate.
         top_k: Candidate register size.
 
@@ -703,7 +703,7 @@ def _cross_day_per_state_sweep(
         rowii_cfg: Project configuration -- `rowii_cfg.detect` parameterizes day A's
             `FittedDetector.fit` (named to avoid shadowing `sweep_cfg`, the per-sweep
             `SweepConfig` built below).
-        scorer_name: `"knn"` or `"mahalanobis"`.
+        scorer_name: Any scorer name `_make_scorer` accepts.
         alpha: Nominal false-alarm rate.
         top_k: Candidate register size.
 
