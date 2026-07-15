@@ -195,7 +195,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rowii.anomaly.conformal import ConformalThreshold, calibrate, p_values  # noqa: E402
+from rowii.anomaly.conformal import (  # noqa: E402
+    ConformalThreshold,
+    calibrate,
+    loo_p_values,
+    p_values,
+)
 from rowii.anomaly.fusion import (  # noqa: E402
     fisher_statistic,
     split_branch_columns,
@@ -215,6 +220,7 @@ from rowii.anomaly.sweep import (  # noqa: E402
     FarRow,
     SweepConfig,
     SweepResult,
+    _assert_three_way_disjoint,
     far_row_aggregate,
     far_row_empty_scoring,
     far_row_excluded,
@@ -1493,13 +1499,16 @@ def _score_fusion_rows_for_label(
     conformal_features = prepared.features[label_conformal]
     conformal_scores_a = scorer_a.score(conformal_features[:, audio_idx])
     conformal_scores_v = scorer_v.score(conformal_features[:, vib_idx])
-    # Self-referential (each conformal-side window's p-value against the FULL
-    # conformal-side pool, itself included) -- gives the conformal-side combined
-    # statistic the same shape/role as any other calibration-score array `calibrate`
-    # expects (verified: tests/test_fusion.py's guarantee-restored test exercises
-    # this exact construction against the exact Beta band).
-    p_a_conformal = p_values(conformal_scores_a, conformal_scores_a)
-    p_v_conformal = p_values(conformal_scores_v, conformal_scores_v)
+    # LEAVE-ONE-OUT, not p_values(x, x) (review fix, 2026-07-15): the calibration
+    # side's p-values must be computed on the same footing as the scoring side's
+    # (each window's p-value against a reference EXCLUDING that window), else the
+    # combined statistic is not one fixed transform applied to both sides and its
+    # calibration/scoring exchangeability breaks -- the self-referential form was
+    # measured anti-conservative up to mean FAR ~0.10 at alpha=0.05 (see
+    # `rowii.anomaly.conformal.loo_p_values`' docstring for the full derivation and
+    # `tests/test_fusion.py`'s multi-regime validity test + its mutant check).
+    p_a_conformal = loo_p_values(conformal_scores_a)
+    p_v_conformal = loo_p_values(conformal_scores_v)
 
     label_scoring = scoring_windows[labels[scoring_windows] == label]
     n_scored = int(label_scoring.shape[0])
@@ -1586,6 +1595,11 @@ def _run_score_fusion_view(
     fit_windows = nested_split.calibration_windows
     conformal_windows = nested_split.scoring_windows
 
+    # Same defensive re-check `run_sweep` makes on its own identically-constructed
+    # split (`rowii.anomaly.sweep._assert_three_way_disjoint`'s docstring: trust but
+    # verify, the kNN self-scoring hazard).
+    _assert_three_way_disjoint(fit_windows, conformal_windows, scoring_windows)
+
     all_windows = np.concatenate([calibration_windows, scoring_windows])
     all_labels = sorted(np.unique(labels[all_windows]).tolist())
 
@@ -1607,13 +1621,22 @@ _SCORE_FUSION_NOTES = """# Score-level fusion notes
 branches' own conformal p-values into one statistic per window, then RE-CALIBRATE that
 combined statistic with the same split-conformal machinery every other Step-2 view
 uses (`rowii.anomaly.conformal.calibrate`, held out on the conformal-side windows).
-Because the combination is used only as a deterministic score transform -- never
-compared against the classical Fisher/Tippett null distributions, which assume the two
-branches are independent -- the resulting alarm rule's distribution-free FAR guarantee
-holds regardless of how the audio and vibration branches are statistically dependent
-(see `rowii.anomaly.fusion`'s module docstring for the full argument, and
-`tests/test_fusion.py`'s guarantee-restored test for the empirical check against
-correlated synthetic branches).
+The combination is used only as a deterministic score transform -- never compared
+against the classical Fisher/Tippett null distributions, which assume the two branches
+are independent. For the re-calibration itself to be valid, the calibration-side
+branch p-values are LEAVE-ONE-OUT (`rowii.anomaly.conformal.loo_p_values`: each
+calibration window evaluated against a reference excluding that window, the same
+footing a scoring window gets); a naive self-referential construction breaks
+calibration/scoring exchangeability of the combined statistic and was measured
+anti-conservative (mean realized FAR up to ~0.10 at alpha=0.05, n=39, anti-correlated
+branches -- review finding, 2026-07-15). With LOO calibration p-values,
+exchangeability is restored up to a one-unit p-granularity difference (LOO minimum
+p-value 1/n vs scoring-side 1/(n+1)) whose direction is conservative; validated
+empirically at mean realized FAR <= alpha (within Monte-Carlo precision, one-sided
+alpha + 3*SE bound) across independent, shared-latent-correlated (rho ~ 0.78),
+anti-correlated, and identical branches at n in {39, 159} (`tests/test_fusion.py`'s
+multi-regime validity test; additionally at n=319 in the review-time simulation). See
+`rowii.anomaly.fusion`'s module docstring for the full argument.
 
 ## Honesty notes
 

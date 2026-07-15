@@ -25,31 +25,50 @@ branches' evidence at the very end, as one scalar per window:
   than picking one.
 
 **Statistical note -- why RE-CALIBRATION, not the classical Fisher/Tippett null,
-restores the FAR guarantee.** Classically, Fisher's method compares `-2(ln p_a + ln
-p_v)` against a `chi2(4)` reference distribution, and Tippett's rule rejects when
-`min(p_a, p_v)` falls below a critical value derived from `1 - (1 - min(p_a, p_v))^2`
-(the CDF of the minimum of two independent Uniform(0, 1) variables) -- BOTH classical
-references assume `p_a` and `p_v` are INDEPENDENT Uniform(0, 1) under the null, an
-assumption two branches of the SAME
-physical machine (audio and vibration sensors on one running turbine) have no reason
-to satisfy. Neither `fisher_statistic` nor `tippett_statistic` below ever compares
-against those classical reference distributions: each is used only as a DETERMINISTIC
-score transform, `(p_a, p_v) -> one real number`, and the actual decision threshold
-comes from applying `rowii.anomaly.conformal.calibrate` to that combined statistic's
-own values on a held-out conformal-side sample -- exactly the same split-conformal
+restores the FAR guarantee (and what "same footing" requires).** Classically, Fisher's
+method compares `-2(ln p_a + ln p_v)` against a `chi2(4)` reference distribution, and
+Tippett's rule rejects when `min(p_a, p_v)` falls below a critical value derived from
+`1 - (1 - min(p_a, p_v))^2` (the CDF of the minimum of two independent Uniform(0, 1)
+variables) -- BOTH classical references assume `p_a` and `p_v` are INDEPENDENT
+Uniform(0, 1) under the null, an assumption two branches of the SAME physical machine
+(audio and vibration sensors on one running turbine) have no reason to satisfy.
+Neither `fisher_statistic` nor `tippett_statistic` below ever compares against those
+classical reference distributions: each is used only as a DETERMINISTIC score
+transform, `(p_a, p_v) -> one real number`, and the actual decision threshold comes
+from applying `rowii.anomaly.conformal.calibrate` to that combined statistic's own
+values on a held-out conformal-side sample -- exactly the same split-conformal
 machinery every other scorer in this package is thresholded with. Split conformal's
 finite-sample FAR guarantee (`conformal.py`'s own module docstring) only ever requires
 the CALIBRATION and SCORING draws of the combined statistic to be exchangeable; it
 never required, and never assumed, anything about how `p_a` and `p_v` relate to EACH
-OTHER. Since the combined statistic is one fixed function applied identically to every
-window regardless of branch dependence, the calibration-side and scoring-side combined
-values stay exchangeable whenever the underlying windows are, and the FAR guarantee is
-therefore restored by construction -- REGARDLESS of branch dependence, including the
-positively-correlated case (shared physical cause driving both audio and vibration)
-`tests/test_fusion.py`'s guarantee-restored test constructs on purpose (verified there
-against the exact `Beta` band `rowii.anomaly.scarcity.beta_band` reports; verified
-separately, scratch script not committed, that the classical NON-recalibrated chi2(4)
-threshold's realized FAR drifts well above alpha at that same correlation).
+OTHER.
+
+That exchangeability requirement has one sharp precondition, though: the combined
+statistic must be ONE fixed transform applied on the same footing to calibration-side
+and scoring-side windows alike -- concretely, each window's branch p-value must be
+evaluated against a reference that EXCLUDES that window. Scoring-side p-values satisfy
+this automatically (`p_values(scoring, calibration)`, the reference never contains a
+scoring window); the calibration side must use `rowii.anomaly.conformal.loo_p_values`
+(leave-one-out: each calibration window against the other n-1). The superficially
+natural `p_values(calibration, calibration)` puts each point in its OWN reference
+(its self-match caps its p-value at no less than `2/(n+1)`, while a scoring window
+can reach `1/(n+1)`) -- for a SINGLE branch that mismatch is a monotone transform of
+the raw score and cancels exactly, but combined across two branches it breaks the
+calibration/scoring exchangeability of the combined statistic and is
+ANTI-CONSERVATIVE: measured mean realized FAR up to ~0.10 at alpha=0.05, n=39,
+anti-correlated branches (review finding 2026-07-15, 6000-rep simulation, scratch
+scripts not committed). With LOO calibration p-values the footing matches up to a
+one-unit p-granularity residual (LOO reference has n-1 points vs the scoring side's
+n, so the smallest LOO p is `1/n` vs `1/(n+1)`); that residual can only inflate the
+calibration-side statistic, i.e. raise the threshold, i.e. suppress alarms
+(conservative direction -- `loo_p_values`' docstring carries the pointwise
+derivation). Validated empirically: mean realized FAR at or below alpha within
+Monte-Carlo precision across independent, shared-latent-correlated (rho ~ 0.78),
+anti-correlated, and identical branches at n in {39, 159} (`tests/test_fusion.py`'s
+multi-regime validity test, one-sided `alpha + 3*SE` bound; additionally at n=319 in
+the review-time simulation). Verified separately (scratch, not committed) that the
+classical NON-recalibrated chi2(4) threshold's realized FAR drifts well above alpha
+under branch correlation -- the re-calibration is load-bearing, not decorative.
 
 No clipping: `rowii.anomaly.conformal.p_values` guarantees its output lies in `(0, 1]`
 (see that function's own docstring for the exact formula establishing the bound), so

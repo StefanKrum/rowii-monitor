@@ -5,12 +5,13 @@ specs/2026-07-15-step2-package3-baselines-design.md` D5, plan `docs/superpowers/
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 
-from rowii.anomaly.conformal import calibrate, p_values
+from rowii.anomaly.conformal import calibrate, loo_p_values, p_values
 from rowii.anomaly.fusion import fisher_statistic, split_branch_columns, tippett_statistic
-from rowii.anomaly.scarcity import beta_band
 
 # ---------------------------------------------------------------------------
 # split_branch_columns
@@ -58,6 +59,16 @@ class TestSplitBranchColumns:
         ]
         with pytest.raises(ValueError, match="RAWSomethingElse__9"):
             split_branch_columns(names)
+
+    def test_raises_on_prefix_matching_both_mic_and_vib(self) -> None:
+        # A stream prefix containing BOTH markers cannot be assigned to exactly one
+        # branch -- must raise (naming the offender), never silently pick a side.
+        names = [
+            "RAWGeneratorMic__0::ch0", "RAWGeneratorVib__2::ch1", "RAWMicVibCombo__9::ch2",
+        ]
+        with pytest.raises(ValueError, match="RAWMicVibCombo__9") as exc_info:
+            split_branch_columns(names)
+        assert "both" in str(exc_info.value)
 
     def test_raises_names_every_offender_not_just_the_first(self) -> None:
         names = ["missing_sep_1", "RAWGeneratorMic__0::ch0", "missing_sep_2"]
@@ -128,83 +139,127 @@ class TestTippettStatistic:
 
 
 # ---------------------------------------------------------------------------
-# Guarantee-restored test (centerpiece, orchestrator resolution 5)
+# FAR-validity test across dependence regimes (centerpiece, orchestrator
+# resolution 5; sharpened + multi-regime per the 2026-07-15 review fix)
 # ---------------------------------------------------------------------------
 
+_VALIDITY_REGIMES = ("independent", "corr", "anti", "identical")
+"""Branch-dependence regimes the validity test sweeps: independent draws, shared
+latent + per-branch noise (rho ~ 0.78), near-deterministic anti-correlation, and
+exactly identical branches -- the point being that split-conformal re-calibration of
+the combined statistic must hold the FAR at every one of these, since the guarantee
+never assumed anything about how the two branches relate to each other."""
 
-class TestGuaranteeRestoredUnderCorrelatedBranches:
-    """Fisher-combined, RE-CALIBRATED statistic controls the realized FAR even though
-    the two branches are CORRELATED (shared latent cause + independent per-branch
-    noise) -- the classical Fisher chi2(4) null assumes independent p-values and would
-    NOT be valid here (verified separately, scratch script, not committed: the naive
-    chi2(4) threshold's mean FAR drifts to ~0.08-0.09 at this correlation, nearly
-    double the nominal alpha=0.05). Neither `fisher_statistic` nor the orchestration
-    ever compares against that classical null, though -- the combined statistic is
-    just a deterministic score transform, RE-CALIBRATED via `rowii.anomaly.conformal.
-    calibrate` on its own held-out conformal-side values, so the standard split-
-    conformal guarantee applies to it exactly like it would to any other exchangeable
-    score (`rowii.anomaly.fusion` module docstring's "Statistical note")."""
 
-    def test_mean_realized_far_within_exact_beta_band(self) -> None:
-        n_calibration = 159
-        n_scoring = 1000
-        n_reps = 50
+def _draw_branch_pair(
+    rng: np.random.Generator, n: int, regime: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """`(audio, vib)` raw-score arrays of length *n* under one `_VALIDITY_REGIMES`
+    dependence regime (all rows exchangeable within each branch -- a pure null)."""
+    if regime == "independent":
+        return rng.normal(size=n), rng.normal(size=n)
+    if regime == "corr":
+        latent = rng.normal(0.0, 1.0, n)
+        return latent + rng.normal(0.0, 0.5, n), latent + rng.normal(0.0, 0.5, n)
+    if regime == "anti":
+        a = rng.normal(size=n)
+        return a, -a + rng.normal(0.0, 0.01, n)
+    if regime == "identical":
+        a = rng.normal(size=n)
+        return a, a.copy()
+    raise ValueError(f"unknown regime {regime!r}")
+
+
+def _fisher_far_over_reps(
+    regime: str,
+    n_calibration: int,
+    calibration_p_fn: Callable[[np.ndarray], np.ndarray],
+    n_scoring: int = 1000,
+    n_reps: int = 500,
+    alpha: float = 0.05,
+) -> tuple[float, float]:
+    """`(mean realized FAR, standard error of that mean)` of the full score-fusion
+    Fisher path over *n_reps* seeded repetitions: per rep, draw one regime's branch
+    pair, compute CALIBRATION-side branch p-values via *calibration_p_fn* and
+    SCORING-side branch p-values via `p_values(scoring, calibration)`, Fisher-combine
+    both sides, `calibrate` the calibration-side combined statistic, and count
+    scoring-side alarms.
+
+    *calibration_p_fn* is the calibration-side construction under test: the fixed
+    code passes `loo_p_values` (leave-one-out, each point evaluated against the other
+    n-1 -- the same footing a scoring point gets); the review-time mutant check
+    passes the DEFECTIVE self-referential `lambda s: p_values(s, s)` (each point in
+    its own reference) to demonstrate this test catches exactly that defect (scratch
+    run, see the task-5 fix report: the mutant fails 6 of the 8 (regime, n) cases,
+    worst mean FAR ~0.10 at alpha=0.05 for anti-correlated branches at n=39).
+    """
+    fars = np.empty(n_reps)
+    for rep in range(n_reps):
+        rng = np.random.default_rng(rep)
+        audio, vib = _draw_branch_pair(rng, n_calibration + n_scoring, regime)
+        audio_conf, audio_score = audio[:n_calibration], audio[n_calibration:]
+        vib_conf, vib_score = vib[:n_calibration], vib[n_calibration:]
+
+        p_a_conf = calibration_p_fn(audio_conf)
+        p_v_conf = calibration_p_fn(vib_conf)
+        p_a_score = p_values(audio_score, audio_conf)
+        p_v_score = p_values(vib_score, vib_conf)
+
+        threshold = calibrate(fisher_statistic(p_a_conf, p_v_conf), alpha)
+        combined_score = fisher_statistic(p_a_score, p_v_score)
+        fars[rep] = float(np.mean(combined_score > threshold.threshold))
+    return float(fars.mean()), float(fars.std(ddof=1) / np.sqrt(n_reps))
+
+
+class TestFarValidityAcrossDependenceRegimes:
+    """Centerpiece: the Fisher-combined, LOO-calibrated, RE-CALIBRATED statistic
+    holds the mean realized FAR at (or conservatively below) alpha under EVERY
+    branch-dependence regime -- the classical Fisher chi2(4) null assumes independent
+    p-values and is invalid here, but the orchestration never uses it: the combined
+    statistic is thresholded by `rowii.anomaly.conformal.calibrate` on held-out
+    conformal-side values instead (`rowii.anomaly.fusion` module docstring's
+    "Statistical note").
+
+    The calibration side MUST use `loo_p_values` (leave-one-out), not
+    `p_values(conf, conf)`: the self-referential form puts each calibration point in
+    its own reference (its p-value can never go below 2/(n+1), while a scoring point
+    reaches 1/(n+1)), so the combined statistic is NOT one fixed transform applied to
+    both sides and its calibration/scoring exchangeability breaks -- measured
+    anti-conservative up to mean FAR ~0.10 at alpha=0.05 (n=39, anti-correlated;
+    review finding 2026-07-15, reproduced in this test's own mutant check, task-5 fix
+    report). The LOO form leaves a one-unit granularity residual (LOO min p = 1/n vs
+    scoring 1/(n+1)) whose direction is conservative -- hence the one-sided sharp
+    bound below.
+    """
+
+    @pytest.mark.parametrize("n_calibration", [39, 159])
+    @pytest.mark.parametrize("regime", list(_VALIDITY_REGIMES))
+    def test_mean_realized_far_at_most_alpha_plus_three_se(
+        self, regime: str, n_calibration: int
+    ) -> None:
         alpha = 0.05
-
-        fars = np.empty(n_reps)
-        sample_corr: float | None = None
-        for rep in range(n_reps):
-            rng = np.random.default_rng(rep)
-            n_total = n_calibration + n_scoring
-            latent = rng.normal(0.0, 1.0, n_total)
-            # Shared latent + independent per-branch noise -> audio and vibration
-            # scores are substantially correlated (~0.78, verified in the scratch
-            # check), not independent -- this is the whole point of the test.
-            audio_scores = latent + rng.normal(0.0, 0.5, n_total)
-            vib_scores = latent + rng.normal(0.0, 0.5, n_total)
-            if rep == 0:
-                sample_corr = float(np.corrcoef(audio_scores, vib_scores)[0, 1])
-
-            audio_conf = audio_scores[:n_calibration]
-            audio_score_side = audio_scores[n_calibration:]
-            vib_conf = vib_scores[:n_calibration]
-            vib_score_side = vib_scores[n_calibration:]
-
-            # Conformal-side p-values are computed against the SAME conformal set
-            # (self-referential, n+1 denominator) so the combined conformal-side
-            # statistic has the same shape/role as any other calibration-score
-            # array `calibrate` expects; scoring-side p-values use the identical
-            # fixed conformal set as their reference -- exactly the orchestration's
-            # own "branch p-values for conformal-side AND scoring-side windows"
-            # (orchestrator resolution 4).
-            p_a_conf = p_values(audio_conf, audio_conf)
-            p_v_conf = p_values(vib_conf, vib_conf)
-            p_a_score = p_values(audio_score_side, audio_conf)
-            p_v_score = p_values(vib_score_side, vib_conf)
-
-            combined_conf = fisher_statistic(p_a_conf, p_v_conf)
-            combined_score = fisher_statistic(p_a_score, p_v_score)
-
-            threshold = calibrate(combined_conf, alpha)
-            fars[rep] = float(np.mean(combined_score > threshold.threshold))
-
-        # Sanity: the branches really are correlated -- otherwise this test would
-        # not distinguish "guarantee restored despite dependence" from "guarantee
-        # holds trivially because the branches happen to be independent".
-        assert sample_corr is not None and sample_corr > 0.5, sample_corr
-
-        band = beta_band(n_calibration, alpha)
-        assert band is not None  # n_calibration=159 >> 1/alpha - 1 = 19
-        lo, hi = band
-        mean_far = float(fars.mean())
-        # Scoring-side binomial slack: n_scoring=1000 keeps each repetition's own
-        # sampling noise small (std ~ sqrt(alpha*(1-alpha)/n_scoring) ~= 0.0069),
-        # shrunk further by averaging n_reps=50 of them -- a fixed 0.02 margin on
-        # each side comfortably covers that residual noise (mirrors
-        # tests/test_scarcity.py's own loose validity-test tolerance style, e.g.
-        # `test_mean_far_tracks_alpha_above_floor`'s hand-picked `[0.02, 0.09]`).
-        slack = 0.02
-        assert (lo - slack) <= mean_far <= (hi + slack), (
-            f"mean realized FAR {mean_far:.4f} outside beta_band[{lo:.4f}, {hi:.4f}] "
-            f"(+/- {slack} slack)"
+        mean_far, se = _fisher_far_over_reps(
+            regime, n_calibration, loo_p_values, alpha=alpha
         )
+        # Rep-count sanity: 500 reps must push the Monte-Carlo SE of the mean to
+        # ~0.002 or below (per-rep FAR sd is ~0.035 at n=39, ~0.019 at n=159, both
+        # Beta-threshold-noise dominated), else the bound below would be too loose
+        # to call sharp.
+        assert se <= 2.0e-3, f"{regime}/n={n_calibration}: SE {se:.5f} too large"
+        assert mean_far <= alpha + 3.0 * se, (
+            f"{regime}/n={n_calibration}: mean realized FAR {mean_far:.4f} exceeds "
+            f"alpha + 3*SE = {alpha + 3.0 * se:.4f} -- FAR validity broken"
+        )
+
+    def test_regime_constructions_have_the_claimed_dependence(self) -> None:
+        """Premise check: the regimes really produce the branch dependence their
+        names claim -- otherwise a passing validity sweep would not distinguish
+        "guarantee holds despite dependence" from "the branches were accidentally
+        independent everywhere"."""
+        rng = np.random.default_rng(0)
+        a, v = _draw_branch_pair(rng, 5000, "corr")
+        assert float(np.corrcoef(a, v)[0, 1]) > 0.5
+        a, v = _draw_branch_pair(np.random.default_rng(0), 5000, "anti")
+        assert float(np.corrcoef(a, v)[0, 1]) < -0.9
+        a, v = _draw_branch_pair(np.random.default_rng(0), 5000, "identical")
+        np.testing.assert_array_equal(a, v)
