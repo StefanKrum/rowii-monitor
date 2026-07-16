@@ -301,6 +301,12 @@ def test_degenerate_single_state_round_trip(tmp_path: Path) -> None:
     )
     assert np.array_equal(full_labels[prepared.valid_mask], result.frame_labels)
 
+    # T1-review LOW: the degenerate snapshot's SCORING half must work too --
+    # one threshold, and a scorer that produces finite scores for that label.
+    assert set(loaded.thresholds) == {single_id}
+    scores = scorer_for_label(loaded, single_id).score(features_valid)
+    assert np.isfinite(scores).all()
+
 
 # ---------------------------------------------------------------------------
 # 7. Split parity with run_sweep (amendment A1.6): hand-run of the same splits
@@ -433,3 +439,83 @@ def test_scorer_for_label_unknown_label_raises() -> None:
     with pytest.raises(KeyError) as exc_info:
         scorer_for_label(snapshot, missing)
     assert str(missing) in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# 8. T1-review hardening: covars pin, partial valid_mask, truncated archive
+# ---------------------------------------------------------------------------
+
+
+def test_covars_diagonals_round_trip_bit_exact(tmp_path: Path) -> None:
+    """Pins Amendment A1.1 directly: the reconstructed GaussianHMM consumes the
+    STORED (k, F) diagonals bit-exactly (the T1 review showed the well-separated
+    fixture's Viterbi labels cannot pin this -- covariance never decides a label
+    there -- so the array itself is asserted, plus disk-mutation propagation)."""
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    path = tmp_path / "snap.npz"
+    save_snapshot(path, snapshot)
+
+    loaded = load_snapshot(path)
+    model = to_detector(loaded).smoother.last_model_
+    assert model is not None
+    assert snapshot.hmm_covars_diag is not None
+    np.testing.assert_array_equal(model._covars_, snapshot.hmm_covars_diag)
+
+    # Mutate the stored diagonals on disk: the reconstructed model must carry
+    # the MUTATED values (proves the stored array is consumed, not recomputed).
+    with np.load(path, allow_pickle=False) as data:
+        members = {name: data[name] for name in data.files}
+    members["hmm_covars_diag"] = members["hmm_covars_diag"] * 100.0 + 3.0
+    with open(path, "wb") as f:
+        np.savez(f, allow_pickle=False, **members)
+    mutated = to_detector(load_snapshot(path)).smoother.last_model_
+    assert mutated is not None
+    np.testing.assert_array_equal(mutated._covars_, members["hmm_covars_diag"])
+
+
+def test_partial_valid_mask_fit_and_round_trip(tmp_path: Path) -> None:
+    """The operationally-critical path the original fixtures skipped (T1 review
+    MEDIUM): invalid windows must come back as -1 in full_labels, never enter
+    any reference matrix, and round-trip apply parity must hold on valid rows."""
+    base = _two_state_prepared()
+    valid_mask = base.valid_mask.copy()
+    invalid_rows = np.array([3, 17, 44, 90, 121, 160, 201])
+    valid_mask[invalid_rows] = False
+    features = base.features.copy()
+    features[invalid_rows] = np.nan
+    prepared = dataclasses.replace(base, features=features, valid_mask=valid_mask)
+
+    snapshot, full_labels = _fit(prepared)
+
+    assert np.all(full_labels[invalid_rows] == -1)
+    assert np.all(full_labels[valid_mask] != -1)
+    for ref in snapshot.references.values():
+        assert np.isfinite(ref).all()
+
+    path = tmp_path / "snap.npz"
+    save_snapshot(path, snapshot)
+    loaded = load_snapshot(path)
+    features_valid = prepared.features[valid_mask]
+    grid = _valid_grid(prepared)
+    orig = to_detector(snapshot).apply(features_valid, grid).frame_labels
+    round_tripped = to_detector(loaded).apply(features_valid, grid).frame_labels
+    np.testing.assert_array_equal(orig, round_tripped)
+    np.testing.assert_array_equal(full_labels[valid_mask], orig)
+
+
+def test_truncated_archive_raises_snapshot_level_value_error(tmp_path: Path) -> None:
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    path = tmp_path / "snap.npz"
+    save_snapshot(path, snapshot)
+
+    with np.load(path, allow_pickle=False) as data:
+        members = {name: data[name] for name in data.files}
+    dropped = next(name for name in members if name.startswith("ref__"))
+    del members[dropped]
+    with open(path, "wb") as f:
+        np.savez(f, allow_pickle=False, **members)
+
+    with pytest.raises(ValueError, match="corrupt or truncated"):
+        load_snapshot(path)

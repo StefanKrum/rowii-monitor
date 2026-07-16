@@ -654,8 +654,18 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             )
 
         labels = [int(label) for label in meta["labels"]]
-        references = {label: data[f"ref__{label}"] for label in labels}
-        calibration_scores = {label: data[f"cal__{label}"] for label in labels}
+        try:
+            references = {label: data[f"ref__{label}"] for label in labels}
+            calibration_scores = {label: data[f"cal__{label}"] for label in labels}
+        except KeyError as exc:
+            # A truncated/partially-transferred npz (a realistic plant failure
+            # mode) must fail with the same snapshot-level error type as every
+            # other format problem, not a bare numpy KeyError (final T1-review
+            # polish item).
+            raise ValueError(
+                f"snapshot {path} is corrupt or truncated: member {exc} named by "
+                "the meta label list is missing from the archive"
+            ) from exc
         thresholds = {
             label: ConformalThreshold(
                 threshold=float(meta["thresholds"][str(label)]["threshold"]),
