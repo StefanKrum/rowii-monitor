@@ -3,8 +3,10 @@ Task 3's `iter_windows_paderborn_dir`): turn a directory tree of WAV (MIMII)
 or MAT (CWRU/Paderborn) files into the same 1-s, 8 kHz,
 per-window-standardized float32 windows `TfcFeaturizer` (`rowii.tfc.wrapper`)
 and the pretraining script (`scripts/pretrain_tfc.py`, Task 3) both expect --
-these three functions are the ONLY place this project reads a raw public
-corpus off disk.
+these three functions -- together with the LABELED clip iterator appended at
+the bottom of this module (`iter_labeled_clips_wav_dir`, package-6 pillar-3
+spec D4) -- are the ONLY place this project reads a raw public corpus off
+disk.
 
 All three iterators share one windowing/resample/standardize pipeline
 (private helpers below): cut each clip into NON-OVERLAPPING `window_s`-second
@@ -27,11 +29,18 @@ ONE clip's windows are held in memory at a time -- important for MIMII's
 real corpus size (tens of thousands of ~10-s clips per machine type), never
 assumed by any test here (all tests use a handful of synthetic fixture
 files, per this package's downloads-never-run-in-tests rule).
+
+The fourth, LABELED iterator (`iter_labeled_clips_wav_dir` + `LabeledClip`,
+appended for package-6 pillar-3's detection-scarcity harness) shares the same
+private-helper pipeline and lazy-generator discipline but yields per-CLIP
+window bundles WITH labels and machine ids instead of loose unlabeled
+windows -- see its own section at the bottom of this module.
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -435,3 +444,146 @@ def iter_windows_paderborn_dir(
         standardized = _standardize(resampled)
         for row in standardized:
             yield row.astype(np.float32)
+
+
+# --- Labeled clips (package-6 pillar-3, spec D4 + amendment A1.5) -------------
+
+
+@dataclass(frozen=True)
+class LabeledClip:
+    """One labeled public-corpus clip, its windows kept together (never
+    flattened across clips -- pillar-3's clip-level split protocol depends
+    on that grouping): `windows` is `(W, S)` float32, `W` whole
+    `window_s`-second windows each PER-WINDOW standardized (see
+    `iter_labeled_clips_wav_dir`'s Yields section for the removed-level-cue
+    caveat); `label` is 0 (normal) / 1 (abnormal), read off the clip's
+    parent directory name; `machine_id` is the `id_*` directory name (e.g.
+    `"id_00"` -- MIMII's machine instance, the domain unit the scarcity
+    harness splits by); `path` is the clip's own on-disk path, kept as a
+    plain `str` (not `Path`) so clip bundles feed cache fingerprints and CSV
+    rows without conversion."""
+
+    windows: np.ndarray
+    label: int
+    machine_id: str
+    path: str
+
+
+def iter_labeled_clips_wav_dir(
+    root: Path,
+    *,
+    window_s: float = 1.0,
+    target_hz: int = 16_000,
+    limit_clips_per_class: int | None = None,
+    machine_ids: Sequence[str] | None = None,
+) -> Iterator[LabeledClip]:
+    """Walk *root* for MIMII-style `**/id_*/{normal,abnormal}/*.wav` clips
+    (fully sorted, deterministic) and yield one `LabeledClip` PER CLIP --
+    the labeled counterpart to `iter_windows_wav_dir`, written for
+    pillar-3's detection-scarcity harness (`scripts/scarcity_detection.py`),
+    whose clip-level split protocol ("windows of one clip stay together",
+    the leakage rule) is exactly why this iterator yields per-clip window
+    bundles instead of loose windows. Reuses the module's shared pipeline
+    verbatim (`_wav_to_mono_float` -> `_cut_windows` -> `_resample_windows`
+    -> `_standardize`); the unlabeled iterator's `exclude_substring` filter
+    is replaced by explicit `{normal,abnormal}` directory walking -- BOTH
+    classes are read here, with the label taken from the path.
+
+    Layout contract: every directory anywhere under *root* whose name
+    matches `id_*` is a machine directory (`machine_id` = that directory's
+    name); inside it, an optional `normal/` and an optional `abnormal/`
+    subdirectory hold `*.wav` clips (label 0 and 1 respectively). A machine
+    directory with neither subdirectory simply contributes nothing, and an
+    overall empty yield is the caller's problem -- EXCEPT that a WARNING is
+    logged when zero `id_*` directories matched at all (or `machine_ids`
+    filtered every one away), the one failure mode that otherwise looks
+    exactly like an empty corpus. Clips are yielded in fully sorted
+    POSIX-path order (machine directories sorted, then class directories --
+    `abnormal` sorts before `normal` -- then filenames), so two runs over
+    the same tree produce identical clips in identical order.
+
+    Args:
+        root: Directory to walk recursively for `id_*` machine directories.
+        window_s: See `iter_windows_wav_dir` -- non-overlapping windows cut
+            at each clip's native rate; a trailing partial window is dropped
+            (never zero-padded). A kept clip shorter than one whole window
+            yields NO `LabeledClip` (there are zero windows to bundle) but
+            still counts as kept for the cap below. NOTE: the shared
+            `_resample_windows` helper emits exactly `target_hz` samples per
+            window under its `window_s == 1.0` assumption (its docstring);
+            this project only ever uses the 1.0 default, as does the
+            scarcity harness.
+        target_hz: Output sample rate. Default 16_000 -- BEATs-native
+            (amendment A1.5): every downstream featurizer resamples from its
+            `rate_hz` argument anyway, so 16 kHz simply spares the BEATs
+            path a quality-losing down-then-up hop; the unlabeled iterators'
+            8 kHz default was a TF-C pretraining choice
+            (`rowii.tfc.wrapper._TFC_SAMPLE_RATE_HZ`), not a corpus
+            property.
+        limit_clips_per_class: If given, keep at most this many clips PER
+            (machine_id, class) pair, taken in sorted filename order. The
+            kept/total counts are ALWAYS logged -- one INFO line per
+            (machine_id, class) -- so a cap can never silently truncate the
+            corpus (spec D4's no-silent-truncation rule; a handful of lines
+            per corpus, not the per-file flood `iter_windows_wav_dir`'s
+            single summary line guards against).
+        machine_ids: If given, only machine directories whose NAME is in
+            this sequence are walked (e.g. `["id_00"]`); names that match
+            no directory are simply unmatched. `None` keeps every machine
+            directory found.
+
+    Yields:
+        `LabeledClip` per clip, `windows` shaped `(W, target_hz)` float32
+        and PER-WINDOW standardized (mean 0 / std 1, `_standardize`) -- the
+        package-4 corpus convention, kept here deliberately (amendment
+        A1.5): it removes clip-gain confounds (recording-level loudness
+        differences between clips) but ALSO erases absolute-level anomaly
+        cues, so a fault that manifests ONLY as an overall loudness change
+        is invisible by construction -- the conservative choice, restated in
+        every scarcity-harness output.
+    """
+    all_machine_dirs = sorted(
+        (d for d in root.rglob("id_*") if d.is_dir()), key=lambda p: p.as_posix()
+    )
+    if machine_ids is not None:
+        wanted = set(machine_ids)
+        selected = [d for d in all_machine_dirs if d.name in wanted]
+    else:
+        selected = all_machine_dirs
+    if not selected:
+        logger.warning(
+            "iter_labeled_clips_wav_dir: no id_* machine directories matched under %s "
+            "(machine_ids=%r) -- nothing to yield",
+            root, machine_ids,
+        )
+        return
+
+    for machine_dir in selected:
+        for class_name, label in (("abnormal", 1), ("normal", 0)):
+            class_dir = machine_dir / class_name
+            if not class_dir.is_dir():
+                continue
+            paths = sorted(class_dir.glob("*.wav"), key=lambda p: p.as_posix())
+            total = len(paths)
+            if limit_clips_per_class is not None:
+                paths = paths[:limit_clips_per_class]
+            logger.info(
+                "iter_labeled_clips_wav_dir: %s/%s -- kept %d of %d clip(s) "
+                "(limit_clips_per_class=%r)",
+                machine_dir.name, class_name, len(paths), total, limit_clips_per_class,
+            )
+            for path in paths:
+                native_hz, raw = wavfile.read(path)
+                mono = _wav_to_mono_float(raw)
+                windows = _cut_windows(mono, native_hz, window_s)
+                if windows.shape[0] == 0:
+                    continue
+
+                resampled = _resample_windows(windows, float(native_hz), target_hz)
+                standardized = _standardize(resampled)
+                yield LabeledClip(
+                    windows=standardized.astype(np.float32),
+                    label=label,
+                    machine_id=machine_dir.name,
+                    path=str(path),
+                )
