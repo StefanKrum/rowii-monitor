@@ -48,9 +48,11 @@ from rowii.io.dataset import (  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _STUDENT_INSTALL_HINT,
     _TFC_INSTALL_HINT,
     PreparedRun,
     _is_beats_variant,
+    _is_student_variant,
     _is_tfc_variant,
     prepare_run,
 )
@@ -87,6 +89,7 @@ _VARIANT_CHOICES: tuple[str, ...] = (
     "audio",
     "audio-beats",
     "audio-tfc",
+    "audio-student",
     "vibration",
     "vibration-tfc",
     "fusion",
@@ -100,6 +103,7 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     "audio",
     "audio-beats",
     "audio-tfc",
+    "audio-student",
     "vibration",
     "vibration-tfc",
     "fusion",
@@ -112,7 +116,10 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     # per fit even on trivial synthetic data). audio-tfc/vibration-tfc draw the
     # OPPOSITE conclusion (package-4 spec D4): TF-C's 256-d embedding IS
     # well-conditioned for the GMM, so both ARE expanded here, same treatment as
-    # the handcrafted/beats variants.
+    # the handcrafted/beats variants. audio-student (package-5 spec D5) likewise
+    # IS expanded: its 768-d embedding is exactly BEATs' own well-conditioned
+    # geometry (the student is distilled to regress it), so it is a genuine
+    # state-detection candidate, not merely a Step-2 autoencoder input like logmel.
 )
 _CONCRETE_CLUSTERERS: tuple[ClustererName, ...] = ("kmeans", "gmm")
 _K_SWEEP_VALUES: tuple[int, ...] = (3, 4, 5, 6)
@@ -491,6 +498,8 @@ def run_combo(
         _import_beats_or_exit()
     if _is_tfc_variant(variant):
         _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
 
     prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     result = _detect_and_report(
@@ -522,6 +531,8 @@ def run_combo_k_sweep(
         _import_beats_or_exit()
     if _is_tfc_variant(variant):
         _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
 
     prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     rows = []
@@ -567,6 +578,27 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
         checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
     if checkpoint is None:
         raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
+
+
+def _import_student_or_exit(cfg: Config) -> None:
+    """Mirrors `_import_tfc_or_exit`'s pattern (package-5 spec D5), simplified:
+    the distilled student has only ONE checkpoint (unlike TF-C's two
+    independent branches), so there is no variant-based checkpoint selection --
+    torch missing (checked first) -> SystemExit naming the shared `[beats]`
+    extra; else `cfg.student_checkpoint` missing -> SystemExit naming
+    ROWII_STUDENT_CHECKPOINT.
+    """
+    try:
+        import rowii.adapt.student  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"Student featurizer not available ({exc}); {_STUDENT_INSTALL_HINT}"
+        ) from exc
+    if cfg.student_checkpoint is None:
+        raise SystemExit(
+            f"variant 'audio-student' needs ROWII_STUDENT_CHECKPOINT set; "
+            f"{_STUDENT_INSTALL_HINT}"
+        )
 
 
 # ---------------------------------------------------------------------------

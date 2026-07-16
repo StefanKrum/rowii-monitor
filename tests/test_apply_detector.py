@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from rowii.config import load_config
 from rowii.io.dataset import RecordingIndex, Run
@@ -264,3 +265,57 @@ def test_unknown_run_name_exits_2_and_lists_available_runs(tmp_path, monkeypatch
     assert "totally-bogus-run" in err
     assert _FIT_RUN in err
     assert _APPLY_RUN in err
+
+
+# ---------------------------------------------------------------------------
+# audio-student variant (Step-2 package-5 spec D5): choices inclusion +
+# _import_student_or_exit guard messages.
+# ---------------------------------------------------------------------------
+
+
+def test_audio_student_is_a_variant_choice() -> None:
+    import apply_detector
+
+    assert "audio-student" in apply_detector._VARIANT_CHOICES
+
+    args = apply_detector.build_parser().parse_args(
+        ["--fit-run", "a", "--apply-run", "b", "--variant", "audio-student"]
+    )
+    assert args.variant == "audio-student"
+
+
+def test_student_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    import builtins
+
+    import apply_detector
+
+    from rowii.config import Config
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.adapt.student" or name.startswith("rowii.adapt.student."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        apply_detector._import_student_or_exit(cfg)
+
+    assert 'pip install -e ".[beats]"' in str(exc_info.value)
+
+
+def test_student_variant_without_checkpoint_raises_systemexit_naming_env_var() -> None:
+    import apply_detector
+
+    from rowii.config import Config
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))  # student_checkpoint None
+
+    with pytest.raises(SystemExit) as exc_info:
+        apply_detector._import_student_or_exit(cfg)
+
+    assert "ROWII_STUDENT_CHECKPOINT" in str(exc_info.value)

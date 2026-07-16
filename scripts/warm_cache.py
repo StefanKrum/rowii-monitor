@@ -47,9 +47,11 @@ from rowii.config import Config, load_config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, discover  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _STUDENT_INSTALL_HINT,
     _TFC_INSTALL_HINT,
     _cache_npz_path,
     _is_beats_variant,
+    _is_student_variant,
     _is_tfc_variant,
     prepare_run,
 )
@@ -69,7 +71,7 @@ _DEFAULT_RUNS: tuple[str, ...] = (
 _DEFAULT_VARIANTS: tuple[str, ...] = ("audio-beats", "fusion-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
-    "audio-tfc", "vibration-tfc", "logmel",
+    "audio-tfc", "vibration-tfc", "audio-student", "logmel",
 )
 
 
@@ -131,6 +133,27 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
         raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
 
 
+def _import_student_or_exit(cfg: Config) -> None:
+    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    distilled student has only ONE checkpoint (unlike TF-C's two independent
+    branches), so there is no variant-based checkpoint selection -- torch
+    missing (checked first) -> SystemExit naming the shared `[beats]` extra;
+    else `cfg.student_checkpoint` missing -> SystemExit naming
+    ROWII_STUDENT_CHECKPOINT. Duplicated (not imported) -- see
+    `_import_beats_or_exit`'s docstring."""
+    try:
+        import rowii.adapt.student  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"Student featurizer not available ({exc}); {_STUDENT_INSTALL_HINT}"
+        ) from exc
+    if cfg.student_checkpoint is None:
+        raise SystemExit(
+            f"variant 'audio-student' needs ROWII_STUDENT_CHECKPOINT set; "
+            f"{_STUDENT_INSTALL_HINT}"
+        )
+
+
 def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
     """Names in *names* with no matching discovered run, de-duplicated, in the
     order first seen -- empty if every name resolves."""
@@ -169,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         _import_beats_or_exit()
     for variant in sorted({v for _, v in combos if _is_tfc_variant(v)}):
         _import_tfc_or_exit(cfg, variant)
+    if any(_is_student_variant(variant) for _, variant in combos):
+        _import_student_or_exit(cfg)
 
     n_failed = 0
     for run_name, variant in combos:

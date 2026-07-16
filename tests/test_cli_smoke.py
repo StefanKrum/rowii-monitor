@@ -229,6 +229,11 @@ def test_run_step1_variant_all_excludes_logmel_but_includes_tfc_variants() -> No
     assert "vibration-tfc" in run_step1._CONCRETE_VARIANTS
     assert "audio-tfc" in run_step1._VARIANT_CHOICES
     assert "vibration-tfc" in run_step1._VARIANT_CHOICES
+    # Package-5 spec D5: audio-student is a genuine state-detection candidate
+    # (768-d, the same well-conditioned geometry as audio-beats -- the student
+    # is distilled to regress it) -- ALSO expanded by --variant all.
+    assert "audio-student" in run_step1._CONCRETE_VARIANTS
+    assert "audio-student" in run_step1._VARIANT_CHOICES
 
     args = run_step1.build_parser().parse_args(["--variant", "logmel"])
     assert args.variant == "logmel"
@@ -237,6 +242,7 @@ def test_run_step1_variant_all_excludes_logmel_but_includes_tfc_variants() -> No
     assert "logmel" not in expanded
     assert "audio-tfc" in expanded
     assert "vibration-tfc" in expanded
+    assert "audio-student" in expanded
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +331,50 @@ def test_tfc_variant_without_checkpoint_raises_systemexit_naming_env_var(
         else "ROWII_TFC_AUDIO_CHECKPOINT"
     )
     assert other_env_var not in message
+
+
+def test_student_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    """Mirrors the tfc-extra guard test above, for the distilled student's own
+    `_import_student_or_exit` (package-5 spec D5): torch missing -> SystemExit
+    naming the shared `[beats]` extra, checked BEFORE the checkpoint."""
+    import builtins
+
+    import run_step1
+
+    from rowii.config import Config
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.adapt.student" or name.startswith("rowii.adapt.student."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step1._import_student_or_exit(cfg)
+
+    message = str(exc_info.value)
+    assert 'pip install -e ".[beats]"' in message
+
+
+def test_student_variant_without_checkpoint_raises_systemexit_naming_env_var() -> None:
+    """Even with torch importable, audio-student with NO checkpoint configured
+    must exit naming ROWII_STUDENT_CHECKPOINT (package-5 spec D5)."""
+    import run_step1
+
+    from rowii.config import Config
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))  # student_checkpoint None
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step1._import_student_or_exit(cfg)
+
+    message = str(exc_info.value)
+    assert "ROWII_STUDENT_CHECKPOINT" in message
 
 
 # ---------------------------------------------------------------------------

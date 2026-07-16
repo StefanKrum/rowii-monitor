@@ -257,9 +257,11 @@ from rowii.io.dataset import (  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _STUDENT_INSTALL_HINT,
     _TFC_INSTALL_HINT,
     PreparedRun,
     _is_beats_variant,
+    _is_student_variant,
     _is_tfc_variant,
     prepare_run,
 )
@@ -281,7 +283,7 @@ ScorerName = Literal[
 _PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
-    "audio-tfc", "vibration-tfc", "logmel",
+    "audio-tfc", "vibration-tfc", "audio-student", "logmel",
 )
 _SCORER_CHOICES: tuple[str, ...] = (
     "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae", "all",
@@ -494,6 +496,28 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
         checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
     if checkpoint is None:
         raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
+
+
+def _import_student_or_exit(cfg: Config) -> None:
+    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    distilled student has only ONE checkpoint (unlike TF-C's two independent
+    branches), so there is no variant-based checkpoint selection -- torch
+    missing (checked first) -> SystemExit naming the shared `[beats]` extra;
+    else `cfg.student_checkpoint` missing -> SystemExit naming
+    ROWII_STUDENT_CHECKPOINT. Duplicated (not imported) across every script
+    that can reach `audio-student` -- see `scripts/warm_cache.py`'s own "a
+    script must not depend on a sibling script's internals" rule."""
+    try:
+        import rowii.adapt.student  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"Student featurizer not available ({exc}); {_STUDENT_INSTALL_HINT}"
+        ) from exc
+    if cfg.student_checkpoint is None:
+        raise SystemExit(
+            f"variant 'audio-student' needs ROWII_STUDENT_CHECKPOINT set; "
+            f"{_STUDENT_INSTALL_HINT}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2439,6 +2463,8 @@ def _run_within_day_for_run(
         _import_beats_or_exit()
     if _is_tfc_variant(variant):
         _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
 
     try:
         prepared = prepare_run(run, variant, cfg, use_cache=use_cache)
@@ -2563,6 +2589,8 @@ def _run_cross_day(
         _import_beats_or_exit()
     if _is_tfc_variant(variant):
         _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
 
     days = _scada_covered_runs(index)
     if run_names is not None:
@@ -2673,6 +2701,8 @@ def _run_cross_day_per_state(
         _import_beats_or_exit()
     if _is_tfc_variant(variant):
         _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
 
     days = _scada_covered_runs(index)
     if run_names is not None:

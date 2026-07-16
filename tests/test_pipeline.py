@@ -592,6 +592,121 @@ def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
     )
 
 
+# ---------------------------------------------------------------------------
+# 8. audio-student variant (Step-2 package-5 spec D5): stream mapping (mirrors
+# audio-beats), featurizer dispatch (with cfg.student_checkpoint injected),
+# feature-column assembly, and cache-fingerprint checkpoint scoping isolated to
+# ITS OWN variant only.
+# ---------------------------------------------------------------------------
+
+
+def test_streams_for_variant_audio_student_mirrors_audio_beats() -> None:
+    assert pipeline._streams_for_variant("audio-student") == pipeline._streams_for_variant(
+        "audio-beats"
+    )
+
+
+def test_is_student_variant() -> None:
+    assert pipeline._is_student_variant("audio-student") is True
+    assert pipeline._is_student_variant("audio-beats") is False
+    assert pipeline._is_student_variant("audio-tfc") is False
+    assert pipeline._is_student_variant("audio") is False
+
+
+def test_featurizer_for_stream_dispatches_audio_student_with_cfg_checkpoint(tmp_path) -> None:
+    from rowii.adapt.student import StudentFeaturizer
+
+    student_ckpt = tmp_path / "student.pt"
+    cfg = Config(
+        data_root=tmp_path, results_root=tmp_path / "results",
+        student_checkpoint=student_ckpt,
+    )
+
+    feat = pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio-student", cfg)
+    assert isinstance(feat, StudentFeaturizer)
+    assert feat._checkpoint == student_ckpt
+
+    feat_turbine = pipeline._featurizer_for_stream("RAWTurbineMic__1", "audio-student", cfg)
+    assert isinstance(feat_turbine, StudentFeaturizer)
+    assert feat_turbine._checkpoint == student_ckpt
+
+    # Pre-existing dispatch stays untouched: ordinary "audio" still gets a plain
+    # AudioFeaturizer, "audio-beats"/"audio-tfc" are unaffected by this branch.
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio", cfg), AudioFeaturizer
+    )
+
+
+def test_featurizer_for_stream_audio_student_never_raises_with_no_checkpoint(tmp_path) -> None:
+    # Mirrors TfcFeaturizer's own deferred-load story: construction never raises
+    # even when cfg.student_checkpoint is None -- only transform() would.
+    from rowii.adapt.student import StudentFeaturizer
+
+    cfg = Config(data_root=tmp_path, results_root=tmp_path / "results")
+    feat = pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio-student", cfg)
+    assert isinstance(feat, StudentFeaturizer)
+    assert feat._checkpoint is None
+
+
+def test_assemble_variant_features_audio_student_hstacks_like_audio_beats() -> None:
+    audio_result = pipeline._StreamFeatureResult(
+        features=np.array([[1.0, 2.0]]), coverage=np.array([1.0])
+    )
+    stream_results = {
+        "RAWGeneratorMic__0": audio_result,
+        "RAWTurbineMic__1": audio_result,
+    }
+
+    np.testing.assert_array_equal(
+        pipeline.assemble_variant_features("audio-student", stream_results),
+        pipeline.assemble_variant_features("audio-beats", stream_results),
+    )
+
+
+def test_cache_fingerprint_student_checkpoint_change_is_scoped_to_its_own_variant(
+    tmp_path,
+) -> None:
+    """Variant-SCOPED checkpoint sensitivity (mirrors the tfc test above, package-5
+    spec D5): a fingerprint must depend on `cfg.student_checkpoint` ONLY for
+    `"audio-student"` -- changing it must leave `"audio-beats"` (the teacher
+    variant `audio-student` distills FROM), `"audio-tfc"`, and every other
+    variant's fingerprint untouched (the reverse would force a needless
+    recompute of, say, the hours-expensive `audio-beats` cache whenever a user
+    merely points `ROWII_STUDENT_CHECKPOINT` at a freshly distilled checkpoint).
+    This test pins RELATIVE behavior only; the absolute payload SHAPE (backward
+    compatibility with pre-package-5 caches) is pinned by the golden test below.
+    """
+    run = _single_file_audio_run(tmp_path / "burst")
+    student_a = tmp_path / "student_a.pt"
+    student_b = tmp_path / "student_b.pt"
+    baseline = Config(
+        data_root=tmp_path, results_root=tmp_path, student_checkpoint=student_a,
+    )
+    changed = Config(
+        data_root=tmp_path, results_root=tmp_path, student_checkpoint=student_b,
+    )
+
+    def fp(variant: str, cfg: Config) -> str:
+        return pipeline._cache_fingerprint(run, variant, cfg)
+
+    assert fp("audio-student", baseline) != fp("audio-student", changed), (
+        "audio-student's fingerprint must change when ROWII_STUDENT_CHECKPOINT changes"
+    )
+    assert fp("audio-beats", baseline) == fp("audio-beats", changed), (
+        "audio-beats' fingerprint (the teacher cache audio-student distills FROM) must "
+        "not depend on student_checkpoint"
+    )
+    assert fp("audio-tfc", baseline) == fp("audio-tfc", changed), (
+        "audio-tfc's fingerprint must not depend on student_checkpoint"
+    )
+    assert fp("audio", baseline) == fp("audio", changed), (
+        "a non-student variant's fingerprint must not depend on student_checkpoint"
+    )
+    assert fp("fusion", baseline) == fp("fusion", changed), (
+        "fusion's fingerprint must not depend on student_checkpoint either"
+    )
+
+
 def _golden_fingerprint_run(burst_dir: Path) -> Run:
     """Fixed-name, fixed-size dummy files for the golden-fingerprint test below --
     `_cache_fingerprint` only ever `stat()`s a burst file (name + byte size enter the
@@ -629,11 +744,19 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
     The hex literals below are sha256 digests computed ONCE from the intended
     payloads, independently of `_cache_fingerprint` itself:
 
-    - non-tfc variants: the PRE-package-4 payload format, byte-identical
-      (`variant=` / `window_s=` / `beats_checkpoint=` / sorted `name:size` file
-      entries -- NO tfc lines at all);
-    - tfc variants: that same format + exactly ONE extra line (its own variant's
-      checkpoint) inserted after `beats_checkpoint=`.
+    - non-tfc/non-student variants: the PRE-package-4 payload format,
+      byte-identical (`variant=` / `window_s=` / `beats_checkpoint=` / sorted
+      `name:size` file entries -- NO extra checkpoint lines at all);
+    - tfc variants: that same format + exactly ONE extra line (its own
+      variant's checkpoint) inserted after `beats_checkpoint=`;
+    - `audio-student` (package-5 spec D5, Task 4, added in THIS commit): same
+      format + exactly ONE extra `student_checkpoint=` line, same insertion
+      point. No cache-migration is needed for this addition -- `audio-student`
+      is a BRAND NEW variant with no pre-existing `results/cache/*.npz`
+      entries to orphan, and every OTHER variant's own golden pin above stays
+      byte-for-byte UNCHANGED (proven by their tests staying green, untouched,
+      in this same commit) -- the banked lesson applied consciously, not
+      skipped.
 
     Any future change to `_cache_fingerprint`'s payload must consciously update
     these constants AND deliberately migrate/invalidate the on-disk caches -- a
@@ -649,6 +772,10 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
         tfc_audio_checkpoint=Path("/fixed/tfc_audio.pt"),
         tfc_vib_checkpoint=Path("/fixed/tfc_vib.pt"),
     )
+    cfg_student = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        student_checkpoint=Path("/fixed/student.pt"),
+    )
 
     assert pipeline._cache_fingerprint(run, "audio", cfg_plain) == (
         "1f9c34523161e0dcd58de6ab3f55da9f321d35304588d786aab8ba06a49513c0"
@@ -659,6 +786,9 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
     assert pipeline._cache_fingerprint(run, "vibration-tfc", cfg_tfc) == (
         "ccf33c4e323dc21795b30833a623408a93222661fdc148290faf257d6c014b49"
     ), "vibration-tfc payload shape changed (expected: pre-T4 format + ONE tfc_vib line)"
+    assert pipeline._cache_fingerprint(run, "audio-student", cfg_student) == (
+        "b7d7e12e85c315ddb1bd486fe25d217e81cc08a425105eca58306d62aaedc578"
+    ), "audio-student payload shape changed (expected: pre-T4 format + ONE student_checkpoint line)"
 
 
 def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:

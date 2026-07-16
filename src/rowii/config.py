@@ -103,6 +103,14 @@ class Config:
     """Frozen TF-C vibration-branch checkpoint (`ROWII_TFC_VIB_CHECKPOINT`) -- see
     `tfc_audio_checkpoint`'s docstring. Consumed by `rowii.pipeline.
     _featurizer_for_stream`'s `"vibration-tfc"` dispatch."""
+    student_checkpoint: Path | None = None
+    """Distilled BEATs-student checkpoint (`ROWII_STUDENT_CHECKPOINT`, Step-2
+    package-5 spec D5) -- backs the `"audio-student"` variant's `rowii.adapt.
+    student.StudentFeaturizer`. Unlike TF-C's two independent branch
+    checkpoints, the student has only ONE (audio-only, distilled from BEATs'
+    own audio-branch teacher embeddings via `scripts/distill_beats.py`) --
+    mirrors `beats_checkpoint`'s own single-field env-driven pattern. Consumed
+    by `rowii.pipeline._featurizer_for_stream`'s `"audio-student"` dispatch."""
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -114,10 +122,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     ckpt = merged.get("ROWII_BEATS_CHECKPOINT") or None
     tfc_audio_ckpt = merged.get("ROWII_TFC_AUDIO_CHECKPOINT") or None
     tfc_vib_ckpt = merged.get("ROWII_TFC_VIB_CHECKPOINT") or None
+    student_ckpt = merged.get("ROWII_STUDENT_CHECKPOINT") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
         beats_checkpoint=Path(ckpt).expanduser() if ckpt else None,
         tfc_audio_checkpoint=Path(tfc_audio_ckpt).expanduser() if tfc_audio_ckpt else None,
         tfc_vib_checkpoint=Path(tfc_vib_ckpt).expanduser() if tfc_vib_ckpt else None,
+        student_checkpoint=Path(student_ckpt).expanduser() if student_ckpt else None,
     )

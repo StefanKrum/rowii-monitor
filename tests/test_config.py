@@ -11,6 +11,7 @@ def test_defaults_without_env() -> None:
     assert cfg.beats_checkpoint is None
     assert cfg.tfc_audio_checkpoint is None
     assert cfg.tfc_vib_checkpoint is None
+    assert cfg.student_checkpoint is None
 
 
 def test_gt_rules_speed_nominal_rpm_matches_measured_plateau() -> None:
@@ -54,3 +55,12 @@ def test_tfc_checkpoint_env_overrides_independently() -> None:
     )
     assert cfg.tfc_audio_checkpoint == Path("/tmp/tfc_audio.pt")
     assert cfg.tfc_vib_checkpoint is None
+
+
+def test_student_checkpoint_env_override() -> None:
+    # Mirrors beats_checkpoint's own single-field env-driven pattern (package-5
+    # spec D5): unlike TF-C, the student has only ONE (audio-only) checkpoint.
+    cfg = load_config(
+        env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_STUDENT_CHECKPOINT": "/tmp/student.pt"}
+    )
+    assert cfg.student_checkpoint == Path("/tmp/student.pt")
