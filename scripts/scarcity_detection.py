@@ -190,16 +190,24 @@ def _build_featurizer(rep: _Representation) -> _Featurizer:
 # ---------------------------------------------------------------------------
 
 
-def _clip_manifest(root: Path, machine_id: str, cap: int | None) -> list[tuple[str, int]]:
-    """`(relpath, size_bytes)` for every clip `iter_labeled_clips_wav_dir` will
-    read for *machine_id* under *cap*, in the iterator's own yield order (sorted
-    machine dirs, `abnormal` before `normal`, sorted filenames, per-directory
-    cap) -- computed from `stat()` alone so a cache HIT never touches audio."""
+def _clip_manifest(
+    root: Path, machine_id: str, cap: int | None
+) -> list[tuple[str, int, int]]:
+    """`(relpath, size_bytes, mtime_ns)` for every clip
+    `iter_labeled_clips_wav_dir` will read for *machine_id* under *cap*, in the
+    iterator's own yield order (sorted machine dirs, `abnormal` before `normal`,
+    sorted filenames, per-directory cap) -- computed from `stat()` alone so a
+    cache HIT never touches audio. `mtime_ns` (P6 combined review): size alone
+    misses a same-size in-place edit; size+mtime catches every realistic
+    mutation short of a deliberate timestamp forgery. NOTE: a same-NAME id_*
+    directory under two different parents would merge here exactly like in the
+    iterator -- the iterator refuses that layout loudly at extraction time
+    (`ValueError`), so no cache for a merged layout can ever be built."""
     machine_dirs = sorted(
         (d for d in root.rglob("id_*") if d.is_dir() and d.name == machine_id),
         key=lambda p: p.as_posix(),
     )
-    entries: list[tuple[str, int]] = []
+    entries: list[tuple[str, int, int]] = []
     for machine_dir in machine_dirs:
         for class_name in ("abnormal", "normal"):
             class_dir = machine_dir / class_name
@@ -208,14 +216,20 @@ def _clip_manifest(root: Path, machine_id: str, cap: int | None) -> list[tuple[s
             paths = sorted(class_dir.glob("*.wav"), key=lambda p: p.as_posix())
             if cap is not None:
                 paths = paths[:cap]
-            entries.extend((p.relative_to(root).as_posix(), p.stat().st_size) for p in paths)
+            entries.extend(
+                (p.relative_to(root).as_posix(), p.stat().st_size, p.stat().st_mtime_ns)
+                for p in paths
+            )
     return entries
 
 
-def _fingerprint(rep: _Representation, cap: int | None, manifest: list[tuple[str, int]]) -> str:
+def _fingerprint(
+    rep: _Representation, cap: int | None, manifest: list[tuple[str, int, int]]
+) -> str:
     """sha256 over everything that determines the extracted features (spec D4):
     representation + its resolved checkpoint paths, the fixed window geometry,
-    the cap, and the sorted clip relpaths + byte sizes."""
+    the cap, and the sorted clip relpaths + byte sizes + mtimes (the mtime
+    line is the P6-review hardening -- see `_clip_manifest`)."""
     payload = json.dumps(
         {
             "representation": rep.name,
@@ -459,6 +473,7 @@ def _write_md(
     alpha: float,
     machine_ids: list[str],
     skipped: list[tuple[str, str]],
+    hard_skips: list[tuple[str, str]] | None = None,
 ) -> None:
     lines = [
         "# Detection-performance scarcity curve (MIMII proxy)",
@@ -503,6 +518,14 @@ def _write_md(
     ]
     if skipped:
         lines += [f"- `{name}`: {reason}" for name, reason in skipped]
+    if hard_skips:
+        lines += [
+            "",
+            "## HARD-SKIPPED machines (no clips on disk, no usable cache -- "
+            "this run is INCOMPLETE and exited 1)",
+            "",
+        ]
+        lines += [f"- `{rep}` x `{machine}`" for rep, machine in hard_skips]
     else:
         lines.append("- (none)")
     lines += [
@@ -609,6 +632,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _machine_cells(
+    rep_name: str,
+    machine_id: str,
+    features: np.ndarray,
+    clip_bounds: np.ndarray,
+    labels: np.ndarray,
+    fractions: list[float],
+    seeds: list[int],
+    alpha: float,
+) -> list[dict[str, object]]:
+    """Every (fraction, seed) cell row for one (representation, machine):
+    the shared TEST/POOL split plus the per-cell evaluation -- factored out so
+    the cache-fallback path (P6 review: corpus files gone, cache served
+    UNVALIDATED) runs EXACTLY the code the normal path runs. Returns [] with a
+    warning for a pathological zero-clip cache."""
+    if labels.size == 0:
+        logger.warning(
+            "scarcity_detection: %s x %s -- zero clips yielded (all shorter than "
+            "one window?); skipping machine", rep_name, machine_id,
+        )
+        return []
+    normal_idx = np.flatnonzero(labels == 0)
+    abnormal_idx = np.flatnonzero(labels == 1)
+    test_normal, pool = _test_pool_split(normal_idx)
+    return [
+        _evaluate_cell(
+            rep_name, machine_id, features, clip_bounds,
+            test_normal, pool, abnormal_idx, fraction, seed, alpha,
+        )
+        for fraction in fractions
+        for seed in seeds
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = build_parser()
@@ -693,15 +750,39 @@ def main(argv: list[str] | None = None) -> int:
     cap: int | None = args.limit_clips_per_class
 
     rows: list[dict[str, object]] = []
+    hard_skips: list[tuple[str, str]] = []
     for rep in active:
         featurizer: _Featurizer | None = None
         for machine_id in machine_ids:
             manifest = _clip_manifest(args.root, machine_id, cap)
             if not manifest:
+                # P6-review MEDIUM: the corpus files being gone must never
+                # silently shrink the CSV under a clean exit. If a cache for
+                # this (rep, machine) exists, serve it -- its fingerprint is
+                # unvalidatable without the files, said loudly; otherwise the
+                # machine is a HARD skip that fails the run at the end.
+                candidates = sorted(cache_dir.glob(f"{rep.name}__{machine_id}__*.npz"))
+                if len(candidates) == 1:
+                    features, clip_bounds, labels = _load_cache(candidates[0])
+                    logger.warning(
+                        "scarcity_detection: %s x %s -- no clips on disk, serving "
+                        "cache %s UNVALIDATED (source files absent, the stat-based "
+                        "fingerprint cannot be re-checked)",
+                        rep.name, machine_id, candidates[0].name,
+                    )
+                    rows.extend(
+                        _machine_cells(
+                            rep.name, machine_id, features, clip_bounds, labels,
+                            fractions, seeds, args.alpha,
+                        )
+                    )
+                    continue
                 logger.warning(
-                    "scarcity_detection: %s x %s -- no clips on disk; skipping machine",
-                    rep.name, machine_id,
+                    "scarcity_detection: %s x %s -- no clips on disk and %d cache "
+                    "candidate(s); HARD SKIP (run will exit 1)",
+                    rep.name, machine_id, len(candidates),
                 )
+                hard_skips.append((rep.name, machine_id))
                 continue
             fingerprint = _fingerprint(rep, cap, manifest)
             cache_path = cache_dir / f"{rep.name}__{machine_id}__{fingerprint[:16]}.npz"
@@ -725,22 +806,12 @@ def main(argv: list[str] | None = None) -> int:
                     "scarcity_detection: cache MISS -- extracted %d window(s) over %d "
                     "clip(s) -> %s", features.shape[0], labels.size, cache_path.name,
                 )
-            if labels.size == 0:
-                logger.warning(
-                    "scarcity_detection: %s x %s -- zero clips yielded (all shorter than "
-                    "one window?); skipping machine", rep.name, machine_id,
+            rows.extend(
+                _machine_cells(
+                    rep.name, machine_id, features, clip_bounds, labels,
+                    fractions, seeds, args.alpha,
                 )
-                continue
-
-            normal_idx = np.flatnonzero(labels == 0)
-            abnormal_idx = np.flatnonzero(labels == 1)
-            test_normal, pool = _test_pool_split(normal_idx)
-            for fraction in fractions:
-                for seed in seeds:
-                    rows.append(_evaluate_cell(
-                        rep.name, machine_id, features, clip_bounds,
-                        test_normal, pool, abnormal_idx, fraction, seed, args.alpha,
-                    ))
+            )
 
     _write_csv(out / "scarcity_detection.csv", rows)
     table = pd.DataFrame(rows, columns=list(_CSV_COLUMNS))
@@ -751,12 +822,21 @@ def main(argv: list[str] | None = None) -> int:
     _write_md(
         out / "scarcity_detection.md", rows,
         corpus=str(args.root), cap=cap, alpha=args.alpha,
-        machine_ids=machine_ids, skipped=skipped,
+        machine_ids=machine_ids, skipped=skipped, hard_skips=hard_skips,
     )
     logger.info(
         "scarcity_detection: wrote %s (%d rows), scarcity_curve.png, "
         "scarcity_detection.md", out / "scarcity_detection.csv", len(rows),
     )
+    if hard_skips:
+        # P6-review MEDIUM: a partial table must never look like a clean run.
+        print(
+            "scarcity_detection: INCOMPLETE -- "
+            + ", ".join(f"{r} x {m}" for r, m in hard_skips)
+            + " had neither clips on disk nor a usable cache",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

@@ -50,9 +50,11 @@ from scipy.signal import resample_poly
 logger = logging.getLogger(__name__)
 
 
-def _resample_windows(windows: np.ndarray, native_hz: float, target_hz: int) -> np.ndarray:
-    """`(B, S)` float64 windows at *native_hz* -> `(B, target_hz)` float64,
-    via `scipy.signal.resample_poly`.
+def _resample_windows(
+    windows: np.ndarray, native_hz: float, target_hz: int, *, window_s: float = 1.0
+) -> np.ndarray:
+    """`(B, S)` float64 windows at *native_hz* -> `(B, round(target_hz * window_s))`
+    float64, via `scipy.signal.resample_poly`.
 
     Reimplements (rather than imports) `rowii.tfc.wrapper._resample_to_8khz`'s
     pad/trim-before-and-after-resample approach: that function is hardcoded
@@ -61,14 +63,24 @@ def _resample_windows(windows: np.ndarray, native_hz: float, target_hz: int) -> 
     caller-configurable parameter, so its body cannot be called directly --
     see that function's own docstring for the detailed rationale behind both
     pad/trim steps (BEFORE: makes `resample_poly`'s output-length formula
-    collapse to exactly `target_hz` for an input of exactly
-    `round(native_hz)` samples; AFTER: defensively guarantees that length
-    regardless of FIR edge effects or a fractional *native_hz*). Every
-    window in *windows* is assumed to already be exactly one `window_s`-long
-    clip at *native_hz* (`_cut_windows`'s contract), so all rows share the
-    same `target_in`/pad math.
+    collapse to exactly the expected output length for an input of exactly
+    `round(native_hz * window_s)` samples; AFTER: defensively guarantees
+    that length regardless of FIR edge effects or a fractional
+    *native_hz*). Every window in *windows* is assumed to be exactly one
+    `window_s`-long clip at *native_hz* (`_cut_windows`'s contract), so all
+    rows share the same `target_in`/pad math.
+
+    *window_s* (P6 combined review, HIGH-latent finding): this helper used to
+    hardcode the 1-second assumption (`target_in = round(native_hz)`), which
+    SILENTLY zero-padded every window a caller cut at `window_s != 1.0` up to
+    a full second before resampling -- half-zero windows whose standardization
+    was then computed over the signal+padding mixture. The window duration is
+    now an explicit parameter; at the 1.0 default the arithmetic reduces to
+    the old behavior exactly (`target_in = round(native_hz)`, output length
+    `target_hz`), so every existing caller/cache is byte-identical.
     """
-    target_in = int(round(native_hz))
+    target_in = int(round(native_hz * window_s))
+    out_len = int(round(target_hz * window_s))
     n_samples = windows.shape[1]
     if n_samples < target_in:
         padded = np.pad(windows, ((0, 0), (0, target_in - n_samples)))
@@ -77,13 +89,17 @@ def _resample_windows(windows: np.ndarray, native_hz: float, target_hz: int) -> 
     else:
         padded = windows
 
-    resampled = resample_poly(padded, target_hz, target_in, axis=1)
+    # up/down are the RATE ratio (target_hz : rounded native rate), NOT
+    # target_hz : target_in -- the two coincide only at window_s == 1.0 (the
+    # old hardcoded case); using target_in here would silently rescale the
+    # signal's time axis for any other window duration.
+    resampled = resample_poly(padded, target_hz, int(round(native_hz)), axis=1)
 
     n_out = resampled.shape[1]
-    if n_out < target_hz:
-        resampled = np.pad(resampled, ((0, 0), (0, target_hz - n_out)))
-    elif n_out > target_hz:
-        resampled = resampled[:, :target_hz]
+    if n_out < out_len:
+        resampled = np.pad(resampled, ((0, 0), (0, out_len - n_out)))
+    elif n_out > out_len:
+        resampled = resampled[:, :out_len]
     return np.ascontiguousarray(resampled, dtype=np.float64)
 
 
@@ -194,7 +210,7 @@ def iter_windows_wav_dir(
         if windows.shape[0] == 0:
             continue
 
-        resampled = _resample_windows(windows, float(native_hz), target_hz)
+        resampled = _resample_windows(windows, float(native_hz), target_hz, window_s=window_s)
         standardized = _standardize(resampled)
         for row in standardized:
             yield row.astype(np.float32)
@@ -285,7 +301,7 @@ def iter_windows_mat_dir(
         if windows.shape[0] == 0:
             continue
 
-        resampled = _resample_windows(windows, native_hz, target_hz)
+        resampled = _resample_windows(windows, native_hz, target_hz, window_s=window_s)
         standardized = _standardize(resampled)
         for row in standardized:
             yield row.astype(np.float32)
@@ -440,7 +456,7 @@ def iter_windows_paderborn_dir(
         if windows.shape[0] == 0:
             continue
 
-        resampled = _resample_windows(windows, _PADERBORN_NATIVE_HZ, target_hz)
+        resampled = _resample_windows(windows, _PADERBORN_NATIVE_HZ, target_hz, window_s=window_s)
         standardized = _standardize(resampled)
         for row in standardized:
             yield row.astype(np.float32)
@@ -558,6 +574,28 @@ def iter_labeled_clips_wav_dir(
         )
         return
 
+    # machine_id is the BARE leaf directory name: two physically distinct
+    # machine dirs sharing an id_* name under different parents (e.g.
+    # pump/id_00 and fan/id_00) would silently merge into one machine_id --
+    # and downstream, into one scarcity cell (P6 combined review, MEDIUM).
+    # Refuse loudly instead of merging; point the caller at a machine-type
+    # subdirectory root (the documented MIMII layout).
+    by_name: dict[str, list[Path]] = {}
+    for d in selected:
+        by_name.setdefault(d.name, []).append(d)
+    collisions = {name: dirs for name, dirs in by_name.items() if len(dirs) > 1}
+    if collisions:
+        detail = "; ".join(
+            f"{name}: {', '.join(p.as_posix() for p in dirs)}"
+            for name, dirs in sorted(collisions.items())
+        )
+        raise ValueError(
+            "iter_labeled_clips_wav_dir: the same machine id names multiple "
+            f"distinct directories under {root} ({detail}) -- point root at ONE "
+            "machine-type directory (e.g. .../mimii/pump_0db) so machine ids "
+            "are unambiguous"
+        )
+
     for machine_dir in selected:
         for class_name, label in (("abnormal", 1), ("normal", 0)):
             class_dir = machine_dir / class_name
@@ -579,7 +617,9 @@ def iter_labeled_clips_wav_dir(
                 if windows.shape[0] == 0:
                     continue
 
-                resampled = _resample_windows(windows, float(native_hz), target_hz)
+                resampled = _resample_windows(
+                    windows, float(native_hz), target_hz, window_s=window_s
+                )
                 standardized = _standardize(resampled)
                 yield LabeledClip(
                     windows=standardized.astype(np.float32),

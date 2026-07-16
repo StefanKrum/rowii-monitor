@@ -296,3 +296,73 @@ class TestCliContract:
         assert set(table["machine_id"]) == {"id_00"}
 
         assert _run(root, tmp_path / "out2", {"--machine-ids": "id_99"}) == 2
+
+
+class TestReviewHardening:
+    """P6 combined-review MEDIUMs: corpus-gone behavior must be loud, and a
+    valid cache must survive source deletion."""
+
+    def test_cache_served_unvalidated_when_corpus_files_deleted(
+        self, tmp_path, caplog
+    ):
+        root, out = tmp_path / "corpus", tmp_path / "out"
+        _build_separable_tree(root)
+        assert _run(root, out) == 0
+        first_bytes = (out / "scarcity_detection.csv").read_bytes()
+
+        # Delete every wav; keep the directory skeleton (the realistic
+        # reclaim-17-GB operator move). Machines must still be discoverable,
+        # and the caches live under the SAME --out dir.
+        for wav in root.rglob("*.wav"):
+            wav.unlink()
+
+        with caplog.at_level(logging.WARNING):
+            caplog.clear()
+            assert _run(root, out) == 0
+        served = [
+            r.getMessage() for r in caplog.records if "UNVALIDATED" in r.getMessage()
+        ]
+        assert len(served) == 2  # one per machine id
+        # Same features -> same table (caches were reused, not re-extracted).
+        assert (out / "scarcity_detection.csv").read_bytes() == first_bytes
+
+    def test_missing_corpus_without_cache_exits_1_and_reports(
+        self, tmp_path, capsys, caplog
+    ):
+        root, out = tmp_path / "corpus", tmp_path / "out"
+        _build_separable_tree(root)
+        for wav in root.rglob("*.wav"):
+            wav.unlink()
+
+        with caplog.at_level(logging.WARNING):
+            exit_code = _run(root, out)
+        assert exit_code == 1
+        err = capsys.readouterr().err
+        assert "INCOMPLETE" in err
+        md = (out / "scarcity_detection.md").read_text()
+        assert "HARD-SKIPPED" in md
+
+    def test_in_place_edit_same_size_invalidates_cache(self, tmp_path, caplog):
+        """Review LOW-MEDIUM: the fingerprint now carries mtime_ns, so a
+        same-size in-place edit is a MISS (re-extraction), not a stale hit."""
+        import os
+        import time
+
+        root, out = tmp_path / "corpus", tmp_path / "out"
+        _build_separable_tree(root)
+        assert _run(root, out) == 0
+
+        wav = sorted(root.rglob("*.wav"))[0]
+        data = bytearray(wav.read_bytes())
+        data[-1] ^= 0x01  # flip one PCM byte, size unchanged
+        wav.write_bytes(bytes(data))
+        bumped = time.time() + 5
+        os.utime(wav, (bumped, bumped))
+
+        with caplog.at_level(logging.INFO):
+            caplog.clear()
+            assert _run(root, out) == 0
+        misses = [
+            r.getMessage() for r in caplog.records if "cache MISS" in r.getMessage()
+        ]
+        assert len(misses) >= 1  # the touched machine re-extracted

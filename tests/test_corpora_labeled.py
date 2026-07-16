@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import pytest
 from scipy.io.wavfile import write as write_wav
 
 from rowii.tfc.corpora import LabeledClip, iter_labeled_clips_wav_dir
@@ -162,3 +163,42 @@ class TestIterLabeledClipsWavDir:
         assert clips == []
         warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("no id_*" in m for m in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# P6 combined-review hardening: window_s != 1.0 + machine-id collisions
+# ---------------------------------------------------------------------------
+
+
+def test_half_second_windows_have_no_zero_padding_artifact(tmp_path: Path) -> None:
+    """The review's HIGH-latent finding: window_s=0.5 used to yield 16000-sample
+    windows whose second half was literal zero padding. Windows must now be
+    proportional (8000 samples at 16 kHz) with real signal throughout."""
+    root = tmp_path / "corpus"
+    d = root / "pump" / "id_00" / "normal"
+    d.mkdir(parents=True)
+    _write_noise_wav(d / "00000000.wav", duration_s=2.0, seed=3)
+
+    clips = list(iter_labeled_clips_wav_dir(root, window_s=0.5))
+    assert len(clips) == 1
+    windows = clips[0].windows
+    assert windows.shape == (4, 8000)
+    # Standardized real noise: BOTH halves of every window carry energy.
+    first = np.abs(windows[:, :4000]).mean(axis=1)
+    second = np.abs(windows[:, 4000:]).mean(axis=1)
+    assert (first > 0.1).all()
+    assert (second > 0.1).all()
+
+
+def test_colliding_machine_ids_raise_value_error(tmp_path: Path) -> None:
+    """Two distinct machine dirs sharing an id_* name under different parents
+    must refuse loudly (review MEDIUM: they used to merge silently into one
+    machine_id and, downstream, one scarcity cell)."""
+    root = tmp_path / "corpus"
+    for parent in ("pump", "fan"):
+        d = root / parent / "id_00" / "normal"
+        d.mkdir(parents=True)
+        _write_noise_wav(d / "00000000.wav", duration_s=1.0, seed=1)
+
+    with pytest.raises(ValueError, match="pump/id_00"):
+        list(iter_labeled_clips_wav_dir(root))
