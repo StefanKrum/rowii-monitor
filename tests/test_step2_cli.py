@@ -1700,6 +1700,46 @@ def test_ensemble_two_member_agreement_equals_shared_alarm_set(monkeypatch) -> N
     assert ensemble_row["n_alarms"] == len(shared)
 
 
+def test_ensemble_deciding_pair_includes_lstmae_vote(monkeypatch) -> None:
+    """(review follow-up M2, mutant-killing) `iforest` + `lstmae` share one alarm set
+    while `ocsvm` alarms a DISJOINT set -> ENSEMBLE `n_alarms` equals the shared set's
+    size exactly: LSTM-AE's vote must be the DECIDING one in a 2-of-3 majority. Kills
+    the `ocsvm & iforest`-only mutant (`ensemble_alarms` computed from just those two
+    members, LSTM-AE's vote dropped), which the disjoint test (every pairwise AND
+    empty -> 0 == expected) and the two-member-agreement test (ocsvm/iforest ARE its
+    agreeing pair -> their AND == expected) above both fail to distinguish from the
+    real >= 2-of-3 rule -- verified by applying that exact mutant in scratch: the two
+    prior tests pass under it, this one fails (0 != len(shared)); see the task-4
+    report's follow-up section for the captured run."""
+    import run_step2
+
+    prepared_variant, prepared_logmel, labels = _make_ensemble_prepared_pair()
+    top = split_by_segments(
+        prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5,
+        run_step2._ENSEMBLE_SEED,
+    )
+    scoring_windows = top.scoring_windows
+    assert scoring_windows.size >= 4
+    half = scoring_windows.size // 2
+    shared = frozenset(scoring_windows[:half].tolist())
+    rest = frozenset(scoring_windows[half:].tolist())
+
+    monkeypatch.setattr(
+        run_step2, "_ENSEMBLE_MEMBER_FACTORIES",
+        {
+            "ocsvm": lambda: _AlarmSetScorer(rest),
+            "iforest": lambda: _AlarmSetScorer(shared),
+            "lstmae": lambda: _AlarmSetScorer(shared),
+        },
+    )
+
+    far_table = run_step2._run_ensemble_view(
+        prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
+    )
+    ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
+    assert ensemble_row["n_alarms"] == len(shared)
+
+
 @pytest.mark.parametrize("protocol", ["cross-day", "cross-day-per-state"])
 def test_ensemble_requires_within_day_protocol(
     tmp_path, monkeypatch, capsys, protocol
@@ -1732,6 +1772,35 @@ def test_ensemble_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None
         run_step2.main(["--labels", "gt", "--ensemble"])
     assert exc_info.value.code == 2
     assert "--ensemble is detected-labels only" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("variant", ["vibration", "logmel"])
+def test_ensemble_requires_mic_primary_variant(
+    tmp_path, monkeypatch, capsys, variant
+) -> None:
+    """(review follow-up M1) `--ensemble` accepts only mic-primary sweep variants
+    (audio, audio-beats, fusion, fusion-beats): the ensemble's three-way split is
+    drawn from the SWEEP variant's own `segment_ids` and reused to index the logmel
+    features the LSTM-AE member consumes -- only variants whose primary stream is the
+    generator mic share recording-segment boundaries with logmel BY CONSTRUCTION, so
+    for `vibration` the grid guard can pass by coincidence while the LSTM-AE member's
+    split-conformal calibration silently loses its leakage-safety basis (reviewer
+    finding). Rejected up front, exit 2, with the leakage reason in the message --
+    same `parser.error` pattern as the flag's other two guards. `logmel` itself is
+    also rejected (all three members would fit one identical feature matrix -- not
+    the design chapter's committed ensemble contrast)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--variant", variant, "--ensemble"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--ensemble requires a mic-primary --variant" in err
+    assert "leakage" in err
 
 
 def test_ensemble_grid_mismatch_guard_exits_2(tmp_path, monkeypatch, capsys) -> None:
