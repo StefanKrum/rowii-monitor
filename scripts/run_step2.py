@@ -398,7 +398,9 @@ def build_parser() -> argparse.ArgumentParser:
             "'ensemble/' sibling directory alongside each run's normal sweep-combo "
             "dirs, once per (run, --labels, --states) -- conditioning/scorer-"
             "independent, unlike --score-fusion. Only valid with --protocol "
-            "within-day and --labels detected."
+            "within-day, --labels detected, and a mic-primary --variant (audio, "
+            "audio-beats, fusion, fusion-beats -- leakage safety for the LSTM-AE "
+            "member's logmel split, see _ENSEMBLE_VARIANTS)."
         ),
     )
     return parser
@@ -1804,6 +1806,26 @@ default (7) and `_SCORE_FUSION_SEED`'s identical choice; the nested fit/conforma
 split uses `_ENSEMBLE_SEED + 1` (=8), the same `run_sweep`-mirroring convention
 `_run_score_fusion_view` already established (its own docstring)."""
 
+_ENSEMBLE_VARIANTS: tuple[str, ...] = ("audio", "audio-beats", "fusion", "fusion-beats")
+"""Sweep variants `--ensemble` accepts (review follow-up M1, leakage safety): exactly
+the variants whose PRIMARY stream is the generator mic (`rowii.pipeline.
+_streams_for_variant` puts `RAWGeneratorMic__0` first for all four -- the same, and
+only, stream `logmel`'s own preparation reads). `_run_ensemble_view`'s three-way
+split is drawn from the SWEEP variant's `segment_ids` and reused to index the logmel
+features the LSTM-AE member consumes, so the split is leakage-safe for the LSTM-AE
+member ONLY when the sweep variant's segment boundaries are logmel's own -- true by
+construction for these four (shared primary stream), NOT for `vibration` (primary
+stream `RAWGeneratorVib__2`, no structural relationship to the mic's file
+boundaries): its grid can equal logmel's by coincidence, sailing past
+`_assert_ensemble_grids_match`, while a vibration-segment-safe split could still cut
+one logmel recording segment across calibration and scoring -- silently voiding the
+LSTM-AE member's split-conformal guarantee (reviewer finding). `logmel` itself is
+also excluded, for a different reason: the committed ensemble contrasts OC-SVM/IF on
+the sweep variant's OWN features against LSTM-AE on logmel -- under `--variant
+logmel` all three members would fit one identical matrix, which is not the design
+chapter's committed ensemble (and puts the classical scorers on a 3136-dim patch the
+same dimensionality concern that scoped logmel out of `run_step1 --variant all`)."""
+
 _ENSEMBLE_MIN_REF = 20
 """Matches `SweepConfig.min_ref`'s own default and `_SCORE_FUSION_MIN_REF`'s
 identical choice -- the minimum fit-side window count a state needs before any
@@ -1863,14 +1885,18 @@ def _assert_ensemble_grids_match(
     window grid (`t0_ns`, `window_ns`, `n_windows`) for a shared window INDEX to mean
     the same physical time slot in both -- `_run_ensemble_view`'s single top-level
     split (below) is drawn once from the variant side and used to index BOTH prepared
-    runs' feature matrices at the SAME window indices. Structurally, both
-    preparations share the primary generator-mic stream for every audio-bearing sweep
-    variant (`audio`, `audio-beats`, `fusion`, `fusion-beats`, `logmel` itself --
-    `rowii.pipeline._streams_for_variant`), so this should always hold in practice --
-    asserted here anyway (trust but verify, mirroring `rowii.anomaly.sweep.
-    _assert_three_way_disjoint`'s identical stance on a different structurally-
-    guaranteed invariant) rather than assumed, since `--variant vibration` shares NO
-    stream with `logmel` at all and could plausibly desync.
+    runs' feature matrices at the SAME window indices. Structurally, every variant
+    the CLI admits to this view (`_ENSEMBLE_VARIANTS`, review follow-up M1) shares
+    the primary generator-mic stream with `logmel` (`rowii.pipeline.
+    _streams_for_variant`), so this always holds in practice -- asserted here anyway
+    (trust but verify, mirroring `rowii.anomaly.sweep._assert_three_way_disjoint`'s
+    identical stance on a different structurally-guaranteed invariant) rather than
+    assumed, and kept as the backstop for a direct programmatic call that bypasses
+    `main`'s guard. Note the guard's limits: grid equality is necessary but NOT
+    sufficient for the LSTM-AE member's leakage safety (a non-mic-primary variant's
+    grid can match by coincidence while its segment boundaries do not) -- which is
+    exactly why `--variant vibration` is rejected up front by `main`'s
+    `_ENSEMBLE_VARIANTS` guard instead of being left to this check.
 
     Raises:
         SystemExit: code 2, with a clear message on stderr (parser.error-style; the
@@ -1923,6 +1949,14 @@ def _ensemble_rows_for_label(
     that has zero conformal-side windows, reports every member AND the ENSEMBLE row as
     `low_confidence=True` with NaN metrics (`_ensemble_low_confidence_rows`) rather
     than partially succeeding.
+
+    Emergent invariant (review follow-up L1): within one label, `low_confidence` is
+    provably IDENTICAL across all three members -- `calibrate`'s flag depends only on
+    the calibration COUNT and alpha (`rowii.anomaly.conformal.threshold_index`, never
+    on the score values), and every member calibrates on the SAME `label_conformal`
+    window set at the SAME alpha -- so partial low-confidence voting (some members
+    trusted, others not, within one state) cannot occur, and the ENSEMBLE row's
+    any-member `low_confidence` aggregate equals each member's own flag.
     """
     label_fit = fit_windows[labels[fit_windows] == label]
     if label_fit.shape[0] < _ENSEMBLE_MIN_REF:
@@ -2102,9 +2136,14 @@ finite-sample guarantee attached to the vote rule itself.
   `--states`), not once per `--conditioning`/`--scorer` combination (unlike
   `--score-fusion`, which currently re-writes an identical copy into every combo dir
   -- see `_ensemble_out_dir`'s own docstring for the placement rationale).
-- `--ensemble` requires `--protocol within-day` and `--labels detected` (the design
+- `--ensemble` requires `--protocol within-day`, `--labels detected` (the design
   chapter's committed ensemble is the runtime-realistic detected-label pipeline; GT
-  states play no role in this view).
+  states play no role in this view), and a mic-primary `--variant` (audio,
+  audio-beats, fusion, fusion-beats): the three-way split is drawn from the sweep
+  variant's own recording segments and reused for the LSTM-AE member's logmel
+  features -- only mic-primary variants share segment boundaries with logmel by
+  construction, so the split's leakage safety carries over to the LSTM-AE member
+  (see `_ENSEMBLE_VARIANTS` in `scripts/run_step2.py` for the full rationale).
 """
 
 
@@ -2265,8 +2304,9 @@ def _run_within_day_for_run(
     -- the default-K layout (see those functions' own docstrings).
 
     `ensemble` (`--ensemble`, Task 4, design chapter's committed majority-voting
-    ensemble; caller-guaranteed `protocol == "within-day"` and `labels_mode ==
-    "detected"` via `main`'s own `parser.error` guards, mirroring `--states`'):
+    ensemble; caller-guaranteed `protocol == "within-day"`, `labels_mode ==
+    "detected"`, and a mic-primary *variant* (`_ENSEMBLE_VARIANTS`, review follow-up
+    M1) via `main`'s own `parser.error` guards, mirroring `--states`'):
     AFTER this run's own per-combo loop finishes (this view is conditioning/scorer-
     independent, unlike `score_fusion` which re-runs once per combo), load the
     `logmel` `PreparedRun` for THIS run ONCE, compute `_run_ensemble_view`, and write
@@ -2637,6 +2677,18 @@ def main(argv: list[str] | None = None) -> int:
             "--ensemble is detected-labels only (the design chapter's committed "
             "ensemble is the runtime-realistic detected-label pipeline; GT states "
             "play no role in this view) -- got --labels 'gt'"
+        )
+    if args.ensemble and args.variant not in _ENSEMBLE_VARIANTS:
+        parser.error(
+            "--ensemble requires a mic-primary --variant "
+            f"({', '.join(_ENSEMBLE_VARIANTS)}): the ensemble's three-way split is "
+            "drawn from the sweep variant's own segment_ids and reused to index the "
+            "logmel features the LSTM-AE member consumes -- only mic-primary "
+            "variants share recording-segment boundaries with logmel by "
+            "construction, so any other variant would silently void the LSTM-AE "
+            "member's leakage-safety (its grid can match logmel's by coincidence "
+            "while its segment boundaries do not; see _ENSEMBLE_VARIANTS) "
+            f"-- got --variant {args.variant!r}"
         )
     if args.states is not None and args.states < 2:
         parser.error(f"--states must be >= 2, got {args.states}")
