@@ -206,7 +206,13 @@ Verified against the real code/library before any implementation; these bind:
    thin on the monitored day. Recalibrate mode follows the sweep row
    conventions exactly: a state with no snapshot reference → excluded row; a
    state with zero calibration-side windows on the new run → no-conformal-data
-   row; below-`min_ref` gating identical to sweeps. In recalibrate mode alarms
+   row; below-`min_ref` gating identical to sweeps — CLARIFIED post-T2-review:
+   in the sweeps `min_ref` gates the FIT side only (reference quality; enforced
+   for the snapshot at build time), while the conformal/calibration side is
+   governed solely by `calibrate`'s achievable-alpha floor (`low_confidence`)
+   plus the zero-count row — the monitor mirrors exactly that, with the
+   calibration-side sample count visible per state (`n_consumed`) in the notes,
+   and adds NO second gate. In recalibrate mode alarms
    are emitted for SCORING-side windows only (the new run's calibration-side
    windows are consumed by threshold calibration and are reported as
    `consumed_for_calibration`, never alarmed — calibration bias rule). In

@@ -460,3 +460,97 @@ def test_help_documents_every_flag(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     for flag in ("--snapshot", "--run", "--thresholds", "--alpha", "--no-cache", "--out"):
         assert flag in out
+
+
+# ---------------------------------------------------------------------------
+# T2-review hardening: --alpha coverage (mutation gap) + CLI exit-2 paths
+# ---------------------------------------------------------------------------
+
+
+def test_alpha_override_changes_recalibrated_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Kills the T2 review's surviving mutant (hardcoded alpha in the
+    recalibrate path): the applied per-state threshold must be bitwise
+    `calibrate(cal_scores, 0.30)`, computed independently here from the
+    parquet's own consumed-side scores -- not the default-alpha threshold."""
+    import monitor
+
+    from rowii.anomaly.conformal import calibrate
+
+    snapshot_path, snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+
+    out_default = tmp_path / "out-default"
+    out_loose = tmp_path / "out-loose"
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_default)]
+    ) == 0
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--alpha", "0.30", "--out", str(out_loose),
+        ]
+    ) == 0
+
+    loose = pd.read_parquet(out_loose / "alarms.parquet", engine="pyarrow")
+    default = pd.read_parquet(out_default / "alarms.parquet", engine="pyarrow")
+    for state in snapshot.thresholds:
+        cal_scores = loose.loc[
+            (loose["role"] == "consumed_for_calibration") & (loose["state"] == state),
+            "score",
+        ].to_numpy()
+        expected = calibrate(cal_scores, 0.30).threshold
+        scored_loose = loose[(loose["role"] == "scored") & (loose["state"] == state)]
+        scored_default = default[
+            (default["role"] == "scored") & (default["state"] == state)
+        ]
+        # The alarm SET at alpha=0.30 must be exactly "score > expected" ...
+        assert (
+            scored_loose["alarm"].to_numpy()
+            == (scored_loose["score"].to_numpy() > expected)
+        ).all()
+        # ... and looser than the default-alpha run on the same windows.
+        assert scored_loose["alarm"].sum() >= scored_default["alarm"].sum()
+    # At least one state must actually alarm MORE at the loose alpha, otherwise
+    # this test cannot distinguish the mutant (same-distribution fixture makes
+    # this deterministic at these seeds -- verified when writing the test).
+    assert loose["alarm"].sum() > default["alarm"].sum()
+    assert "0.3" in (out_loose / "monitor_notes.md").read_text()
+
+
+@pytest.mark.parametrize("bad", ["0", "1", "1.5", "-0.1"])
+def test_alpha_out_of_range_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--alpha", bad, "--out", str(tmp_path / "out-bad"),
+        ]
+    )
+    assert exit_code == 2
+    assert not (tmp_path / "out-bad").exists()
+
+
+def test_missing_snapshot_file_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(tmp_path / "does-not-exist.npz"), "--run", _MONITOR_RUN,
+            "--out", str(tmp_path / "out-missing"),
+        ]
+    )
+    assert exit_code == 2
+    assert not (tmp_path / "out-missing").exists()
