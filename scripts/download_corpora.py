@@ -11,17 +11,21 @@ opens a connection, and only for the corpus/corpora selected via `--corpus`.
 Downloads never run in tests (`tests/test_download_corpora.py` monkeypatches
 `urllib.request.urlopen`; its dry-run tests assert it is never even called).
 
-sha256 sentinel (`_SHA256_TBD`): every `_CORPUS_FILES` entry below was
-verified to RESOLVE via a HEAD/metadata-only request (Task-2 completion
-report, `.superpowers/sdd/task-2-report.md`, has the exact commands and
-responses) -- but none has actually been downloaded by this project yet, so
-none has a real, previously-computed sha256 to declare. `_download_file`
-treats the two cases differently: a REAL declared hash is VERIFIED against
-the freshly streamed file's computed hash (mismatch -> `ChecksumMismatchError`,
-never silently accepted); the sentinel is never "verified" against anything
--- there is nothing yet to verify -- instead the computed hash is logged and
+sha256 policy: `_download_file` treats a declared hash two ways. A REAL
+declared hash (every `_CORPUS_FILES` entry below, since the first verified
+full download on 2026-07-16 measured and transcribed them) is VERIFIED
+against the freshly streamed file's computed hash -- on mismatch the corrupt
+file is removed from disk, `ChecksumMismatchError` is raised, that corpus's
+`MANIFEST.json` is never written, and `main` exits 1 with a message naming
+the file (never a silent accept, never a traceback). The `_SHA256_TBD`
+sentinel (the one sanctioned placeholder, for FUTURE table additions that
+have not yet been downloaded once) is never "verified" against anything --
+there is nothing yet to verify -- instead the computed hash is logged and
 written into that corpus's `MANIFEST.json`, which is how a real sha256 first
-becomes known, for a human to transcribe back into `_CORPUS_FILES` afterward.
+becomes known, for a human to transcribe back into `_CORPUS_FILES` afterward
+(exactly the flow that produced the hashes now in the table; the original
+HEAD/metadata URL verification is documented in the Task-2 completion
+report, `.superpowers/sdd/task-2-report.md`).
 
 Corpus provenance (verified 2026-07-16, HEAD/metadata requests only, no
 payload bytes fetched -- see the completion report for full detail):
@@ -92,7 +96,7 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
         _CorpusFile(
             url="https://zenodo.org/api/records/3384388/files/0_dB_pump.zip/content",
             filename="0_dB_pump.zip",
-            sha256=_SHA256_TBD,
+            sha256="1a2d416d2ad9d72f9ed3613ba78c623e170141d563c40db28322bcb9e56f8d91",
             license=_MIMII_LICENSE,
         ),
     ),
@@ -101,34 +105,48 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
         # -- verified via HEAD request 2026-07-16.
         _CorpusFile(  # Normal_0, 0 hp / 1797 rpm, 3_903_344 B
             url="https://engineering.case.edu/sites/default/files/97.mat",
-            filename="97.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="97.mat",
+            sha256="16bf48babcf1c7ac224bc1a81cd9eafdb27e42d5cf559761907e067e8eeadf3c",
+            license=_CWRU_LICENSE,
         ),
         _CorpusFile(  # Normal_1, 1 hp / 1772 rpm, 7_742_720 B
             url="https://engineering.case.edu/sites/default/files/98.mat",
-            filename="98.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="98.mat",
+            sha256="37e6612c05e65c415dcfa2ab27a3fda648a5863160fa898b884a14743044e045",
+            license=_CWRU_LICENSE,
         ),
         _CorpusFile(  # Normal_2, 2 hp / 1750 rpm, 15_503_928 B
             url="https://engineering.case.edu/sites/default/files/99.mat",
-            filename="99.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="99.mat",
+            sha256="4b97e6b5361f45efb6951dc3b1aebcdb3b89cb69d0f96d6f5c297dd9f45eee75",
+            license=_CWRU_LICENSE,
         ),
         _CorpusFile(  # Normal_3, 3 hp / 1730 rpm, 7_770_624 B
             url="https://engineering.case.edu/sites/default/files/100.mat",
-            filename="100.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="100.mat",
+            sha256="88a5990cb541320e91505a1d72139e1993500ffe6e292a451011667f4138ca78",
+            license=_CWRU_LICENSE,
         ),
         # 12k Drive End Bearing Fault Data, 0.007" fault diameter, load 0 hp
         # -- one file per fault location (a SMALL, diverse subset per spec
         # D2, not the full load x diameter x location matrix).
         _CorpusFile(  # IR007_0 (inner race), 2_910_768 B
             url="https://engineering.case.edu/sites/default/files/105.mat",
-            filename="105.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="105.mat",
+            sha256="f80b0ea04fd06b372a0eaec7c056543ea37e4bb4727a5b173d2a5bacd2aa9cab",
+            license=_CWRU_LICENSE,
         ),
         _CorpusFile(  # B007_0 (ball), 2_942_112 B
             url="https://engineering.case.edu/sites/default/files/118.mat",
-            filename="118.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="118.mat",
+            sha256="b00628f8dd8d1d930af77fa465d1e5cdb385fe259489053f91f3680bda7f640e",
+            license=_CWRU_LICENSE,
         ),
         _CorpusFile(  # OR007@6_0 (outer race @6:00), 2_928_192 B
             url="https://engineering.case.edu/sites/default/files/130.mat",
-            filename="130.mat", sha256=_SHA256_TBD, license=_CWRU_LICENSE,
+            filename="130.mat",
+            sha256="35a095307d0971477049b343a1b5981dde465a58fb7f233ad89b035068c1717d",
+            license=_CWRU_LICENSE,
         ),
     ),
     "paderborn": (
@@ -136,11 +154,15 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
         # -- verified via HEAD request 2026-07-16.
         _CorpusFile(  # 173_881_721 B
             url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K001.rar",
-            filename="K001.rar", sha256=_SHA256_TBD, license=_PADERBORN_LICENSE,
+            filename="K001.rar",
+            sha256="0f119ebdb28fb2f4d9fac1beb1319429f63f7ae1256c23c872f280f3560918e5",
+            license=_PADERBORN_LICENSE,
         ),
         _CorpusFile(  # 161_981_588 B
             url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K002.rar",
-            filename="K002.rar", sha256=_SHA256_TBD, license=_PADERBORN_LICENSE,
+            filename="K002.rar",
+            sha256="1040da8b74d169c4e8c8545afa335d7a3a320bcaf36a471250c3e434bc4caffd",
+            license=_PADERBORN_LICENSE,
         ),
     ),
 }
@@ -199,7 +221,10 @@ def _download_file(spec: _CorpusFile, dest_dir: Path) -> _ManifestRow:
 
     Raises:
         ChecksumMismatchError: *spec.sha256* is a real (non-sentinel) hash
-            and the downloaded file's computed sha256 does not match it.
+            and the downloaded file's computed sha256 does not match it. The
+            mismatching file is REMOVED from disk before raising -- a
+            corrupt/truncated/wrong download must never survive where a later
+            run (or a human) could mistake it for a verified one.
     """
     dest_path = dest_dir / spec.filename
     computed_sha256, n_bytes = _stream_download(spec.url, dest_path)
@@ -211,6 +236,7 @@ def _download_file(spec: _CorpusFile, dest_dir: Path) -> _ManifestRow:
             spec.filename, computed_sha256,
         )
     elif computed_sha256 != spec.sha256:
+        dest_path.unlink(missing_ok=True)
         raise ChecksumMismatchError(
             f"{spec.filename}: sha256 mismatch -- expected {spec.sha256}, got {computed_sha256}"
         )
@@ -365,8 +391,18 @@ def main(argv: list[str] | None = None) -> int:
         _print_dry_run(corpora, args.dest)
         return 0
 
-    for corpus in corpora:
-        _download_corpus(corpus, args.dest)
+    try:
+        for corpus in corpora:
+            _download_corpus(corpus, args.dest)
+    except ChecksumMismatchError as exc:
+        # Clean non-zero exit naming the file (the exception message carries
+        # filename + both hashes), not a traceback: a checksum mismatch is an
+        # expected operational failure (corrupted transfer, upstream file
+        # replaced), and `_download_file` has already removed the corrupt
+        # file; the failing corpus's MANIFEST.json is never written
+        # (`_download_corpus` only writes it after every file succeeded).
+        print(f"download_corpora: {exc}", file=sys.stderr)
+        return 1
 
     print(f"download_corpora: done -- {len(corpora)} corpus/corpora -> {args.dest}")
     return 0
