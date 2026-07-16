@@ -111,6 +111,17 @@ class Config:
     own audio-branch teacher embeddings via `scripts/distill_beats.py`) --
     mirrors `beats_checkpoint`'s own single-field env-driven pattern. Consumed
     by `rowii.pipeline._featurizer_for_stream`'s `"audio-student"` dispatch."""
+    beats_int8_checkpoint: Path | None = None
+    """Post-training INT8-quantized BEATs checkpoint (`ROWII_BEATS_INT8_
+    CHECKPOINT`, Step-2 package-5 spec D6) -- a `scripts/quantize_beats.py`-
+    produced module pickle, NOT the `{"cfg","model"}` state-dict format
+    `beats_checkpoint` points at. Independent of `beats_checkpoint` (both may
+    be set together: the int8 file was quantized FROM the fp32 one, but
+    `rowii.signals.beats.BeatsFeaturizer`'s int8 branch never reads
+    `beats_checkpoint` at all once this is set -- mirrors `student_checkpoint`'s
+    own single-field env-driven pattern otherwise). Consumed by `rowii.pipeline.
+    _featurizer_for_stream`'s beats-variant dispatch (`"audio-beats"`/
+    `"fusion-beats"`) as `BeatsFeaturizer`'s `int8_model_path` constructor arg."""
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -123,6 +134,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     tfc_audio_ckpt = merged.get("ROWII_TFC_AUDIO_CHECKPOINT") or None
     tfc_vib_ckpt = merged.get("ROWII_TFC_VIB_CHECKPOINT") or None
     student_ckpt = merged.get("ROWII_STUDENT_CHECKPOINT") or None
+    beats_int8_ckpt = merged.get("ROWII_BEATS_INT8_CHECKPOINT") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
@@ -130,4 +142,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         tfc_audio_checkpoint=Path(tfc_audio_ckpt).expanduser() if tfc_audio_ckpt else None,
         tfc_vib_checkpoint=Path(tfc_vib_ckpt).expanduser() if tfc_vib_ckpt else None,
         student_checkpoint=Path(student_ckpt).expanduser() if student_ckpt else None,
+        beats_int8_checkpoint=Path(beats_int8_ckpt).expanduser() if beats_int8_ckpt else None,
     )

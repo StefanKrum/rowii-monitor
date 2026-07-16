@@ -28,10 +28,11 @@ On-disk feature cache (Step-2 Task S1): `prepare_run(..., use_cache=True)` (the 
 persists its result to `results/cache/<run.name>--<variant>.npz`, keyed by a sha256
 fingerprint of everything that determines the output (variant, window duration, every
 burst file's name+size, the beats-checkpoint path, and -- for the two tfc variants,
-package-4 spec D4 -- the ONE tfc checkpoint path relevant to that variant) -- see
-`_cache_fingerprint`. A fingerprint mismatch (or a missing/corrupt cache file) is
-treated as a plain cache miss: recompute, then overwrite. `use_cache=False` bypasses
-the cache entirely (never reads, never writes) -- wired to `scripts/run_step1.py
+package-4 spec D4 -- the ONE tfc checkpoint path relevant to that variant; for the two
+beats variants, package-5 spec D6, the int8 checkpoint path too, but ONLY when it is
+actually set) -- see `_cache_fingerprint`. A fingerprint mismatch (or a missing/corrupt
+cache file) is treated as a plain cache miss: recompute, then overwrite. `use_cache=False`
+bypasses the cache entirely (never reads, never writes) -- wired to `scripts/run_step1.py
 --no-cache`.
 """
 from __future__ import annotations
@@ -193,6 +194,20 @@ def _featurizer_for_stream(
     an expensive sweep starts, use the dedicated script-level guard instead
     (`scripts/run_step1.py`'s `_import_tfc_or_exit`/`_import_student_or_exit`,
     mirrored per script).
+
+    `BeatsFeaturizer` also always receives `cfg.beats_int8_checkpoint` as its
+    `int8_model_path` arg (package-5 spec D6), for BOTH beats variants --
+    `None` (the default, no env set) reproduces the fp32-only behavior
+    exactly; when set, `BeatsFeaturizer.__init__` itself decides to load the
+    quantized module instead of *checkpoint* (that constructor's own
+    docstring) and eagerly raises `FileNotFoundError` if the int8 path does
+    not exist on disk, same fail-fast timing as the `beats_checkpoint is
+    None` guard just above it. `cfg.beats_checkpoint` (the `SystemExit` guard)
+    stays required regardless -- even once the int8 path is set, the fp32
+    checkpoint is kept as a required companion value (the int8 file was
+    quantized FROM it) rather than relaxing this guard, deliberately
+    minimizing how much this addition changes the beats branch's existing
+    contract.
     """
     if stream not in _AUDIO_STREAMS:
         if variant == "vibration-tfc":
@@ -209,7 +224,9 @@ def _featurizer_for_stream(
             raise SystemExit(
                 f"variant {variant!r} needs ROWII_BEATS_CHECKPOINT set; {_BEATS_INSTALL_HINT}"
             )
-        return BeatsFeaturizer(checkpoint=cfg.beats_checkpoint)
+        return BeatsFeaturizer(
+            checkpoint=cfg.beats_checkpoint, int8_model_path=cfg.beats_int8_checkpoint
+        )
     if variant == "audio-tfc":
         from rowii.tfc.wrapper import TfcFeaturizer
 
@@ -647,6 +664,22 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     the teacher cache it was distilled from). Any future payload change must
     consciously update `tests/test_pipeline.py`'s golden pins AND deliberately
     migrate/invalidate the on-disk caches.
+
+    `cfg.beats_int8_checkpoint` (package-5 spec D6) follows the SAME scoped-line
+    convention, with one extra condition: the line is appended ONLY for a beats
+    variant (`_is_beats_variant` -- `"audio-beats"`/`"fusion-beats"`, unlike the
+    single-variant tfc/student lines above) AND ONLY when the int8 path is
+    actually set at all -- unlike `beats_checkpoint`'s own unconditional line,
+    an UNSET `beats_int8_checkpoint` contributes NOTHING to the payload (no
+    blank line either), so every EXISTING `audio-beats`/`fusion-beats` cache
+    (written before this field existed, always effectively "unset") stays
+    byte-identical and is never invalidated by this addition. Setting
+    `ROWII_BEATS_INT8_CHECKPOINT` for the first time is a deliberate,
+    documented fork instead: the fingerprint changes, the next `prepare_run`
+    call misses the existing fp32-computed cache, and recomputes into a fresh
+    entry keyed by the int8 checkpoint path -- intended (int8 embeddings
+    genuinely differ numerically from fp32's), not a bug.
+
     `cfg.detect`/`cfg.gt` are deliberately excluded: they govern clustering/GT
     labeling, never feature EXTRACTION, so changing them must not invalidate this
     cache.
@@ -661,6 +694,8 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
         f"window_s={cfg.window.window_s!r}",
         f"beats_checkpoint={cfg.beats_checkpoint or ''}",
     ]
+    if _is_beats_variant(variant) and cfg.beats_int8_checkpoint is not None:
+        payload_lines.append(f"beats_int8_checkpoint={cfg.beats_int8_checkpoint}")
     if variant == "audio-tfc":
         payload_lines.append(f"tfc_audio_checkpoint={cfg.tfc_audio_checkpoint or ''}")
     elif variant == "vibration-tfc":

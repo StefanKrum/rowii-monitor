@@ -696,7 +696,7 @@ def test_run_combo_audio_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, mon
             per_frame_mean = fbank.mean(dim=-1, keepdim=True)
             return per_frame_mean.expand(-1, _STUB_EMBED_DIM)
 
-    def fake_init(self, checkpoint, device=None, encoder=None) -> None:
+    def fake_init(self, checkpoint, device=None, encoder=None, int8_model_path=None) -> None:
         real_init(self, checkpoint=checkpoint, device=torch.device("cpu"), encoder=_StubEncoder())
 
     monkeypatch.setattr(beats_module.BeatsFeaturizer, "__init__", fake_init)
@@ -768,7 +768,7 @@ def test_run_combo_fusion_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, mo
             per_frame_mean = fbank.mean(dim=-1, keepdim=True)
             return per_frame_mean.expand(-1, 4)
 
-    def fake_init(self, checkpoint, device=None, encoder=None) -> None:
+    def fake_init(self, checkpoint, device=None, encoder=None, int8_model_path=None) -> None:
         real_init(self, checkpoint=checkpoint, device=torch.device("cpu"), encoder=_StubEncoder())
 
     monkeypatch.setattr(beats_module.BeatsFeaturizer, "__init__", fake_init)
