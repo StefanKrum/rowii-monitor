@@ -1993,3 +1993,139 @@ def test_ensemble_sub_window_grid_offset_tolerated_and_documented(
     assert len(offset_warnings) == 1, offset_warnings  # ONE warning, not per member/combo
     assert "26.0" in offset_warnings[0]
     assert "97.4" in offset_warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# --xattn-fusion view (package-5 Task 6, spec D8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("protocol", ["cross-day", "cross-day-per-state"])
+def test_xattn_fusion_requires_within_day_protocol(
+    tmp_path, monkeypatch, capsys, protocol
+) -> None:
+    """`--xattn-fusion` mirrors `--ensemble`'s within-day-only guard."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            ["--protocol", protocol, "--variant", "fusion", "--xattn-fusion"]
+        )
+    assert exc_info.value.code == 2
+    assert "within-day" in capsys.readouterr().err
+
+
+def test_xattn_fusion_requires_fusion_variant(tmp_path, monkeypatch, capsys) -> None:
+    """The view reads the fusion cache's vibration columns -- any other variant is
+    a usage error, rejected before any run is prepared."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            ["--protocol", "within-day", "--variant", "audio", "--xattn-fusion"]
+        )
+    assert exc_info.value.code == 2
+    assert "--variant fusion" in capsys.readouterr().err
+
+
+def test_xattn_fusion_requires_checkpoint_env(tmp_path, monkeypatch, capsys) -> None:
+    """Without ROWII_XATTN_CHECKPOINT the flag is a usage error naming the env var
+    (fires after load_config, before any discovery)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    monkeypatch.delenv("ROWII_XATTN_CHECKPOINT", raising=False)
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            ["--protocol", "within-day", "--variant", "fusion", "--xattn-fusion"]
+        )
+    assert exc_info.value.code == 2
+    assert "ROWII_XATTN_CHECKPOINT" in capsys.readouterr().err
+
+
+def test_xattn_fusion_view_end_to_end(tmp_path, monkeypatch) -> None:
+    """`--xattn-fusion` smoke on the synthetic fixture with a stubbed head: exit 0,
+    `far_table_xattn.csv` written once into the dedicated `xattn/` sibling dir with
+    the exact column contract, notes file present. The audio-beats PreparedRun is
+    substituted with a grid-aligned synthetic one (torch-free), the head loader and
+    `joint_embeddings` are stubbed at the `rowii.fusionx.wrapper` seam (run_step2
+    imports them lazily at call time, so module-attribute monkeypatching applies).
+    """
+    import dataclasses as _dc
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    monkeypatch.setenv("ROWII_XATTN_CHECKPOINT", str(tmp_path / "xattn.pt"))
+    (tmp_path / "xattn.pt").write_bytes(b"stub")
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    real_prepare = run_step2.prepare_run
+
+    def fake_prepare(run, variant, cfg, use_cache=True):
+        if variant != "audio-beats":
+            return real_prepare(run, variant, cfg, use_cache=use_cache)
+        fusion = real_prepare(run, "fusion", cfg, use_cache=use_cache)
+        rng = np.random.default_rng(0)
+        return _dc.replace(
+            fusion,
+            features=rng.normal(0.0, 1.0, (fusion.features.shape[0], 768)),
+            feature_names=[f"beats_e{i}" for i in range(768)],
+        )
+
+    monkeypatch.setattr(run_step2, "prepare_run", fake_prepare)
+
+    import rowii.fusionx.wrapper as fusionx_wrapper
+
+    stub_head = SimpleNamespace(cfg=SimpleNamespace(out_dim=8))
+    monkeypatch.setattr(
+        fusionx_wrapper, "load_xattn_head", lambda checkpoint, device: stub_head
+    )
+    monkeypatch.setattr(
+        fusionx_wrapper,
+        "joint_embeddings",
+        lambda head, audio, vib, device: np.hstack(
+            [audio[:, :4], vib[:, :4]]
+        ).astype(np.float64),
+    )
+    import rowii.signals.beats as beats_mod
+
+    monkeypatch.setattr(beats_mod, "best_device", lambda: "cpu")
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels",
+            "detected", "--conditioning", "per-state", "--scorer", "knn",
+            "--xattn-fusion",
+        ]
+    )
+    assert exit_code == 0
+
+    xattn_dir = (
+        tmp_path / "results" / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "xattn"
+    )
+    far_path = xattn_dir / "far_table_xattn.csv"
+    assert far_path.is_file(), f"missing {far_path}"
+    far_table = pd.read_csv(far_path)
+    assert list(far_table.columns) == [
+        "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+        "low_confidence",
+    ]
+    assert len(far_table) > 0
+    real_rows = far_table[~far_table["low_confidence"]]
+    assert (real_rows["n_scored"] > 0).all()
+    assert (xattn_dir / "xattn_notes.md").is_file()

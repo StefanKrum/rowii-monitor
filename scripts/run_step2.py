@@ -205,10 +205,15 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    import torch
+
+    from rowii.fusionx.model import XattnHead
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -406,6 +411,18 @@ def build_parser() -> argparse.ArgumentParser:
             "within-day, --labels detected, and a mic-primary --variant (audio, "
             "audio-beats, fusion, fusion-beats -- leakage safety for the LSTM-AE "
             "member's logmel split, see _ENSEMBLE_VARIANTS)."
+        ),
+    )
+    parser.add_argument(
+        "--xattn-fusion", action="store_true",
+        help=(
+            "Also compute the cross-attention fusion view (design chapter's third "
+            "fusion level, package-5 spec D8): kNN on the trained head's joint "
+            "audio-beats x vibration embedding, per-state conformal thresholds; "
+            "writes far_table_xattn.csv + xattn_notes.md into a dedicated 'xattn/' "
+            "sibling directory once per (run, --labels, --states). Requires "
+            "--protocol within-day, --labels detected, --variant fusion, and "
+            "ROWII_XATTN_CHECKPOINT pointing at a scripts/train_xattn.py checkpoint."
         ),
     )
     return parser
@@ -2384,6 +2401,195 @@ def _run_and_write_ensemble_view(
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# --xattn-fusion view (package-5 Task 6, spec D8: the third fusion level)
+# ---------------------------------------------------------------------------
+
+_XATTN_NOTES = """# Cross-attention fusion view -- notes
+
+- The joint embedding is produced by a cross-attention head trained CLIP-style
+  on the CALIBRATION side of this run's own top split (audio-beats embeddings
+  vs the fusion cache's vibration columns of the SAME window as the positive
+  pair) -- `scripts/train_xattn.py`. The head therefore never saw a
+  scoring-side segment, but it IS fitted on the same calibration data the
+  conformal thresholds use; stated openly (package-5 spec D8).
+- Scoring is kNN (k=1, cosine) on the joint embedding with per-state
+  split-conformal thresholds, the same machinery as every other view.
+- Grid alignment between the fusion variant and the audio-beats cache follows
+  the ensemble view's tolerance semantics (structural equality; sub-window t0
+  offsets tolerated and recorded below).
+"""
+
+
+def _xattn_out_dir(
+    results_root: Path, run_name: str, variant: str, labels_mode: str,
+    *, states: int | None = None,
+) -> Path:
+    """`--xattn-fusion`'s dedicated sibling directory -- mirrors
+    `_ensemble_out_dir`'s placement rationale (once per (run, labels, states),
+    never per conditioning/scorer combo)."""
+    suffix = f"-k{states}" if states is not None else ""
+    return (
+        results_root / "step2" / "within-day" / run_name
+        / f"{variant}-{labels_mode}{suffix}" / "xattn"
+    )
+
+
+def _run_xattn_view(
+    sweep_prepared: PreparedRun,
+    prepared_audio: PreparedRun,
+    labels: np.ndarray,
+    alpha: float,
+    head: XattnHead,
+    device: torch.device,
+    run_name: str,
+) -> tuple[pd.DataFrame, int]:
+    """FAR table for the cross-attention joint embedding, per state (spec D8).
+
+    Mirrors `run_sweep`'s three-way split exactly (top seed 7, nested seed 8) on
+    the SWEEP variant's segment ids, restricted to windows valid in BOTH prepared
+    runs (the fusion variant and the audio-beats cache have independently derived
+    valid masks; a window NaN on either side must not enter any role). Per state
+    with >= `SweepConfig.min_ref` fit windows and >= 1 conformal window: fit
+    kNN (k=1, cosine) on the fit-side JOINT embeddings, calibrate on the
+    conformal-side joint scores, alarm on the scoring side; states below the
+    gate get a NaN row with `low_confidence=True`. Returns the table plus the
+    measured |t0| offset between the two grids (ns) for the notes file.
+
+    Raises:
+        SystemExit: grid misalignment (structural mismatch or >= one window --
+            `_check_ensemble_grid_alignment`'s semantics, reused verbatim).
+        ValueError: degenerate splits (propagated from `split_by_segments`).
+    """
+    from rowii.fusionx.wrapper import joint_embeddings
+
+    t0_offset_ns = _check_ensemble_grid_alignment(
+        run_name, sweep_prepared, prepared_audio
+    )
+
+    audio_idx, vib_idx = split_branch_columns(sweep_prepared.feature_names)
+    del audio_idx  # the audio side comes from the audio-beats cache, not fusion
+    vib_features = sweep_prepared.features[:, vib_idx]
+
+    valid_both = sweep_prepared.valid_mask & prepared_audio.valid_mask
+    top = split_by_segments(sweep_prepared.segment_ids, valid_both, 0.5, _CROSS_DAY_SEED)
+    calib_mask = np.zeros(sweep_prepared.features.shape[0], dtype=bool)
+    calib_mask[top.calibration_windows] = True
+    nested = split_by_segments(
+        sweep_prepared.segment_ids, calib_mask, 0.5, _CROSS_DAY_SEED + 1
+    )
+    fit_w, conf_w = nested.calibration_windows, nested.scoring_windows
+    scoring_w = top.scoring_windows
+
+    def _joint(windows: np.ndarray) -> np.ndarray:
+        return joint_embeddings(
+            head, prepared_audio.features[windows], vib_features[windows], device
+        )
+
+    min_ref = SweepConfig().min_ref
+    all_labels = sorted(
+        np.unique(labels[np.concatenate([top.calibration_windows, scoring_w])]).tolist()
+    )
+    rows: list[dict[str, object]] = []
+    for label in all_labels:
+        fit_l = fit_w[labels[fit_w] == label]
+        conf_l = conf_w[labels[conf_w] == label]
+        score_l = scoring_w[labels[scoring_w] == label]
+        if fit_l.shape[0] < min_ref or conf_l.shape[0] == 0 or score_l.shape[0] == 0:
+            rows.append({
+                "label": label, "n_calibration": math.nan, "n_scored": math.nan,
+                "n_alarms": math.nan, "realized_far": math.nan,
+                "low_confidence": True,
+            })
+            continue
+        scorer = KnnScorer().fit(_joint(fit_l))
+        conformal_scores = scorer.score(_joint(conf_l))
+        threshold = calibrate(conformal_scores, alpha)
+        alarms = int((scorer.score(_joint(score_l)) > threshold.threshold).sum())
+        rows.append({
+            "label": label,
+            "n_calibration": float(threshold.n_calibration),
+            "n_scored": float(score_l.shape[0]),
+            "n_alarms": float(alarms),
+            "realized_far": alarms / score_l.shape[0],
+            "low_confidence": threshold.low_confidence,
+        })
+
+    columns = [
+        "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+        "low_confidence",
+    ]
+    return pd.DataFrame(rows, columns=columns), t0_offset_ns
+
+
+def _run_and_write_xattn_view(
+    run: Run,
+    variant: str,
+    cfg: Config,
+    sweep_prepared: PreparedRun,
+    labels_mode: str,
+    labels: np.ndarray,
+    alpha: float,
+    *,
+    use_cache: bool,
+    states: int | None = None,
+) -> None:
+    """`--xattn-fusion`'s full per-run step, mirroring
+    `_run_and_write_ensemble_view`'s structure: load the head (checkpoint from
+    `cfg.xattn_checkpoint` -- `main` guarantees it is set) and the audio-beats
+    `PreparedRun` ONCE per run, compute `_run_xattn_view`, write
+    `far_table_xattn.csv` + `xattn_notes.md` into the dedicated `xattn/` sibling
+    dir. `prepare_run` `RuntimeError` / view `ValueError` -> logged skip (strict
+    addition, never a gate); grid-misalignment `SystemExit` propagates (hard
+    usage abort), matching the ensemble view's contract exactly.
+    """
+    from rowii.fusionx.wrapper import load_xattn_head
+    from rowii.signals.beats import best_device
+
+    try:
+        prepared_audio = prepare_run(run, "audio-beats", cfg, use_cache=use_cache)
+    except RuntimeError as exc:
+        logger.warning(
+            "run_step2: --xattn-fusion's audio-beats prepare_run failed for run %r "
+            "(%s) -- skipping the xattn view (normal sweep outputs unaffected)",
+            run.name, exc,
+        )
+        return
+
+    device = best_device()
+    assert cfg.xattn_checkpoint is not None  # main()'s guard
+    head = load_xattn_head(cfg.xattn_checkpoint, device)
+
+    try:
+        far_table, t0_offset_ns = _run_xattn_view(
+            sweep_prepared, prepared_audio, labels, alpha, head, device, run.name
+        )
+    except ValueError as exc:
+        logger.warning(
+            "run_step2: --xattn-fusion view failed for %s/%s-%s (%s) -- skipping "
+            "(normal sweep outputs unaffected)",
+            run.name, variant, labels_mode, exc,
+        )
+        return
+
+    out_dir = _xattn_out_dir(
+        cfg.results_root, run.name, variant, labels_mode, states=states
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    far_table.to_csv(out_dir / "far_table_xattn.csv", index=False)
+    notes = _XATTN_NOTES
+    if t0_offset_ns:
+        window_ns = sweep_prepared.grid.window_ns
+        overlap = 1.0 - abs(t0_offset_ns) / window_ns
+        notes += (
+            f"\n- Measured grid t0 offset: {abs(t0_offset_ns) / 1e6:.1f} ms "
+            f"(>= {overlap:.1%} window overlap between the two caches).\n"
+        )
+    (out_dir / "xattn_notes.md").write_text(notes)
+
+
 # ---------------------------------------------------------------------------
 # within-day orchestration
 # ---------------------------------------------------------------------------
@@ -2405,6 +2611,7 @@ def _run_within_day_for_run(
     score_fusion: bool = False,
     score_fusion_scorer: str = "knn",
     ensemble: bool = False,
+    xattn_fusion: bool = False,
 ) -> int:
     """Prepare *run*, attach labels once, then run one sweep per (conditioning,
     scorer) pair, writing that combo's outputs/summary-row/register-section. Returns
@@ -2542,6 +2749,12 @@ def _run_within_day_for_run(
 
     if ensemble:
         _run_and_write_ensemble_view(
+            run, variant, cfg, sweep_prepared, labels_mode, labels, alpha,
+            use_cache=use_cache, states=states,
+        )
+
+    if xattn_fusion:
+        _run_and_write_xattn_view(
             run, variant, cfg, sweep_prepared, labels_mode, labels, alpha,
             use_cache=use_cache, states=states,
         )
@@ -2844,6 +3057,17 @@ def main(argv: list[str] | None = None) -> int:
             "while its segment boundaries do not; see _ENSEMBLE_VARIANTS) "
             f"-- got --variant {args.variant!r}"
         )
+
+    if args.xattn_fusion and args.protocol != "within-day":
+        parser.error("--xattn-fusion is only valid with --protocol within-day")
+    if args.xattn_fusion and args.labels == "gt":
+        parser.error("--xattn-fusion is detected-labels only (spec D8)")
+    if args.xattn_fusion and args.variant != "fusion":
+        parser.error(
+            "--xattn-fusion requires --variant fusion: the view reads the fusion "
+            "cache's vibration columns (rowii.anomaly.fusion.split_branch_columns) "
+            "as the head's vibration side"
+        )
     if args.states is not None and args.states < 2:
         parser.error(f"--states must be >= 2, got {args.states}")
     if args.states is not None and args.protocol != "within-day":
@@ -2859,6 +3083,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     cfg = load_config()
+    if args.xattn_fusion and cfg.xattn_checkpoint is None:
+        parser.error(
+            "--xattn-fusion needs ROWII_XATTN_CHECKPOINT set to a "
+            "scripts/train_xattn.py checkpoint"
+        )
     index = discover(cfg.data_root)
 
     if run_names is not None:
@@ -2891,6 +3120,7 @@ def main(argv: list[str] | None = None) -> int:
                 score_fusion=args.score_fusion,
                 score_fusion_scorer=args.score_fusion_scorer,
                 ensemble=args.ensemble,
+                xattn_fusion=args.xattn_fusion,
             )
         print(
             f"run_step2: wrote {n_combos} within-day combo(s) across {len(runs)} run(s) "
