@@ -1031,3 +1031,105 @@ Provenance: corpora under `data/public/` with sha256 manifests + licenses
 a lesson from this package: a payload-shape change silently invalidated every
 existing cache and was caught by the analyze_step2 beats guard, then fixed for
 byte-identical backward compatibility.
+
+## Step 2 package-5 evidence (2026-07-16): adaptation & compactness
+
+Can the frozen general-audio encoder be ADAPTED to the plant, and how small can
+scoring get? Four adaptation/compression paths off the same BEATs-iter3+ base
+(90.4 M params, 361.5 MB), all trained/evaluated on real Rodundwerk II data, plus
+a trained cross-attention fusion head and an end-to-end latency/size benchmark.
+All FAR numbers below are within-day realized FAR at nominal alpha = 0.05
+(per-state conformal, detected labels, kNN) — a CALIBRATION-health readout (the
+data contains no confirmed faults), not detection performance. Detected states
+are re-derived per encoder, so per-state rows are not label-aligned across
+encoders; compare at pooled level.
+
+| encoder | size | 250526 pooled FAR | 290626 pooled FAR | 010726 pooled FAR (adaptation day) |
+|---|---|---|---|---|
+| frozen BEATs | 361.5 MB | **0.007** | 0.130 | 0.058 |
+| + LoRA (r=8, q/v, 4 min MPS) | 361.5 MB merged | 0.069 | **0.136** | 0.028 |
+| + full FT (2 epochs, 3 min) | 361.5 MB | 0.051 | 0.364 | **0.025** |
+| distilled student (KD) | **0.78 MB** | 0.019 | 0.189 | 0.035 |
+| + INT8 (dynamic) | 124.3 MB | — | — | 0.059 |
+
+### Adaptation helps ON the adaptation day; full FT pays for it elsewhere
+
+Both adapted encoders roughly HALVE the frozen encoder's pooled FAR excess on the
+day they were adapted on (0.058 → 0.028/0.025; 8,000 windows, native token-level
+masked latent-MAE — a documented PROXY objective for BEATs' unreproducible
+tokenizer pretraining, restated in every checkpoint sidecar). Off-day the picture
+inverts: on 290626 full FT degrades to pooled FAR 0.364 (7.3x nominal) while LoRA
+stays at the frozen encoder's level (0.136 vs 0.130) — the classic
+adapter-vs-full-FT robustness trade-off, reproduced on real plant data. On the
+already-well-calibrated 250526 both adapted encoders are worse than frozen
+(0.05–0.07 vs 0.007). Verdict: adaptation is a same-condition tool; nothing here
+justifies replacing the frozen default across days. Step-1 state ARI on 010726
+moves 0.9220 (frozen) → 0.9290/0.9291 (LoRA/FT) — small, consistent, not the
+package-4 rescue story (BEATs is not degenerate on this day to begin with).
+
+### A 0.78-MB student keeps most of the story (with one honest asterisk)
+
+The KD student (192,643-param CNN on log-mel patches → the teacher's primary-mic
+768-d embedding; MSE 0.0041 after 30 epochs / 44 s) is **464x smaller** and
+**~40x faster on CPU** (0.5–0.8 ms/window vs ~30 ms) than its teacher, yet lands
+state ARI 0.9187 on 010726 (teacher: 0.9220) and pooled FARs in the frozen
+encoder's range on all three days. Asterisk: it was distilled on 010726's
+calibration side, so its 010726 numbers are in-domain for the distillation day
+(still leakage-safe — calibration side only, never scoring windows; sidecar
+restates this).
+
+### INT8: a size tool, not a latency tool (here)
+
+Dynamic INT8 quantization: 361.5 → 124.3 MB (2.91x), embedding drift on 2,000
+real windows mean cosine 0.9983 (min 0.9962), pooled FAR 0.059 vs frozen 0.058 on
+the same day — parity. Latency does NOT improve (~30 ms/window either way): the
+pipeline is preprocessing- and attention-bound, and the dynamically quantized
+linear kernels return no net win on this workload/CPU. The benchmark's
+`n_params` column counts only residual fp32 parameters for the int8 module —
+use size-on-disk for compression claims.
+
+### Cross-attention fusion head: calibrates cleanly where states are covered
+
+A 4-head cross-attention head (audio-beats primary-mic 768-d slice as query,
+fusion-cache vibration columns as key/value, CLIP-style InfoNCE on the
+calibration side; seconds to train per day) yields per-state FARs of
+0.025/0.054/0.033/0.052 on 010726 — tighter around nominal than the raw
+feature-level fusion baseline on the same day (up to 0.105). On the two sparser
+days most states fall below the fit gate and are honestly reported as
+low-confidence NaN rows rather than numbers. Third fusion level demonstrated;
+evidence limited to the rich day.
+
+### End-to-end benchmark (incl. preprocessing), synthetic == real
+
+`scripts/benchmark_inference.py`, median ms/window from raw 50 kHz windows,
+real-window pass (`--source run:010726-tu_ph_tu`) reproduces the synthetic
+numbers throughout:
+
+| config | params | size | CPU b=1 | CPU b=256 | MPS b=256 |
+|---|---|---|---|---|---|
+| handcrafted | 0 | — | 2.9 ms | 2.9 ms | — |
+| logmel | 0 | — | 0.47 ms | 0.23 ms | — |
+| BEATs fp32 | 90.4 M | 361.5 MB | 30.8 ms | 32.0 ms | 30.0 ms |
+| BEATs INT8 | (residual fp32: 4.9 M) | 124.3 MB | 30.0 ms | 30.0 ms | cpu-only |
+| TF-C | 479,560 | 1.9 MB | 1.4 ms | 1.6 ms | 0.63 ms |
+| student | 192,643 | 0.78 MB | 0.79 ms | 0.50 ms | 0.27 ms |
+
+MPS does not help BEATs (preprocessing-bound); it helps the small encoders only
+at batch. A Raspberry-class CPU deployment budget is comfortably met by
+handcrafted/logmel/TF-C/student; fp32/int8 BEATs costs ~30 ms/window — still
+30x real-time for 1-s windows, but the memory footprint is the harder constraint.
+
+### Execution honesty & compute reuse
+
+Three real-data defects were found BY this execution and fixed fundamentally
+(commits `ec7f506`, `d5756c3`): the distillation target and the cross-attention
+audio query both silently assumed a 768-column audio-beats cache (it is 1536:
+both mic streams) — now a single shared primitive (`rowii.pipeline.
+stream_columns`) slices the primary-mic block by feature-name prefix for all
+three consumers; and the benchmark crashed on set-but-missing checkpoint envs
+(now a logged skip). Feature caches are ONE file per (run, variant): checkpoint
+swaps re-extract and overwrite (~3–10 min/day on MPS) — result dirs are archived
+with suffixes (`audio-beats-{lora,ft,int8}-detected`), caches are not. All five
+checkpoints under `models/adapted/` with JSON sidecars (objective caveat,
+leakage note, seeds); adapters merge back into the standard `{"cfg","model"}`
+format, so every downstream path loads them unchanged.
