@@ -332,6 +332,7 @@ def _write_synthetic_cache(
     segment_ids: np.ndarray,
     window_ns: int = 1_000_000_000,
     t0_ns: int = 0,
+    feature_names: list[str] | None = None,
 ) -> Path:
     """Writes a real `results/cache/<run>--<variant>.npz` via `rowii.pipeline`'s
     OWN `_write_cached_prepared_run` (the exact on-disk schema, no hand-rolled
@@ -343,7 +344,11 @@ def _write_synthetic_cache(
         features=features,
         grid=WindowGrid(t0_ns=t0_ns, window_ns=window_ns, n_windows=n_windows),
         valid_mask=valid_mask,
-        feature_names=[f"f{i}" for i in range(features.shape[1])],
+        feature_names=(
+            feature_names
+            if feature_names is not None
+            else [f"f{i}" for i in range(features.shape[1])]
+        ),
         segment_ids=segment_ids,
     )
     cache_path = _pipeline._cache_npz_path(cfg.results_root, run.name, variant)
@@ -411,6 +416,52 @@ class TestCheckCacheAlignment:
             distill_beats._check_cache_alignment("run", teacher, student_input)
         assert exc_info.value.code == 2
         assert "grid mismatch" in capsys.readouterr().err
+
+
+# --- 5a2. _teacher_target_columns (primary-mic slice) ------------------------
+
+
+def _teacher_with_names(feature_names: list[str]) -> PreparedRun:
+    n, width = 4, len(feature_names)
+    return PreparedRun(
+        features=np.zeros((n, width)), grid=_grid(n_windows=n),
+        valid_mask=np.ones(n, dtype=bool), feature_names=feature_names,
+        segment_ids=np.zeros(n, dtype=np.int64),
+    )
+
+
+class TestTeacherTargetColumns:
+    def test_selects_only_primary_stream_columns_by_name_prefix(self):
+        teacher = _teacher_with_names(
+            ["MicA::beats_0", "MicA::beats_1", "MicB::beats_0", "MicB::beats_1"]
+        )
+        cols = distill_beats._teacher_target_columns(teacher, "MicA", expected_dim=2)
+        np.testing.assert_array_equal(cols, np.array([0, 1]))
+
+    def test_selection_is_by_prefix_not_position(self):
+        # Reversed stream order in the cache must still find MicA's columns.
+        teacher = _teacher_with_names(
+            ["MicB::beats_0", "MicB::beats_1", "MicA::beats_0", "MicA::beats_1"]
+        )
+        cols = distill_beats._teacher_target_columns(teacher, "MicA", expected_dim=2)
+        np.testing.assert_array_equal(cols, np.array([2, 3]))
+
+    def test_no_matching_stream_exits_2(self, capsys):
+        teacher = _teacher_with_names(["MicB::beats_0", "MicB::beats_1"])
+        with pytest.raises(SystemExit) as exc_info:
+            distill_beats._teacher_target_columns(teacher, "MicA", expected_dim=2)
+        assert exc_info.value.code == 2
+        assert "MicA" in capsys.readouterr().err
+
+    def test_width_mismatch_with_student_out_dim_exits_2(self, capsys):
+        # 4 teacher columns for the stream but a 2-d student head: geometry error.
+        teacher = _teacher_with_names(
+            ["MicA::beats_0", "MicA::beats_1", "MicA::beats_2", "MicA::beats_3"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            distill_beats._teacher_target_columns(teacher, "MicA", expected_dim=2)
+        assert exc_info.value.code == 2
+        assert "out_dim" in capsys.readouterr().err
 
 
 # --- 5b. _select_calibration_windows (leakage) ------------------------------
@@ -641,10 +692,17 @@ class TestDistillBeatsMainEndToEnd:
         # >= 2 distinct segments so split_by_segments(0.5) yields a non-degenerate
         # calibration/scoring split.
         segment_ids = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=np.int64)
+        # Faithful to the real audio-beats cache: BOTH mic streams' 768-d
+        # embeddings concatenated (1536 columns), stream-prefixed names -- the
+        # script must slice out the primary mic's 768, never regress onto 1536.
         _write_synthetic_cache(
             cfg, run, "audio-beats",
-            features=rng.normal(size=(n, 768)),
+            features=rng.normal(size=(n, 1536)),
             valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+            feature_names=(
+                [f"RAWGeneratorMic__0::beats_{i}" for i in range(768)]
+                + [f"RAWTurbineMic__1::beats_{i}" for i in range(768)]
+            ),
         )
         _write_synthetic_cache(
             cfg, run, "logmel",
@@ -679,6 +737,7 @@ class TestDistillBeatsMainEndToEnd:
         sidecar = json.loads(sidecar_path.read_text())
         assert sidecar["run"] == run.name
         assert sidecar["teacher_variant"] == "audio-beats"
+        assert sidecar["teacher_stream"] == "RAWGeneratorMic__0"
         assert sidecar["student_input_variant"] == "logmel"
         assert sidecar["epochs"] == 2
         assert sidecar["n_calibration_windows"] > 0

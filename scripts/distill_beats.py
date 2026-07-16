@@ -1,7 +1,9 @@
 """Knowledge-distillation CLI (Step-2 package-5 spec D5, Task 4): trains a
 compact CNN student (`rowii.adapt.student.StudentConfig`/
 `rowii.adapt._student_model._StudentNet`) to regress the frozen BEATs teacher's
-768-d embedding from the `logmel` variant's own input patches, using ONLY
+768-d embedding (the PRIMARY-mic column slice of the audio-beats cache, which
+concatenates both mic streams -- see `_teacher_target_columns`) from the
+`logmel` variant's own input patches, using ONLY
 ALREADY-CACHED feature matrices -- `results/cache/<run>--audio-beats.npz` (the
 teacher, `rowii.signals.beats.BeatsFeaturizer`'s frozen embeddings) and
 `results/cache/<run>--logmel.npz` (the student's input, `rowii.signals.logmel.
@@ -239,6 +241,45 @@ def _check_cache_alignment(run_name: str, teacher: PreparedRun, student_input: P
     return t0_offset_ns
 
 
+def _teacher_target_columns(
+    teacher: PreparedRun, stream: str, *, expected_dim: int
+) -> np.ndarray:
+    """Column indices of *teacher*'s feature matrix belonging to *stream*.
+
+    The `audio-beats` teacher cache concatenates BOTH mic streams' 768-d
+    embeddings (column order = `_streams_for_variant("audio-beats")`, names
+    `"<stream>::<local>"`), while the `logmel` student input covers the primary
+    mic alone -- the distillation target is therefore the primary-mic SLICE of
+    the teacher matrix, never the full concatenation (regressing a 768-d
+    student head onto the 1536-d full matrix was the package-5 execution's
+    first real-data failure). Columns are selected by feature-name prefix, not
+    by position, so a stream-order change in the cache breaks loudly here
+    instead of silently mis-slicing; a slice width that disagrees with the
+    student's `out_dim` is likewise a hard exit, not a broadcast.
+    """
+    prefix = f"{stream}::"
+    cols = np.flatnonzero(
+        np.array([name.startswith(prefix) for name in teacher.feature_names])
+    )
+    if cols.size == 0:
+        print(
+            f"distill_beats: teacher cache has no columns for stream {stream!r} "
+            f"(no feature name starts with {prefix!r}) -- cannot slice the "
+            "distillation target",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if int(cols.size) != expected_dim:
+        print(
+            f"distill_beats: teacher slice for stream {stream!r} has {cols.size} "
+            f"column(s) but the student's out_dim is {expected_dim} -- geometry "
+            "mismatch between teacher cache and student head",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return cols
+
+
 def _select_calibration_windows(
     student_input: PreparedRun, teacher: PreparedRun, *, seed: int
 ) -> np.ndarray:
@@ -451,15 +492,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    student_cfg = StudentConfig()
+    primary_stream = _streams_for_variant(_STUDENT_INPUT_VARIANT)[0]
+    teacher_cols = _teacher_target_columns(
+        teacher, primary_stream, expected_dim=student_cfg.out_dim
+    )
     student_inputs = student_input.features[calibration_windows]
-    teacher_targets = teacher.features[calibration_windows]
+    teacher_targets = teacher.features[calibration_windows][:, teacher_cols]
     logger.info(
-        "distill_beats: %d calibration-side window(s) for run %s (of %d/%d valid)",
+        "distill_beats: %d calibration-side window(s) for run %s (of %d/%d valid); "
+        "teacher target = %d-column %s slice of the audio-beats cache",
         student_inputs.shape[0], run.name,
         int(student_input.valid_mask.sum()), int(teacher.valid_mask.sum()),
+        int(teacher_cols.size), primary_stream,
     )
-
-    student_cfg = StudentConfig()
     model, epoch_losses = _train_student(
         student_inputs, teacher_targets, student_cfg,
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed,
@@ -472,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     sidecar = {
         "run": run.name,
         "teacher_variant": _TEACHER_VARIANT,
+        "teacher_stream": primary_stream,
         "student_input_variant": _STUDENT_INPUT_VARIANT,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
