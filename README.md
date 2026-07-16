@@ -913,3 +913,59 @@ the grid anchor moves); clusterers, scorers, and conformal thresholds refit in
 seconds by design (deterministic, seed 7), so the entire package-2 evidence
 suite above regenerates from warm caches in ~15 minutes. `FittedDetector` is
 the future serialisation point for the runtime prototype.
+
+## Step 2 package-3 evidence (2026-07-16): baselines, reconstruction, ensemble, score fusion, granularity
+
+All artifacts under `results/step2/within-day/`; full numeric digest with per-table
+source paths: `.superpowers/sdd/results_digest_p3.md`. Within-day protocol, three
+SCADA days, alpha = 0.05, detected labels; every scorer runs on the SAME splits and
+conformal harness, so differences are attributable to the scorer alone.
+
+### Classical one-class baselines: no scorer dominates
+
+Across 12 (run × variant × conditioning) cells, Isolation Forest posts the best FAR
+in 5, LOF in 3, OC-SVM in 2, kNN and Mahalanobis in 1 each — and kNN is the WORST in
+6/12. Per-cell spreads run 0.015–0.116. The design-cited kNN default is not an
+empirical champion here; at these calibration sizes single-split realized FARs
+scatter per the exact Beta distribution, so the honest reading is that all five
+scorers are competitive and representation × day effects dominate scorer choice.
+The starved-day pattern (290626: 3/4 states excluded) is scorer-independent — it is
+a property of the split, confirmed identical across all five scorers.
+
+### Reconstruction pole: strong on the rich day, fragile across days
+
+MLP-AE (fusion features) is competitive everywhere it ran (aggregate 0.026–0.079).
+The logmel autoencoders are the best performers on 010726 (LSTM-AE per-state 0.019,
+Conv-AE 0.027, including one genuinely alarm-free state with a real threshold) but
+blow up on the sparser days (250526 LSTM-AE aggregate 0.253 with states to 0.471) —
+the from-scratch pole needs per-day data volume that only the rich day provides,
+which is precisely the constraint the design's transfer poles exist to relax.
+
+### Majority ensemble (design commitment): suppression holds partially
+
+OC-SVM + IF + LSTM-AE, >=2-of-3 votes, each member on its own per-state conformal
+threshold: the per-state "ensemble FAR <= best member" claim holds in 4 of 7
+checkable states; at run-aggregate level the ensemble beats the best single member
+on 2 of 3 days. Member windows are time-aligned within 26–97 ms on 250526/290626
+(sub-window DAQ stream offsets, measured and documented in each run's
+`ensemble_notes.md`); no distribution-free guarantee is claimed for the vote —
+members keep their own marginal guarantees.
+
+### Score-level fusion: no consistent edge over feature-level fusion
+
+Fisher-combined branch p-values (the guaranteed rule, leave-one-out-calibrated) sit
+at/below alpha in 6/11 floor-clearing states with the rest inside the expected
+single-split Beta scatter; Tippett (documented-excess max-rule contrast) behaves
+similarly on a different subset. Neither rule consistently beats package-1's
+feature-level fusion numbers — score fusion is a validity-preserving alternative,
+not an accuracy upgrade, on this data.
+
+### Conditioning granularity: sub-state structure is real, and it costs calibration
+
+k = 4 → 8 → 12 detected states: achievable (calibrated) states grow 4 → 6 → 8 while
+shrinking as a fraction of nominal (100% → 75% → 67%) — finer conditioning trades
+achievability for resolution exactly as the conformal floor predicts. The top-20
+candidate lists of k8 and k12 agree strongly with each other (Jaccard 0.667) but
+barely with k4 (0.08–0.11): sub-cluster conditioning surfaces a consistent,
+DIFFERENT candidate population than state-level conditioning — the quantified form
+of package 1's "detected labels beat GT" sub-cluster mechanism.
