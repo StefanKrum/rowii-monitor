@@ -19,6 +19,14 @@ feature extraction happens per burst file already (`src/rowii/pipeline.py`'s
 `_extract_stream_features`), so a single-file's worth of windows (at most a
 few hundred at 1-s windows / 12-min bursts) comfortably fits one batch on
 even CPU-only hardware.
+
+`BeatsFeaturizer`'s `int8_model_path` constructor arg (Step-2 package-5 spec
+D6) is an alternate-load branch, not a second featurizer class: a `scripts/
+quantize_beats.py`-produced post-training INT8 dynamically-quantized module
+(`rowii.signals.beats_model.load_quantized_beats_model`) is fed through the
+exact SAME `_RealBeatsEncoder`/`transform` pipeline as the frozen fp32 model,
+forced onto CPU (dynamically quantized kernels have no MPS/CUDA backend) --
+see that constructor arg's own docstring.
 """
 from __future__ import annotations
 
@@ -123,26 +131,72 @@ class BeatsFeaturizer:
         checkpoint: Path,
         device: torch.device | None = None,
         encoder: BeatsEncoderProtocol | None = None,
+        int8_model_path: Path | None = None,
     ) -> None:
         """Args:
         checkpoint: Path to the official BEATs `.pt` checkpoint. Ignored if
-            *encoder* is given (tests inject a stub encoder and never need a
-            real checkpoint on disk).
-        device: Torch device to run on; `best_device()` if `None`.
+            *encoder* or *int8_model_path* is given (tests inject a stub
+            encoder and never need a real checkpoint on disk; the int8 path
+            loads its OWN, entirely different file instead -- see
+            *int8_model_path*).
+        device: Torch device to run on; `best_device()` if `None`. Ignored
+            (forced to CPU) when *int8_model_path* is given -- see
+            *int8_model_path*.
         encoder: Injected `BeatsEncoderProtocol` (e.g. a test stub). If
-            `None`, loads the real frozen model from *checkpoint* via
-            `rowii.signals.beats_model.load_beats_model`.
+            `None`, loads the real model from either *checkpoint* (fp32,
+            `rowii.signals.beats_model.load_beats_model`) or
+            *int8_model_path* (quantized, `load_quantized_beats_model`),
+            whichever is given.
+        int8_model_path: Path to a `scripts/quantize_beats.py`-produced
+            quantized-module pickle (design spec D6) -- NOT the `{"cfg",
+            "model"}` state-dict format *checkpoint* points at. When set
+            (and *encoder* is `None`), `transform`'s real path loads THIS
+            module (`rowii.signals.beats_model.load_quantized_beats_model`)
+            instead of the fp32 *checkpoint*, and forces `self.device` to
+            CPU regardless of *device*/`best_device()` -- dynamically
+            quantized `nn.Linear` kernels (`torch.ao.quantization.
+            quantize_dynamic`) are a CPU-only PyTorch backend (no MPS/CUDA
+            support), which happens to match this project's own deployment
+            target for the compact/quantized pole: an on-premise server with
+            no GPU (design spec D6). The loaded quantized module is still fed
+            through the SAME `_RealBeatsEncoder`/`transform` pipeline as the
+            fp32 path -- `torch.ao.quantization.quantize_dynamic` only swaps
+            `nn.Linear` LEAVES for quantized counterparts, never the
+            enclosing module's own type or its OTHER submodules' callable
+            surface (verified by hand: the quantized module stays
+            `isinstance(..., BEATs)`, and every stage `_RealBeatsEncoder.
+            extract` calls -- `patch_embedding`/`layer_norm`/`post_extract_
+            proj`/`dropout_input`/`encoder` -- is exactly the same attribute
+            path either way). Default `None` (fp32 path, unchanged behavior).
         """
-        self.device = device if device is not None else best_device()
         if encoder is not None:
+            self.device = device if device is not None else best_device()
             self._encoder = encoder
             self._embed_dim: int | None = None
+        elif int8_model_path is not None:
+            import torch
+
+            from rowii.signals.beats_model import BEATS_EMBED_DIM, load_quantized_beats_model
+
+            self.device = torch.device("cpu")
+            quantized = load_quantized_beats_model(int8_model_path)
+            self._encoder = _RealBeatsEncoder(quantized)
+            self._embed_dim = BEATS_EMBED_DIM
         else:
+            self.device = device if device is not None else best_device()
             from rowii.signals.beats_model import BEATS_EMBED_DIM, load_beats_model
 
             model = load_beats_model(checkpoint, self.device)
             self._encoder = _RealBeatsEncoder(model)
             self._embed_dim = BEATS_EMBED_DIM
+
+        # Stored for introspection/testing (mirrors TfcFeaturizer's/
+        # StudentFeaturizer's own `._checkpoint` attribute) -- BeatsFeaturizer
+        # eager-loads above, so neither attribute is read again by any method
+        # below, but keeping them around keeps this class's introspection
+        # story consistent with its sibling featurizers regardless.
+        self._checkpoint = checkpoint
+        self._int8_model_path = int8_model_path
 
     def feature_names(self) -> list[str]:
         """`["beats_0", ..., "beats_{D-1}"]`, `D` = the encoder's embedding width.

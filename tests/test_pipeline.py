@@ -10,6 +10,7 @@ by hand for a focused unit test.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -707,6 +708,119 @@ def test_cache_fingerprint_student_checkpoint_change_is_scoped_to_its_own_varian
     )
 
 
+# ---------------------------------------------------------------------------
+# 9. beats_int8_checkpoint (Step-2 package-5 spec D6): cache-fingerprint
+# scoping to beats variants ONLY (audio-beats/fusion-beats), and ONLY when the
+# int8 path is actually set -- unset must be payload byte-identical to the
+# pre-existing (pre-Task-5) beats-variant fingerprint (no int8-checkpoint line
+# at all), and `_featurizer_for_stream`'s beats dispatch must thread
+# cfg.beats_int8_checkpoint through to BeatsFeaturizer's int8_model_path arg.
+# ---------------------------------------------------------------------------
+
+
+def test_cache_fingerprint_beats_int8_checkpoint_changes_beats_variants_only(
+    tmp_path,
+) -> None:
+    """Mirrors `test_cache_fingerprint_student_checkpoint_change_is_scoped_to_
+    its_own_variant`'s own relative-behavior shape: a fingerprint must depend
+    on `cfg.beats_int8_checkpoint` for BOTH beats variants (`audio-beats`,
+    `fusion-beats` -- `_is_beats_variant`), change again when the int8 path
+    itself changes, and leave every OTHER variant's fingerprint (including
+    the fp32-only `beats_checkpoint`-scoped ones) untouched. This test pins
+    RELATIVE behavior only; the absolute payload SHAPE (backward
+    compatibility with pre-Task-5 caches) is pinned by the two tests below."""
+    run = _single_file_audio_run(tmp_path / "burst")
+    unset = Config(data_root=tmp_path, results_root=tmp_path)
+    set_a = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        beats_int8_checkpoint=tmp_path / "beats_int8_a.pt",
+    )
+    set_b = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        beats_int8_checkpoint=tmp_path / "beats_int8_b.pt",
+    )
+
+    def fp(variant: str, cfg: Config) -> str:
+        return pipeline._cache_fingerprint(run, variant, cfg)
+
+    assert fp("audio-beats", unset) != fp("audio-beats", set_a), (
+        "audio-beats' fingerprint must change when ROWII_BEATS_INT8_CHECKPOINT is set"
+    )
+    assert fp("audio-beats", set_a) != fp("audio-beats", set_b), (
+        "audio-beats' fingerprint must change again when the int8 path itself changes"
+    )
+    assert fp("fusion-beats", unset) != fp("fusion-beats", set_a), (
+        "fusion-beats (the other beats variant) must be scoped the same way"
+    )
+    assert fp("audio", unset) == fp("audio", set_a), (
+        "a non-beats variant's fingerprint must not depend on beats_int8_checkpoint"
+    )
+    assert fp("audio-tfc", unset) == fp("audio-tfc", set_a), (
+        "audio-tfc's fingerprint must not depend on beats_int8_checkpoint"
+    )
+    assert fp("audio-student", unset) == fp("audio-student", set_a), (
+        "audio-student's fingerprint must not depend on beats_int8_checkpoint"
+    )
+
+
+def test_cache_fingerprint_beats_int8_checkpoint_unset_is_byte_identical_to_pre_task5_format(
+    tmp_path,
+) -> None:
+    """The literal 'unset -> payload byte-identical' contract (package-5 spec
+    D6, Task 5): reconstructs the EXACT payload `_cache_fingerprint` produced
+    for a beats variant before this task existed (three fixed lines + sorted
+    file entries, no int8 line at all) independently, and asserts today's
+    function -- called with beats_int8_checkpoint left at its default `None`
+    -- still hashes to that same value. A regression here means an EXISTING
+    `audio-beats`/`fusion-beats` cache (hours-expensive real BEATs
+    extractions) would be silently invalidated on next use, even though
+    nothing about how those variants are actually computed changed.
+    """
+    run = _single_file_audio_run(tmp_path / "burst")
+    cfg = Config(data_root=tmp_path, results_root=tmp_path)  # beats_int8_checkpoint=None
+
+    file_entries = sorted(
+        f"{bf.path.name}:{bf.path.stat().st_size}"
+        for files in run.files.values() for bf in files
+    )
+    expected_payload = "\n".join(
+        ["variant=audio-beats", "window_s=1.0", "beats_checkpoint=", *file_entries]
+    )
+    expected = hashlib.sha256(expected_payload.encode("utf-8")).hexdigest()
+
+    assert pipeline._cache_fingerprint(run, "audio-beats", cfg) == expected
+
+
+def test_featurizer_for_stream_threads_beats_int8_checkpoint_for_beats_variants(
+    tmp_path,
+) -> None:
+    """`_featurizer_for_stream`'s beats branch (package-5 spec D6) must pass
+    `cfg.beats_int8_checkpoint` through as `BeatsFeaturizer`'s `int8_model_
+    path` -- proven here via the missing-file guard (cheap: no real torch
+    model construction needed) rather than a full real-checkpoint round trip
+    (covered directly by `tests/test_beats.py`'s own `BeatsFeaturizer`
+    tests): if the wiring were dropped (int8_model_path never passed
+    through), `BeatsFeaturizer` would silently fall back to trying
+    `cfg.beats_checkpoint` instead and raise `FileNotFoundError` naming THAT
+    (wrong) path instead.
+    """
+    pytest.importorskip("torch")
+    beats_ckpt = tmp_path / "beats.pt"  # deliberately never created -- must never
+    # be read once int8_model_path is set (BeatsFeaturizer's own contract), so
+    # its non-existence must never surface in the raised error below.
+    int8_ckpt = tmp_path / "beats_int8.pt"  # deliberately missing
+    cfg = Config(
+        data_root=tmp_path, results_root=tmp_path / "results",
+        beats_checkpoint=beats_ckpt, beats_int8_checkpoint=int8_ckpt,
+    )
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio-beats", cfg)
+
+    assert str(int8_ckpt) in str(exc_info.value)
+    assert str(beats_ckpt) not in str(exc_info.value)
+
+
 def _golden_fingerprint_run(burst_dir: Path) -> Run:
     """Fixed-name, fixed-size dummy files for the golden-fingerprint test below --
     `_cache_fingerprint` only ever `stat()`s a burst file (name + byte size enter the
@@ -757,6 +871,25 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
       byte-for-byte UNCHANGED (proven by their tests staying green, untouched,
       in this same commit) -- the banked lesson applied consciously, not
       skipped.
+    - `audio-beats` + `beats_int8_checkpoint` SET (package-5 spec D6, Task 5,
+      added in THIS commit): same format + exactly ONE extra `beats_int8_
+      checkpoint=` line, inserted right after `beats_checkpoint=` -- scoped to
+      beats variants ONLY (`_is_beats_variant`: `audio-beats`/`fusion-beats`)
+      and ONLY when the int8 path is actually set at all; the UNSET case is
+      covered by a separate dedicated test (`test_cache_fingerprint_beats_
+      int8_checkpoint_unset_is_byte_identical_to_pre_task5_format`), which
+      independently reconstructs the SAME pre-Task-5 payload rather than
+      duplicating another opaque hex literal here. No cache-migration is
+      needed for the unset case: every existing `results/cache/*--audio-
+      beats.npz`/`*--fusion-beats.npz` entry was written under a
+      `beats_int8_checkpoint=None` config, so its fingerprint is UNCHANGED by
+      this addition (proven by that dedicated test, and by every OTHER golden
+      pin above staying untouched). Setting `ROWII_BEATS_INT8_CHECKPOINT` for
+      the FIRST time is a deliberate, one-time fork: the very next
+      `prepare_run` call for that (run, beats-variant) pair computes a
+      DIFFERENT fingerprint, misses the existing fp32-computed cache, and
+      recomputes into a fresh entry -- expected and intended (the int8
+      embeddings genuinely differ numerically from fp32's), not a bug.
 
     Any future change to `_cache_fingerprint`'s payload must consciously update
     these constants AND deliberately migrate/invalidate the on-disk caches -- a
@@ -776,6 +909,10 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
         data_root=tmp_path, results_root=tmp_path,
         student_checkpoint=Path("/fixed/student.pt"),
     )
+    cfg_beats_int8 = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        beats_int8_checkpoint=Path("/fixed/beats_int8.pt"),
+    )
 
     assert pipeline._cache_fingerprint(run, "audio", cfg_plain) == (
         "1f9c34523161e0dcd58de6ab3f55da9f321d35304588d786aab8ba06a49513c0"
@@ -789,6 +926,12 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
     assert pipeline._cache_fingerprint(run, "audio-student", cfg_student) == (
         "b7d7e12e85c315ddb1bd486fe25d217e81cc08a425105eca58306d62aaedc578"
     ), "audio-student payload shape changed (expected: pre-T4 format + ONE student_checkpoint line)"
+    assert pipeline._cache_fingerprint(run, "audio-beats", cfg_beats_int8) == (
+        "71010e76d13ab3b70bf7d44df6bb41113f7c2f1bec9bbb5efa8e60c71a585b92"
+    ), (
+        "audio-beats+int8 payload shape changed (expected: pre-T5 format + ONE "
+        "beats_int8_checkpoint line)"
+    )
 
 
 def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:

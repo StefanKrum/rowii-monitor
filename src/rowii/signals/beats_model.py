@@ -28,8 +28,9 @@ needs and nothing from the reference wrapper's training/LoRA paths.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import torch
@@ -47,6 +48,70 @@ _FBANK_STD = 6.55582
 """Global fbank normalisation constants from the official `BEATs.preprocess`
 (`rowii.vendor.beats.BEATs.BEATs.preprocess`'s own defaults) -- fixed statistics
 baked into how the checkpoint was pretrained, not something to refit per dataset."""
+
+_QUANTIZED_ENGINE_PREFERENCE: tuple[str, ...] = ("fbgemm", "x86", "qnnpack")
+"""Preference order for `torch.backends.quantized.engine` (`select_quantized_
+engine`): `"fbgemm"`/`"x86"` are the x86 CPU kernels PyTorch ships for
+`torch.ao.quantization.quantize_dynamic` -- this project's actual deployment
+target (an x86-64 on-premise server, design spec D6); `"qnnpack"` (ARM/
+mobile-oriented) is the fallback that lets the SAME code path work on this
+project's own Apple Silicon dev machines. `torch.backends.quantized.engine`
+defaults to `"none"`, and BOTH quantizing (`scripts/quantize_beats.py`) and
+merely `torch.load`-ing (never mind running) a previously-saved dynamically-
+quantized module (`load_quantized_beats_model` below, in a FRESH process
+where nothing has set this yet) raise `RuntimeError` ("Unknown qengine" /
+"NoQEngine") unless this is set to one of `torch.backends.quantized.
+supported_engines` FIRST -- a real, verified-by-hand finding (not documented
+anywhere in the design spec): unpickling a dynamically-quantized `nn.Linear`'s
+packed weight dispatches through the SAME backend-engine selection
+`quantize_dynamic` itself does."""
+
+
+def select_quantized_engine(supported: Sequence[str] | None = None) -> str:
+    """The best available `torch.backends.quantized.engine` value for this
+    machine (see `_QUANTIZED_ENGINE_PREFERENCE`'s docstring for why this
+    selection needs to exist at all). Callers assign the result to `torch.
+    backends.quantized.engine` themselves, BEFORE `torch.ao.quantization.
+    quantize_dynamic` (`scripts/quantize_beats.py`) or `torch.load`-ing a
+    previously-quantized module (`load_quantized_beats_model` below).
+
+    Args:
+        supported: Override for `torch.backends.quantized.supported_engines`
+            (tests only -- this torch attribute cannot itself be
+            monkeypatched: `torch.backends.quantized`'s own
+            `_SupportedQEnginesProp.__set__` unconditionally raises
+            `RuntimeError("Assignment not supported")`, since it reflects
+            what this torch BUILD was actually compiled with, not process
+            state). `None` (every real caller) reads the genuine value.
+
+    Returns:
+        The first of `_QUANTIZED_ENGINE_PREFERENCE` present in the supported
+        list; if neither preferred engine is present (a torch build with only
+        exotic/future backends), the first supported entry other than the
+        always-present `"none"` sentinel.
+
+    Raises:
+        RuntimeError: the supported list contains nothing but `"none"` -- this
+            torch build was compiled without ANY quantized CPU backend, so
+            INT8 dynamic quantization is unavailable regardless of preference.
+    """
+    import torch
+
+    if supported is not None:
+        engines = list(supported)
+    else:
+        engines = torch.backends.quantized.supported_engines
+    for preferred in _QUANTIZED_ENGINE_PREFERENCE:
+        if preferred in engines:
+            return preferred
+    for engine in engines:
+        if engine != "none":
+            return str(engine)
+    raise RuntimeError(
+        f"no usable torch quantized backend engine on this machine (supported: "
+        f"{engines!r}) -- INT8 dynamic quantization needs fbgemm/x86/qnnpack "
+        "compiled into this torch build"
+    )
 
 
 def load_beats_model(checkpoint: Path, device: torch.device) -> BEATs:
@@ -83,6 +148,70 @@ def load_beats_model(checkpoint: Path, device: torch.device) -> BEATs:
     model = BEATs(cfg)
     model.load_state_dict(state["model"])
     model.to(device)
+    model.eval()
+    return model
+
+
+def load_quantized_beats_model(checkpoint: Path) -> BEATs:
+    """Load a `scripts/quantize_beats.py`-produced quantized-module pickle
+    from *checkpoint*, in eval mode, on CPU (design spec D6).
+
+    Unlike `load_beats_model` (which reconstructs a `BEATs` instance from a
+    `{"cfg", "model"}` state-dict checkpoint), this function `torch.load`s the
+    QUANTIZED MODULE OBJECT ITSELF. `torch.ao.quantization.quantize_dynamic`'s
+    dynamically-quantized `nn.Linear` submodules (`torch.ao.nn.quantized.
+    dynamic.Linear`) pack their int8 weight plus a separate scale/zero-point
+    into an opaque `LinearPackedParams` object, not a plain tensor a `state_
+    dict` round trip alone can reconstruct -- so `scripts/quantize_beats.py`
+    pickles the whole module (`torch.save(quantized_module, path)`) instead
+    of saving `{"cfg", "model"}`, and this is the dedicated counterpart
+    loader (mirrors `load_beats_model`'s/`rowii.tfc.wrapper.load_tfc_model`'s/
+    `rowii.adapt.student.load_student_model`'s own "one loader function per
+    checkpoint format" convention).
+
+    Always CPU -- no *device* argument, unlike `load_beats_model`: dynamically
+    quantized Linear kernels are a CPU-only PyTorch backend (no MPS/CUDA
+    dynamic-quantization support in eager mode), which happens to match this
+    project's own deployment target for the compact/quantized pole (an
+    on-premise server with no GPU, design spec D6) -- there is no other
+    device this loader could sensibly target.
+
+    Sets `torch.backends.quantized.engine` (`select_quantized_engine`) BEFORE
+    `torch.load` -- see `_QUANTIZED_ENGINE_PREFERENCE`'s docstring for the
+    verified-by-hand rationale (unpickling a `LinearPackedParams` dispatches
+    through the same backend-engine selection `quantize_dynamic` itself does,
+    and fails with a bare `RuntimeError` otherwise).
+
+    Args:
+        checkpoint: Path to a `.pt` file written by `torch.save(quantized_
+            module, path)` (`scripts/quantize_beats.py`'s own output format).
+
+    Returns:
+        The unpickled `BEATs` module (the SAME top-level class `load_beats_
+        model` returns -- `quantize_dynamic` only swaps `nn.Linear` LEAVES for
+        quantized counterparts, never the enclosing module's own type or its
+        OTHER submodules' callable surface, verified by hand -- so every
+        non-Linear stage `BeatsFeaturizer`'s `_RealBeatsEncoder.extract`/
+        `BEATs.extract_features` calls, e.g. `patch_embedding`/`layer_norm`/
+        `encoder`, is exactly the same attribute path as the fp32 model),
+        `.eval()`'d, on CPU.
+
+    Raises:
+        FileNotFoundError: if *checkpoint* does not exist (mirrors `load_
+            beats_model`'s/`load_tfc_model`'s/`load_student_model`'s own
+            convention -- names the exact path in the message).
+    """
+    import torch
+
+    if not checkpoint.exists():
+        raise FileNotFoundError(f"quantized BEATs checkpoint not found: {checkpoint}")
+
+    torch.backends.quantized.engine = select_quantized_engine()
+    # torch.load's return type is untyped (Any) to mypy; the runtime type is
+    # always the pickled BEATs instance quantize_beats.py itself saved (see
+    # this function's own docstring on why the enclosing module type is
+    # unaffected by quantize_dynamic).
+    model = cast("BEATs", torch.load(checkpoint, map_location="cpu", weights_only=False))
     model.eval()
     return model
 

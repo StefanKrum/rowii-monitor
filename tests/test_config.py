@@ -12,6 +12,7 @@ def test_defaults_without_env() -> None:
     assert cfg.tfc_audio_checkpoint is None
     assert cfg.tfc_vib_checkpoint is None
     assert cfg.student_checkpoint is None
+    assert cfg.beats_int8_checkpoint is None
 
 
 def test_gt_rules_speed_nominal_rpm_matches_measured_plateau() -> None:
@@ -64,3 +65,27 @@ def test_student_checkpoint_env_override() -> None:
         env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_STUDENT_CHECKPOINT": "/tmp/student.pt"}
     )
     assert cfg.student_checkpoint == Path("/tmp/student.pt")
+
+
+def test_beats_int8_checkpoint_env_override() -> None:
+    # Mirrors student_checkpoint's own single-field env-driven pattern (package-5
+    # spec D6): the INT8-quantized BEATs module pickle (scripts/quantize_beats.py's
+    # output), independent of beats_checkpoint (the fp32 source it was quantized
+    # FROM -- both may be set together, see
+    # test_beats_int8_checkpoint_env_overrides_independently_of_beats_checkpoint below).
+    cfg = load_config(
+        env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_BEATS_INT8_CHECKPOINT": "/tmp/beats_int8.pt"}
+    )
+    assert cfg.beats_int8_checkpoint == Path("/tmp/beats_int8.pt")
+
+
+def test_beats_int8_checkpoint_env_overrides_independently_of_beats_checkpoint() -> None:
+    cfg = load_config(
+        env={
+            "ROWII_DATA_ROOT": "/tmp/x",
+            "ROWII_BEATS_CHECKPOINT": "/tmp/beats.pt",
+            "ROWII_BEATS_INT8_CHECKPOINT": "/tmp/beats_int8.pt",
+        }
+    )
+    assert cfg.beats_checkpoint == Path("/tmp/beats.pt")
+    assert cfg.beats_int8_checkpoint == Path("/tmp/beats_int8.pt")
