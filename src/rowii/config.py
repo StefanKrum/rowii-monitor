@@ -122,6 +122,15 @@ class Config:
     own single-field env-driven pattern otherwise). Consumed by `rowii.pipeline.
     _featurizer_for_stream`'s beats-variant dispatch (`"audio-beats"`/
     `"fusion-beats"`) as `BeatsFeaturizer`'s `int8_model_path` constructor arg."""
+    xattn_checkpoint: Path | None = None
+    """Cross-attention fusion-head checkpoint (`ROWII_XATTN_CHECKPOINT`, Step-2
+    package-5 spec D8) -- a `scripts/train_xattn.py`-produced
+    `{"cfg","model","run","vib_dim","epochs"}` checkpoint backing
+    `scripts/run_step2.py`'s `--xattn-fusion` view (the design chapter's third
+    fusion level). Single-field env-driven pattern like `student_checkpoint`;
+    consumed only by the run_step2 view (no pipeline variant of its own -- the
+    joint embedding is computed from the fusion cache's vibration columns plus
+    the audio-beats cache at view time)."""
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -135,6 +144,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     tfc_vib_ckpt = merged.get("ROWII_TFC_VIB_CHECKPOINT") or None
     student_ckpt = merged.get("ROWII_STUDENT_CHECKPOINT") or None
     beats_int8_ckpt = merged.get("ROWII_BEATS_INT8_CHECKPOINT") or None
+    xattn_ckpt = merged.get("ROWII_XATTN_CHECKPOINT") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
@@ -143,4 +153,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         tfc_vib_checkpoint=Path(tfc_vib_ckpt).expanduser() if tfc_vib_ckpt else None,
         student_checkpoint=Path(student_ckpt).expanduser() if student_ckpt else None,
         beats_int8_checkpoint=Path(beats_int8_ckpt).expanduser() if beats_int8_ckpt else None,
+        xattn_checkpoint=Path(xattn_ckpt).expanduser() if xattn_ckpt else None,
     )
