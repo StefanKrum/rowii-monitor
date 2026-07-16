@@ -126,22 +126,24 @@ def inject_lora(
 ) -> int:
     """Replaces every `nn.Linear` in *module* whose attribute name is in
     *target_names* AND whose parent's qualified `named_modules()` path
-    CONTAINS `"self_attn"` with a `LoraLinear` wrapping it (same *r*/*alpha*
-    for every replacement), in place.
+    contains `"self_attn"` as a whole PATH COMPONENT with a `LoraLinear`
+    wrapping it (same *r*/*alpha* for every replacement), in place.
 
-    The `"self_attn"` check is a plain substring test against the parent's
-    dot-joined path string (e.g. `"encoder.layers.0.self_attn"` contains
-    it; a top-level attribute's parent path is `""`, which never does) --
-    this is what stops a same-named Linear somewhere unrelated (e.g.
-    `model.unrelated` in `tests/test_adapt_lora.py`'s `_TinyAttnModel`, whose
-    parent path is `""`) from ever matching. Since `"self_attn"` itself
-    contains no `.`, a match can only ever occur within a single path
-    component, never by accidentally spanning two components across a `.`
-    boundary -- so in practice this coincides with "one path component
-    equals `self_attn`" for every structure this project actually walks
-    (the vendored BEATs encoder and this test suite's stand-in both use the
-    exact component name `self_attn`, never a longer name that merely
-    contains it as a substring).
+    The `"self_attn"` check is COMPONENT-EXACT: the parent's dot-joined
+    path is split on `"."` and one whole segment must equal `"self_attn"`
+    (`"encoder.layers.0.self_attn"` matches; a top-level attribute's parent
+    path is `""`, whose only "segment" is `""`, so it never does). A bare
+    substring test against the joined path would over-match parents whose
+    names merely CONTAIN `"self_attn"` -- not a hypothetical: the vendored
+    `TransformerSentenceEncoderLayer` itself carries a sibling module named
+    `self_attn_layer_norm` (a `LayerNorm`, hence no Linear children on the
+    real model, which is the only reason a substring test happens not to
+    misfire there today; any structure hanging a `q_proj` Linear under such
+    a name would be silently injected). `tests/test_adapt_lora.py::
+    test_inject_skips_substring_decoy_parents` pins the component-exact
+    semantics against exactly those decoys (`self_attn_layer_norm` and
+    `not_self_attn_thing`, both carrying a `q_proj` Linear child that must
+    stay untouched).
 
     Matching targets are collected into a list FIRST (`list(module.
     named_modules())`, fully materialized) and only replaced (via `setattr`
@@ -167,7 +169,7 @@ def inject_lora(
         if not isinstance(child, torch.nn.Linear):
             continue
         parent_path, attr_name = _parent_path_and_attr(name)
-        if attr_name in target_names and "self_attn" in parent_path:
+        if attr_name in target_names and "self_attn" in parent_path.split("."):
             parent = _resolve_parent(module, parent_path)
             targets.append((parent, attr_name, child))
 

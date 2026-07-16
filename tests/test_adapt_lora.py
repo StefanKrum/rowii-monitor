@@ -41,6 +41,34 @@ class _TinyAttnModel(torch.nn.Module):
         return a.q_proj(x) + a.v_proj(x) + a.k_proj(x) + self.unrelated(x)
 
 
+class _DecoyAttnModel(torch.nn.Module):
+    """Adversarial naming (Task-1 review): decoy parents whose names merely
+    CONTAIN "self_attn" as a substring, each carrying a Linear child named
+    `q_proj` -- only the REAL `self_attn`'s q_proj may be wrapped. The
+    `self_attn_layer_norm` decoy name is not hypothetical: the vendored
+    `TransformerSentenceEncoderLayer` carries a sibling module with exactly
+    that name (a LayerNorm, hence no Linear children on the real model --
+    which is why a substring match happens not to misfire there TODAY, and
+    why this test pins the component-exact semantics instead of relying on
+    that accident). The real `self_attn` here carries ONLY q_proj (no
+    v_proj), so the expected inject count is unambiguously 1.
+    """
+
+    def __init__(self):
+        super().__init__()
+        attn = torch.nn.Module()
+        attn.q_proj = torch.nn.Linear(8, 8)
+        decoy_norm = torch.nn.Module()
+        decoy_norm.q_proj = torch.nn.Linear(8, 8)
+        layer = torch.nn.Module()
+        layer.self_attn = attn
+        layer.self_attn_layer_norm = decoy_norm
+        self.layers = torch.nn.ModuleList([layer])
+        decoy_top = torch.nn.Module()
+        decoy_top.q_proj = torch.nn.Linear(8, 8)
+        self.not_self_attn_thing = decoy_top
+
+
 def test_inject_targets_only_qv_under_self_attn():
     m = _TinyAttnModel()
     n = inject_lora(m, r=2)
@@ -48,6 +76,17 @@ def test_inject_targets_only_qv_under_self_attn():
     assert isinstance(m.layers[0].self_attn.q_proj, LoraLinear)
     assert isinstance(m.layers[0].self_attn.k_proj, torch.nn.Linear)
     assert isinstance(m.unrelated, torch.nn.Linear)
+
+
+def test_inject_skips_substring_decoy_parents():
+    m = _DecoyAttnModel()
+    n = inject_lora(m, r=2)
+    assert n == 1  # ONLY layers.0.self_attn.q_proj; both decoys untouched
+    assert isinstance(m.layers[0].self_attn.q_proj, LoraLinear)
+    assert isinstance(m.layers[0].self_attn_layer_norm.q_proj, torch.nn.Linear)
+    assert not isinstance(m.layers[0].self_attn_layer_norm.q_proj, LoraLinear)
+    assert isinstance(m.not_self_attn_thing.q_proj, torch.nn.Linear)
+    assert not isinstance(m.not_self_attn_thing.q_proj, LoraLinear)
 
 
 def test_injection_starts_as_identity():

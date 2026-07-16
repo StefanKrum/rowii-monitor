@@ -50,6 +50,23 @@ def masked_patch_loss(
     """Masked-frame reconstruction MSE (module docstring: the adaptation
     proxy objective).
 
+    Gradient-flow caveat for test authors (Task-1 review note): with a
+    purely POSITION-WISE `encoder_forward` (e.g. this module's own test
+    suite's bare `nn.Linear`, applied independently per frame), the
+    encoder's WEIGHT gradients are exactly zero -- the loss reads
+    predictions only at masked positions, where the input frame is zeroed,
+    and `d(Wx + b)/dW` is an outer product with `x = 0` there; only bias
+    terms (and `head`, whose input is the encoder's nonzero bias output)
+    receive gradient. `tests/test_adapt_objective.py::
+    test_loss_decreases_with_training` still passes (bias + head training
+    suffices for a decreasing loss), but no test with a position-wise
+    encoder can prove that ADAPTER weights train. A real attention encoder
+    mixes information across positions (a masked query attends to unmasked
+    keys/values), so LoRA q/v adapter weights DO receive gradients there --
+    Task 3's integration tests against the real vendored encoder must
+    assert nonzero LoRA-adapter gradients after a backward pass, precisely
+    because the unit tests here structurally cannot.
+
     Args:
         encoder_forward: Maps a `(B, frames, mels)` fbank (already
             frame-masked by this function) to `(B, frames, D)` per-frame
