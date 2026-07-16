@@ -27,10 +27,12 @@ using this module's `PreparedRun.grid`/`valid_mask`.
 On-disk feature cache (Step-2 Task S1): `prepare_run(..., use_cache=True)` (the default)
 persists its result to `results/cache/<run.name>--<variant>.npz`, keyed by a sha256
 fingerprint of everything that determines the output (variant, window duration, every
-burst file's name+size, and the beats-checkpoint path) -- see `_cache_fingerprint`. A
-fingerprint mismatch (or a missing/corrupt cache file) is treated as a plain cache miss:
-recompute, then overwrite. `use_cache=False` bypasses the cache entirely (never reads,
-never writes) -- wired to `scripts/run_step1.py --no-cache`.
+burst file's name+size, the beats-checkpoint path, and -- for the two tfc variants,
+package-4 spec D4 -- the ONE tfc checkpoint path relevant to that variant) -- see
+`_cache_fingerprint`. A fingerprint mismatch (or a missing/corrupt cache file) is
+treated as a plain cache miss: recompute, then overwrite. `use_cache=False` bypasses
+the cache entirely (never reads, never writes) -- wired to `scripts/run_step1.py
+--no-cache`.
 """
 from __future__ import annotations
 
@@ -58,6 +60,11 @@ if TYPE_CHECKING:
     # lazily, only when an actual beats variant runs).
     from rowii.signals.beats import BeatsFeaturizer
 
+    # TfcFeaturizer (package-4 spec D4) shares BeatsFeaturizer's "optional [beats]
+    # extra" story -- same TYPE_CHECKING-only import, same lazy real import inside
+    # `_featurizer_for_stream`, only when an actual tfc variant runs.
+    from rowii.tfc.wrapper import TfcFeaturizer
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -82,18 +89,29 @@ _BEATS_INSTALL_HINT = (
     'install extra: pip install -e ".[beats]" and set ROWII_BEATS_CHECKPOINT'
 )
 
+_TFC_INSTALL_HINT = 'install extra: pip install -e ".[beats]"'
+"""TF-C (package-4 spec D4) reuses the SAME `[beats]` extra as BEATs (both need
+torch) -- but unlike `_BEATS_INSTALL_HINT`, this hint deliberately does NOT also
+name a checkpoint env var: TF-C has TWO independent checkpoints (`audio-tfc` ->
+`ROWII_TFC_AUDIO_CHECKPOINT`, `vibration-tfc` -> `ROWII_TFC_VIB_CHECKPOINT`), so
+which one to mention depends on the variant -- callers that need a checkpoint-
+specific message name the right env var themselves (mirrors `_featurizer_for_
+stream`'s own beats-checkpoint-None message shape, e.g. `scripts/run_step1.py`'s
+`_import_tfc_or_exit`)."""
+
 
 def _streams_for_variant(variant: str) -> tuple[str, ...]:
     """The stream ids *variant* needs, in the exact order every downstream per-variant
     assembly (`assemble_variant_features`, `_assemble_feature_names`) concatenates
     columns in. Also determines `PreparedRun.segment_ids`' primary stream: the first
     entry is always the first mic stream for every audio-bearing variant (including
-    `"logmel"`, whose ONLY stream is that mic) and the first vib stream for
-    `"vibration"` -- see that field's own docstring.
+    `"logmel"` and `"audio-tfc"`, the latter's ONLY stream being that same mic pair)
+    and the first vib stream for `"vibration"`/`"vibration-tfc"` -- see that field's
+    own docstring.
     """
-    if variant in ("audio", "audio-beats"):
+    if variant in ("audio", "audio-beats", "audio-tfc"):
         return _AUDIO_STREAMS
-    if variant == "vibration":
+    if variant in ("vibration", "vibration-tfc"):
         return _VIB_STREAMS
     if variant in ("fusion", "fusion-beats"):
         return _AUDIO_STREAMS + _VIB_STREAMS
@@ -106,26 +124,51 @@ def _is_beats_variant(variant: str) -> bool:
     return variant in ("audio-beats", "fusion-beats")
 
 
+def _is_tfc_variant(variant: str) -> bool:
+    """Mirrors `_is_beats_variant` (package-4 spec D4): `TfcFeaturizer` is likewise
+    audio/vibration-branch-specific per variant (unlike BEATs, TF-C is NOT
+    audio-only -- `"vibration-tfc"` runs the SAME frozen-embedding contract on the
+    vibration branch, pre-trained separately on CWRU/Paderborn bearing data)."""
+    return variant in ("audio-tfc", "vibration-tfc")
+
+
 def _featurizer_for_stream(
     stream: str, variant: str, cfg: Config
-) -> AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer:
+) -> AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer | TfcFeaturizer:
     """One featurizer instance for *stream*, given *variant*.
 
-    Vibration streams always get a fresh `VibFeaturizer` regardless of
-    variant (there is no "vib-beats" variant -- `BeatsFeaturizer` is
-    audio-branch only per the design). Audio streams get `LogmelFeaturizer`
-    for the `logmel` variant (whose only stream is the primary mic,
+    Vibration streams get a fresh `VibFeaturizer` for every variant EXCEPT
+    `"vibration-tfc"` (package-4 spec D4: unlike BEATs -- audio-branch only
+    per the design, so no "vib-beats" variant ever exists -- TF-C IS
+    pre-trained on both branches separately, so `TfcFeaturizer(checkpoint=
+    cfg.tfc_vib_checkpoint)` is the one case a vibration stream's featurizer
+    depends on *variant* at all). Audio streams get `LogmelFeaturizer` for
+    the `logmel` variant (whose only stream is the primary mic,
     `_streams_for_variant`), `BeatsFeaturizer` for the two beats variants,
-    and `AudioFeaturizer` otherwise. One `BeatsFeaturizer` (and therefore
-    one loaded copy of the frozen checkpoint) is constructed PER audio
-    stream, not shared between the two -- mirroring how handcrafted
-    `audio`/`fusion` already construct one `AudioFeaturizer` per stream, at
-    the cost of loading the checkpoint twice for a beats variant that uses
-    both mic streams. This keeps the per-stream featurizer lifecycle uniform
-    across every variant rather than special-casing beats to share a single
-    loaded model.
+    `TfcFeaturizer(checkpoint=cfg.tfc_audio_checkpoint)` for `"audio-tfc"`,
+    and `AudioFeaturizer` otherwise. One `BeatsFeaturizer`/`TfcFeaturizer`
+    (and therefore one loaded copy of the frozen checkpoint) is constructed
+    PER audio stream, not shared between the two -- mirroring how
+    handcrafted `audio`/`fusion` already construct one `AudioFeaturizer` per
+    stream, at the cost of loading the checkpoint twice for a variant that
+    uses both mic streams. This keeps the per-stream featurizer lifecycle
+    uniform across every variant rather than special-casing beats/tfc to
+    share a single loaded model.
+
+    Construction never raises for a tfc variant even when the relevant
+    `cfg.tfc_*_checkpoint` is `None` (unlike the beats branch below, which
+    raises `SystemExit` immediately): `TfcFeaturizer.__init__` never loads a
+    checkpoint eagerly (its own module docstring), so a missing checkpoint
+    only surfaces once `.transform()` actually runs -- callers that want to
+    fail fast, before an expensive sweep starts, use the dedicated script-
+    level guard instead (`scripts/run_step1.py`'s `_import_tfc_or_exit`,
+    mirrored per script).
     """
     if stream not in _AUDIO_STREAMS:
+        if variant == "vibration-tfc":
+            from rowii.tfc.wrapper import TfcFeaturizer
+
+            return TfcFeaturizer(checkpoint=cfg.tfc_vib_checkpoint)
         return VibFeaturizer()
     if variant == "logmel":
         return LogmelFeaturizer()
@@ -137,6 +180,10 @@ def _featurizer_for_stream(
                 f"variant {variant!r} needs ROWII_BEATS_CHECKPOINT set; {_BEATS_INSTALL_HINT}"
             )
         return BeatsFeaturizer(checkpoint=cfg.beats_checkpoint)
+    if variant == "audio-tfc":
+        from rowii.tfc.wrapper import TfcFeaturizer
+
+        return TfcFeaturizer(checkpoint=cfg.tfc_audio_checkpoint)
     return AudioFeaturizer()
 
 
@@ -263,7 +310,9 @@ def _shift_ts_ns(ts_ns: np.ndarray, offset_ns: int) -> np.ndarray:
 def _extract_stream_features(
     files: list[BurstFile],
     grid: WindowGrid,
-    featurizer: AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer,
+    featurizer: (
+        AudioFeaturizer | VibFeaturizer | BeatsFeaturizer | LogmelFeaturizer | TfcFeaturizer
+    ),
     offset_ns: int = 0,
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
@@ -424,18 +473,21 @@ def assemble_variant_features(
 ) -> np.ndarray:
     """Combine per-stream feature matrices into the variant's (W, F) matrix.
 
-    audio/vibration/logmel: `np.hstack` of the variant's stream matrices
-    (z-scoring happens inside `run_detection`; for logmel that is a single
-    primary-mic matrix, hstack of one). fusion(-beats): `fuse()` on the raw audio
-    and vibration matrices (fuse z-scores each side internally before
-    concatenating) -- `run_detection`'s own `zscore` call on already-z-scored
-    fusion input is then an idempotent-ish re-standardization (mean ~0, std ~1
-    already), documented here rather than special-cased, per the brief.
+    audio/vibration/logmel (and their tfc counterparts, package-4 spec D4 --
+    `audio-tfc` mirrors `audio`, `vibration-tfc` mirrors `vibration`, both
+    single-stream-family variants): `np.hstack` of the variant's stream
+    matrices (z-scoring happens inside `run_detection`; for logmel that is a
+    single primary-mic matrix, hstack of one). fusion(-beats): `fuse()` on
+    the raw audio and vibration matrices (fuse z-scores each side internally
+    before concatenating) -- `run_detection`'s own `zscore` call on
+    already-z-scored fusion input is then an idempotent-ish
+    re-standardization (mean ~0, std ~1 already), documented here rather
+    than special-cased, per the brief.
     """
-    if variant in ("audio", "audio-beats"):
+    if variant in ("audio", "audio-beats", "audio-tfc"):
         mats = [stream_results[s].features for s in _AUDIO_STREAMS]
         return np.hstack(mats)
-    if variant == "vibration":
+    if variant in ("vibration", "vibration-tfc"):
         mats = [stream_results[s].features for s in _VIB_STREAMS]
         return np.hstack(mats)
     if variant in ("fusion", "fusion-beats"):
@@ -491,9 +543,10 @@ class PreparedRun:
     segment_ids: np.ndarray
     """(W,) int64 -- index of the 12-min source burst segment (file) that contributed
     a window's samples, read off the PRIMARY stream of the variant: the first mic
-    stream (`RAWGeneratorMic__0`) for audio/audio-beats/fusion/fusion-beats/logmel
-    (logmel's ONLY stream is that mic), the first vib stream (`RAWGeneratorVib__2`)
-    for vibration -- i.e. `_streams_for_variant(
+    stream (`RAWGeneratorMic__0`) for audio/audio-beats/audio-tfc/fusion/fusion-beats/
+    logmel (logmel's ONLY stream is that mic; audio-tfc mirrors audio, package-4 spec
+    D4), the first vib stream (`RAWGeneratorVib__2`) for vibration/vibration-tfc
+    (the latter mirroring vibration) -- i.e. `_streams_for_variant(
     variant)[0]` in every case (that tuple's own ordering already puts the right
     stream first for every variant, so no separate lookup is needed). Segments are
     indexed 0-based, in ascending start-time order, per that ONE stream's own file
@@ -531,23 +584,38 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     file in the run (name + byte size, sorted -- catches both a file being swapped for
     different content, most likely to change size, and files being added/removed;
     scoped to the whole run rather than just the variant's own streams so this stays
-    correct even if `_streams_for_variant`'s mapping ever changes), and the one `cfg`
-    field that changes what a featurizer computes (`cfg.beats_checkpoint`'s path,
-    included unconditionally so a handcrafted-variant cache is never silently reused
-    after switching to/from a beats checkpoint). `cfg.detect`/`cfg.gt` are deliberately
-    excluded: they govern clustering/GT labeling, never feature EXTRACTION, so
-    changing them must not invalidate this cache.
+    correct even if `_streams_for_variant`'s mapping ever changes), and the `cfg`
+    fields that change what a featurizer computes: `cfg.beats_checkpoint`'s path,
+    included unconditionally (every variant's payload carries it, even a handcrafted
+    one) so a handcrafted-variant cache is never silently reused after switching
+    to/from a beats checkpoint; and, for the two tfc variants (package-4 spec D4),
+    the ONE `cfg.tfc_*_checkpoint` path relevant to *variant* itself --
+    `cfg.tfc_audio_checkpoint` for `"audio-tfc"`, `cfg.tfc_vib_checkpoint` for
+    `"vibration-tfc"`, blank for every other variant (including the OTHER tfc
+    variant). Deliberately narrower than the beats field: TF-C has TWO independent
+    checkpoints rather than one, so folding both in unconditionally for every
+    variant would force a needless recompute of, say, every `audio`/`fusion`/
+    `vibration-tfc` cache entry whenever a user merely points `ROWII_TFC_AUDIO_
+    CHECKPOINT` at a new file -- scoping each field to its own variant keeps a
+    checkpoint change from invalidating caches that never depended on it.
+    `cfg.detect`/`cfg.gt` are deliberately excluded: they govern clustering/GT
+    labeling, never feature EXTRACTION, so changing them must not invalidate this
+    cache.
     """
     file_entries = sorted(
         f"{bf.path.name}:{bf.path.stat().st_size}"
         for files in run.files.values()
         for bf in files
     )
+    tfc_audio_checkpoint = cfg.tfc_audio_checkpoint if variant == "audio-tfc" else None
+    tfc_vib_checkpoint = cfg.tfc_vib_checkpoint if variant == "vibration-tfc" else None
     payload = "\n".join(
         [
             f"variant={variant}",
             f"window_s={cfg.window.window_s!r}",
             f"beats_checkpoint={cfg.beats_checkpoint or ''}",
+            f"tfc_audio_checkpoint={tfc_audio_checkpoint or ''}",
+            f"tfc_vib_checkpoint={tfc_vib_checkpoint or ''}",
             *file_entries,
         ]
     )
@@ -672,9 +740,11 @@ def prepare_run(
     Args:
         run: The `Run` (burst files by stream) to prepare.
         variant: One of the concrete variant strings (`"audio"`, `"audio-beats"`,
-            `"vibration"`, `"fusion"`, `"fusion-beats"`, `"logmel"`).
+            `"audio-tfc"`, `"vibration"`, `"vibration-tfc"`, `"fusion"`,
+            `"fusion-beats"`, `"logmel"`).
         cfg: Project configuration (`cfg.window.window_s`, `cfg.beats_checkpoint`,
-            `cfg.results_root` for the cache location).
+            `cfg.tfc_audio_checkpoint`/`cfg.tfc_vib_checkpoint`, `cfg.results_root`
+            for the cache location).
         betriebsdaten: Accepted for signature symmetry with callers that already have
             this list on hand when they call `prepare_run` (`scripts/run_step1.py`,
             and Step-2's future `run_step2.py`) -- NOT used by this function itself:

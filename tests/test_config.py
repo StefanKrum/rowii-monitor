@@ -9,6 +9,8 @@ def test_defaults_without_env() -> None:
     assert cfg.detect.n_states == 4
     assert cfg.detect.self_transition == 0.98
     assert cfg.beats_checkpoint is None
+    assert cfg.tfc_audio_checkpoint is None
+    assert cfg.tfc_vib_checkpoint is None
 
 
 def test_gt_rules_speed_nominal_rpm_matches_measured_plateau() -> None:
@@ -28,3 +30,27 @@ def test_env_overrides() -> None:
     cfg = load_config(env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_BEATS_CHECKPOINT": "/tmp/b.pt"})
     assert cfg.data_root == Path("/tmp/x")
     assert cfg.beats_checkpoint == Path("/tmp/b.pt")
+
+
+def test_tfc_checkpoint_env_overrides() -> None:
+    # Mirrors beats_checkpoint's own env-driven pattern exactly (package-4 spec D4):
+    # two independent checkpoints (audio vs vibration branch), each its own env var.
+    cfg = load_config(
+        env={
+            "ROWII_DATA_ROOT": "/tmp/x",
+            "ROWII_TFC_AUDIO_CHECKPOINT": "/tmp/tfc_audio.pt",
+            "ROWII_TFC_VIB_CHECKPOINT": "/tmp/tfc_vib.pt",
+        }
+    )
+    assert cfg.tfc_audio_checkpoint == Path("/tmp/tfc_audio.pt")
+    assert cfg.tfc_vib_checkpoint == Path("/tmp/tfc_vib.pt")
+
+
+def test_tfc_checkpoint_env_overrides_independently() -> None:
+    # Setting only ONE of the two must not affect the other -- they are independent
+    # fields, not a shared/derived pair.
+    cfg = load_config(
+        env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_TFC_AUDIO_CHECKPOINT": "/tmp/tfc_audio.pt"}
+    )
+    assert cfg.tfc_audio_checkpoint == Path("/tmp/tfc_audio.pt")
+    assert cfg.tfc_vib_checkpoint is None

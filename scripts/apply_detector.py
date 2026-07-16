@@ -54,8 +54,10 @@ from rowii.io.dataset import (  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _TFC_INSTALL_HINT,
     PreparedRun,
     _is_beats_variant,
+    _is_tfc_variant,
     prepare_run,
 )
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
@@ -69,7 +71,8 @@ ClustererName = Literal["kmeans", "gmm"]
 """Matches `rowii.state.detect.FittedDetector.fit`'s own `clusterer` parameter type."""
 
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio-tfc", "vibration-tfc", "logmel",
 )
 """Duplicated from `scripts/run_step2.py`'s own `_VARIANT_CHOICES` (and `scripts/
 run_step2_scarcity.py`'s) -- a script must not depend on a sibling script's
@@ -140,6 +143,26 @@ def _import_beats_or_exit() -> None:
         raise SystemExit(
             f"BEATs featurizer not available ({exc}); {_BEATS_INSTALL_HINT}"
         ) from exc
+
+
+def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
+    """Mirrors `scripts/run_step1.py`'s own private helper of the same name
+    (duplicated, not imported -- see this module's own docstring). Extends the
+    beats-import-guard pattern (package-4 spec D4): torch missing (checked first)
+    -> SystemExit naming the shared `[beats]` extra; else the ONE checkpoint
+    relevant to *variant* itself missing -> SystemExit naming its own env var."""
+    try:
+        import rowii.tfc.wrapper  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"TF-C featurizer not available ({exc}); {_TFC_INSTALL_HINT}"
+        ) from exc
+    if variant == "audio-tfc":
+        checkpoint, env_var = cfg.tfc_audio_checkpoint, "ROWII_TFC_AUDIO_CHECKPOINT"
+    else:
+        checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
+    if checkpoint is None:
+        raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if _is_beats_variant(args.variant):
         _import_beats_or_exit()
+    if _is_tfc_variant(args.variant):
+        _import_tfc_or_exit(cfg, args.variant)
 
     fit_prepared = prepare_run(fit_run, args.variant, cfg, use_cache=True)
     detector, mapping = _fit_detector_and_mapping(

@@ -48,8 +48,10 @@ from rowii.io.dataset import (  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _TFC_INSTALL_HINT,
     PreparedRun,
     _is_beats_variant,
+    _is_tfc_variant,
     prepare_run,
 )
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
@@ -84,7 +86,9 @@ ClustererName = Literal["kmeans", "gmm"]
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio",
     "audio-beats",
+    "audio-tfc",
     "vibration",
+    "vibration-tfc",
     "fusion",
     "fusion-beats",
     "logmel",
@@ -95,7 +99,9 @@ _CLUSTERER_CHOICES: tuple[str, ...] = ("kmeans", "gmm", "all")
 _CONCRETE_VARIANTS: tuple[str, ...] = (
     "audio",
     "audio-beats",
+    "audio-tfc",
     "vibration",
+    "vibration-tfc",
     "fusion",
     "fusion-beats",
     # "logmel" is deliberately NOT expanded by `--variant all` (though it stays
@@ -103,7 +109,10 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     # as a Step-2 autoencoder INPUT, not a Step-1 clustering candidate -- a
     # 3136-dim z-scored matrix into the full-covariance GMM is statistically
     # underdetermined at typical per-run window counts (and measured at 4.6-8.2 s
-    # per fit even on trivial synthetic data).
+    # per fit even on trivial synthetic data). audio-tfc/vibration-tfc draw the
+    # OPPOSITE conclusion (package-4 spec D4): TF-C's 256-d embedding IS
+    # well-conditioned for the GMM, so both ARE expanded here, same treatment as
+    # the handcrafted/beats variants.
 )
 _CONCRETE_CLUSTERERS: tuple[ClustererName, ...] = ("kmeans", "gmm")
 _K_SWEEP_VALUES: tuple[int, ...] = (3, 4, 5, 6)
@@ -480,6 +489,8 @@ def run_combo(
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
+    if _is_tfc_variant(variant):
+        _import_tfc_or_exit(cfg, variant)
 
     prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     result = _detect_and_report(
@@ -509,6 +520,8 @@ def run_combo_k_sweep(
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
+    if _is_tfc_variant(variant):
+        _import_tfc_or_exit(cfg, variant)
 
     prepared = _prepare_run_features(run, variant, cfg, betriebsdaten, use_cache=use_cache)
     rows = []
@@ -529,6 +542,31 @@ def _import_beats_or_exit() -> None:
         raise SystemExit(
             f"BEATs featurizer not available ({exc}); {_BEATS_INSTALL_HINT}"
         ) from exc
+
+
+def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
+    """Extends `_import_beats_or_exit`'s pattern (package-4 spec D4): fails fast,
+    BEFORE `_prepare_run_features` starts an expensive extraction, on either of two
+    problems `rowii.pipeline._featurizer_for_stream`'s own tfc dispatch would
+    otherwise only surface much later (torch missing is never even checked there --
+    `TfcFeaturizer` construction never raises; a missing checkpoint only surfaces
+    once `.transform()` actually runs on the first full window). Torch is checked
+    FIRST (a machine with neither problem should see the more fundamental one), then
+    the ONE checkpoint relevant to *variant* itself -- `cfg.tfc_audio_checkpoint` for
+    `"audio-tfc"`, `cfg.tfc_vib_checkpoint` for `"vibration-tfc"`.
+    """
+    try:
+        import rowii.tfc.wrapper  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"TF-C featurizer not available ({exc}); {_TFC_INSTALL_HINT}"
+        ) from exc
+    if variant == "audio-tfc":
+        checkpoint, env_var = cfg.tfc_audio_checkpoint, "ROWII_TFC_AUDIO_CHECKPOINT"
+    else:
+        checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
+    if checkpoint is None:
+        raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,18 @@ class Config:
     gt: GtRules = field(default_factory=GtRules)
     detect: DetectConfig = field(default_factory=DetectConfig)
     beats_checkpoint: Path | None = None
+    tfc_audio_checkpoint: Path | None = None
+    """Frozen TF-C audio-branch checkpoint (`ROWII_TFC_AUDIO_CHECKPOINT`, package-4
+    spec D4) -- mirrors `beats_checkpoint`'s own env-driven pattern exactly, but as
+    two independent fields (`tfc_audio_checkpoint`/`tfc_vib_checkpoint`) rather than
+    one: unlike BEATs (audio-branch only), TF-C is pre-trained separately per branch
+    (MIMII for audio, CWRU/Paderborn bearing vibration for vibration), so the two
+    checkpoints are unrelated files and must be settable independently. Consumed by
+    `rowii.pipeline._featurizer_for_stream`'s `"audio-tfc"` dispatch."""
+    tfc_vib_checkpoint: Path | None = None
+    """Frozen TF-C vibration-branch checkpoint (`ROWII_TFC_VIB_CHECKPOINT`) -- see
+    `tfc_audio_checkpoint`'s docstring. Consumed by `rowii.pipeline.
+    _featurizer_for_stream`'s `"vibration-tfc"` dispatch."""
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -100,8 +112,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     if env is not None:
         merged = dict(env)
     ckpt = merged.get("ROWII_BEATS_CHECKPOINT") or None
+    tfc_audio_ckpt = merged.get("ROWII_TFC_AUDIO_CHECKPOINT") or None
+    tfc_vib_ckpt = merged.get("ROWII_TFC_VIB_CHECKPOINT") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
         beats_checkpoint=Path(ckpt).expanduser() if ckpt else None,
+        tfc_audio_checkpoint=Path(tfc_audio_ckpt).expanduser() if tfc_audio_ckpt else None,
+        tfc_vib_checkpoint=Path(tfc_vib_ckpt).expanduser() if tfc_vib_ckpt else None,
     )

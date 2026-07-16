@@ -213,25 +213,35 @@ def test_run_step1_parser_accepts_arbitrary_day_prefixed_run_names() -> None:
     assert args.run == "010726-tu_ph_tu"
 
 
-def test_run_step1_variant_all_excludes_logmel_but_logmel_stays_selectable() -> None:
+def test_run_step1_variant_all_excludes_logmel_but_includes_tfc_variants() -> None:
     # Package-3 spec D3 scopes logmel as a Step-2 autoencoder INPUT, not a Step-1
     # clustering candidate: `--variant all` must NOT sweep it (a 3136-dim z-scored
     # matrix into the full-covariance GMM is statistically underdetermined at typical
     # per-run window counts), while `--variant logmel` stays explicitly selectable.
+    # Package-4 spec D4 draws the OPPOSITE conclusion for audio-tfc/vibration-tfc:
+    # TF-C's 256-d embedding is well-conditioned for the GMM, so both ARE swept by
+    # `--variant all`, same treatment as the handcrafted/beats variants.
     import run_step1
 
     assert "logmel" not in run_step1._CONCRETE_VARIANTS
     assert "logmel" in run_step1._VARIANT_CHOICES
+    assert "audio-tfc" in run_step1._CONCRETE_VARIANTS
+    assert "vibration-tfc" in run_step1._CONCRETE_VARIANTS
+    assert "audio-tfc" in run_step1._VARIANT_CHOICES
+    assert "vibration-tfc" in run_step1._VARIANT_CHOICES
 
     args = run_step1.build_parser().parse_args(["--variant", "logmel"])
     assert args.variant == "logmel"
 
     expanded = run_step1._resolve_choice("all", "all", run_step1._CONCRETE_VARIANTS)
     assert "logmel" not in expanded
+    assert "audio-tfc" in expanded
+    assert "vibration-tfc" in expanded
 
 
 # ---------------------------------------------------------------------------
-# 4. beats variant without the extra installed -> SystemExit with install hint
+# 4. beats/tfc variant without the extra installed (or, for tfc, without a
+# configured checkpoint) -> SystemExit with an install hint / the right env var
 # ---------------------------------------------------------------------------
 
 
@@ -256,6 +266,65 @@ def test_beats_variant_without_extra_raises_systemexit_with_install_hint(monkeyp
     assert "beats" in message
     assert 'pip install -e ".[beats]"' in message
     assert "ROWII_BEATS_CHECKPOINT" in message
+
+
+def test_tfc_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    """Mirrors the beats-extra guard test above, for TF-C's own `_import_tfc_or_exit`
+    (package-4 spec D4): torch missing -> SystemExit naming the shared `[beats]`
+    extra, checked BEFORE the checkpoint -- a machine with neither torch nor a
+    checkpoint configured must report the (more fundamental) missing-extra problem,
+    not a confusing "checkpoint not set" message."""
+    import builtins
+
+    import run_step1
+
+    from rowii.config import Config
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.tfc.wrapper" or name.startswith("rowii.tfc.wrapper."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step1._import_tfc_or_exit(cfg, "audio-tfc")
+
+    message = str(exc_info.value)
+    assert 'pip install -e ".[beats]"' in message
+
+
+@pytest.mark.parametrize(
+    "variant,env_var",
+    [("audio-tfc", "ROWII_TFC_AUDIO_CHECKPOINT"), ("vibration-tfc", "ROWII_TFC_VIB_CHECKPOINT")],
+)
+def test_tfc_variant_without_checkpoint_raises_systemexit_naming_env_var(
+    variant, env_var
+) -> None:
+    """`_import_tfc_or_exit` extends the beats-guard pattern (package-4 spec D4):
+    even with torch importable, a tfc variant with NO checkpoint configured for its
+    OWN branch must exit naming the RIGHT env var (audio-tfc -> AUDIO, vibration-tfc
+    -> VIB -- never the other one)."""
+    import run_step1
+
+    from rowii.config import Config
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))  # both tfc checkpoints None
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step1._import_tfc_or_exit(cfg, variant)
+
+    message = str(exc_info.value)
+    assert env_var in message
+    other_env_var = (
+        "ROWII_TFC_VIB_CHECKPOINT" if env_var == "ROWII_TFC_AUDIO_CHECKPOINT"
+        else "ROWII_TFC_AUDIO_CHECKPOINT"
+    )
+    assert other_env_var not in message
 
 
 # ---------------------------------------------------------------------------
