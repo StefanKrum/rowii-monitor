@@ -222,6 +222,13 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if needs_checkpoint:
             assert checkpoint is not None  # the unset case was skipped above
+            if not checkpoint.is_file():
+                logger.info(
+                    "benchmark_inference: skipping %r -- its checkpoint %s "
+                    "does not exist",
+                    config_name, checkpoint,
+                )
+                continue
             n_params = _count_params(config_name, checkpoint)
             size_mb = checkpoint.stat().st_size / 1e6
         else:

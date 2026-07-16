@@ -75,6 +75,33 @@ def test_torch_configs_skipped_when_checkpoints_unset(
     assert len(skipped) == 4  # all four torch configs skipped, each logged
 
 
+def test_torch_config_with_missing_checkpoint_file_is_skipped(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A SET-but-nonexistent checkpoint env must skip like an unset one (with its
+    own log line), not FileNotFoundError the whole benchmark table away -- the
+    package-5 execution hit exactly this when the student checkpoint had not
+    been produced yet."""
+    import logging
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_STUDENT_CHECKPOINT", str(tmp_path / "missing.pt"))
+    out = tmp_path / "bench"
+    exit_code = benchmark_inference.main(
+        [
+            "--configs", "handcrafted,student", "--n-windows", "4",
+            "--n-batches", "1", "--batch-sizes", "1", "--devices", "cpu",
+            "--out", str(out),
+        ]
+    )
+    assert exit_code == 0
+    table = pd.read_csv(out / "inference.csv")
+    assert set(table["config"]) == {"handcrafted"}
+    skipped = [r.getMessage() for r in caplog.records if "does not exist" in r.getMessage()]
+    assert len(skipped) == 1
+
+
 def test_unknown_config_exits_2(tmp_path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         benchmark_inference.main(
