@@ -977,3 +977,57 @@ candidate lists of k8 and k12 agree strongly with each other (Jaccard 0.667) but
 barely with k4 (0.08–0.11): sub-cluster conditioning surfaces a consistent,
 DIFFERENT candidate population than state-level conditioning — the quantified form
 of package 1's "detected labels beat GT" sub-cluster mechanism.
+
+## Step 2 package-4 evidence (2026-07-16): the TF-C industrial-pretraining pole
+
+Compact TF-C (time+frequency 1-D CNN encoder pair, cross-view NT-Xent; a documented
+simplification of Zhang et al. 2022) pre-trained ONCE offline: `tfc_audio.pt` on
+37,490 normal 1-s windows of MIMII pump 0 dB (final loss 1.96 vs ~6.2 chance level)
+and `tfc_vib.pt` on only **808 windows** of CWRU + Paderborn K001/K002 — the public
+vibration corpora are short recordings, so every vibration-tfc number below carries
+a DATA-FLOOR caveat: it is a floor on what vibration-native SSL could do, not a fair
+test. Variants `audio-tfc` / `vibration-tfc`; digest:
+`.superpowers/sdd/results_digest_p4.md`.
+
+### Industrial pretraining transfers for STATE SEPARATION where general-audio failed
+
+Step-1 state detection on 010726-tu_ph_tu (kmeans, k=4): audio-tfc state-ARI
+**0.907** / accuracy 0.969 and vibration-tfc **0.920** / 0.972 — where frozen BEATs
+historically collapsed to state-ARI ≈ 0.000 on this pipeline. Both trail the
+handcrafted variants by only ~0.02 ARI (audio 0.929 / vibration 0.941 / fusion
+0.930). The kind of pre-training data matters: machine-sound SSL preserves the
+operating-mode structure that AudioSet SSL erased. Bonus: vibration-tfc posts the
+best load-alignment ARI in the whole grid (0.697 vs handcrafted vibration's 0.491)
+— sub-state load structure survives the transfer even from an 808-window corpus.
+
+### Within-day scoring: competitive, no new champion
+
+Aggregate FARs for both TF-C variants sit in the same band as fusion/audio-beats
+(no uniform winner, consistent with package 3's verdict); on the starved day
+(290626) audio-tfc calibrates 2 of 4 states — matching audio-beats and beating
+fusion's 1 of 4. The per-state-vs-pooled cancellation mechanism replicates exactly
+for both TF-C variants.
+
+### Cross-day: still no free lunch, but a more CONSISTENT one
+
+No audio-tfc cross-day per-state combo clears alpha = 0.05 (aggregates 0.020–0.385)
+— industrial pretraining does not repeal the package-2 finding that thresholds must
+be recalibrated per day. It does make day-pair difficulty SCORER-CONSISTENT (best
+290626→250526 and worst 250526→010726 under both kNN and Mahalanobis, where
+fusion's ordering flips by scorer) — the representation, not the scorer, now
+carries the day-shift structure.
+
+### Candidate overlap: a third, partially-BEATs-aligned lens
+
+On the rich day audio-tfc's top-20 overlaps audio-beats at Jaccard 0.176 (vs
+fusion's 0.081 with either); on both sparser days it overlaps NOTHING (exact zero
+against fusion and audio-beats alike, with full candidate lists on both sides) —
+three representations, three substantially different candidate populations.
+
+Provenance: corpora under `data/public/` with sha256 manifests + licenses
+(MIMII CC BY-SA 4.0, CWRU academic-free, Paderborn CC BY-NC 4.0); checkpoints
+`models/pretrained/tfc/` (~1.9 MB each, seed 7, 40 epochs); one-off pre-training
+~35 min total on MPS. The cache-fingerprint payload is now golden-pinned by tests —
+a lesson from this package: a payload-shape change silently invalidated every
+existing cache and was caught by the analyze_step2 beats guard, then fixed for
+byte-identical backward compatibility.
