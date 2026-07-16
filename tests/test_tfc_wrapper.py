@@ -106,3 +106,78 @@ def test_checkpoint_round_trip_transform_is_deterministic(tmp_path, monkeypatch)
     assert out1.shape == (2, 256) and out1.dtype == np.float64
     assert np.isfinite(out1).all()
     np.testing.assert_array_equal(out1, out2)
+
+
+# ---------------------------------------------------------------------------
+# load_tfc_model geometry guard (T1-review Medium, closed by Task 3 per
+# orchestrator resolution 3): a checkpoint whose cfg.embed_dim/sample_rate_hz/
+# n_samples disagree with TfcFeaturizer's hardcoded 256-wide/8 kHz assumptions
+# must be rejected loudly at load time, naming both the expected and actual
+# value, instead of silently mis-shaping every downstream embedding.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [("embed_dim", 32), ("sample_rate_hz", 16000), ("n_samples", 4000)],
+)
+def test_load_tfc_model_rejects_off_default_geometry(tmp_path, monkeypatch, field, bad_value):
+    torch = pytest.importorskip("torch")
+    import dataclasses
+
+    from rowii.tfc.model import TfcModel
+    from rowii.tfc.wrapper import load_tfc_model
+
+    monkeypatch.setenv("ROWII_FORCE_CPU", "1")
+
+    cfg = dataclasses.replace(TfcConfig(channels=(4, 8)), **{field: bad_value})
+    model = TfcModel(cfg)
+    checkpoint_path = tmp_path / "off_default.pt"
+    torch.save(
+        {
+            "cfg": dataclasses.asdict(cfg),
+            "model": model.state_dict(),
+            "corpus_manifest_sha256": "test",
+            "epochs": 1,
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        load_tfc_model(checkpoint_path, torch.device("cpu"))
+
+    message = str(exc_info.value)
+    assert field in message
+    assert str(bad_value) in message
+
+
+def test_load_tfc_model_accepts_default_geometry_with_only_channels_overridden(
+    tmp_path, monkeypatch
+):
+    """Contrast to the rejection test above: channels is the ONE field that
+    legitimately varies (the round-trip test above already exercises this
+    happy path implicitly; this test pins it explicitly as the geometry
+    guard's negative-space case)."""
+    torch = pytest.importorskip("torch")
+    import dataclasses
+
+    from rowii.tfc.model import TfcModel
+    from rowii.tfc.wrapper import load_tfc_model
+
+    monkeypatch.setenv("ROWII_FORCE_CPU", "1")
+
+    cfg = TfcConfig(channels=(4, 8))  # embed_dim/sample_rate_hz/n_samples all default
+    model = TfcModel(cfg)
+    checkpoint_path = tmp_path / "tiny_but_valid.pt"
+    torch.save(
+        {
+            "cfg": dataclasses.asdict(cfg),
+            "model": model.state_dict(),
+            "corpus_manifest_sha256": "test",
+            "epochs": 1,
+        },
+        checkpoint_path,
+    )
+
+    loaded = load_tfc_model(checkpoint_path, torch.device("cpu"))
+    assert isinstance(loaded, TfcModel)

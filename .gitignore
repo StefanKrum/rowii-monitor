@@ -1,5 +1,6 @@
 data/
 results/
+models/
 .env
 __pycache__/
 *.egg-info

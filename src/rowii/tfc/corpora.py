@@ -1,13 +1,14 @@
-"""Public-corpus window iterators (package-4 spec D2, Task 2): turn a
-directory tree of WAV (MIMII) or MAT (CWRU/Paderborn) files into the same
-1-s, 8 kHz, per-window-standardized float32 windows `TfcFeaturizer`
-(`rowii.tfc.wrapper`) and the pretraining script (`scripts/pretrain_tfc.py`,
-Task 3) both expect -- these two functions are the ONLY place this project
-reads a raw public corpus off disk.
+"""Public-corpus window iterators (package-4 spec D2 Task 2, extended by
+Task 3's `iter_windows_paderborn_dir`): turn a directory tree of WAV (MIMII)
+or MAT (CWRU/Paderborn) files into the same 1-s, 8 kHz,
+per-window-standardized float32 windows `TfcFeaturizer` (`rowii.tfc.wrapper`)
+and the pretraining script (`scripts/pretrain_tfc.py`, Task 3) both expect --
+these three functions are the ONLY place this project reads a raw public
+corpus off disk.
 
-Both iterators share one windowing/resample/standardize pipeline (private
-helpers below): cut each clip into NON-OVERLAPPING `window_s`-second windows
-at the clip's own native rate (a trailing partial window shorter than
+All three iterators share one windowing/resample/standardize pipeline
+(private helpers below): cut each clip into NON-OVERLAPPING `window_s`-second
+windows at the clip's own native rate (a trailing partial window shorter than
 `window_s` is dropped, never zero-padded -- this project has no need to
 train on partial windows when whole ones are abundant), batch-resample the
 whole clip's windows to `target_hz` in one `scipy.signal.resample_poly` call
@@ -16,9 +17,11 @@ whole clip's windows to `target_hz` in one `scipy.signal.resample_poly` call
 docstring for why that function is REIMPLEMENTED here rather than imported),
 then per-window standardize (`_standardize`, the same mean-0/std-1,
 1e-8-clamped convention as `rowii.tfc.wrapper._standardize` and
-`rowii.tfc.model.freq_view`).
+`rowii.tfc.model.freq_view`). `iter_windows_paderborn_dir` differs from the
+other two only in HOW it locates its signal on disk (a nested MATLAB struct,
+not a flat `.wav`/`.mat` variable) -- see its own docstring.
 
-Both functions are plain generators: nothing is read from disk until the
+All three functions are plain generators: nothing is read from disk until the
 caller actually iterates (a `for` loop / `list(...)` / `next()`), and only
 ONE clip's windows are held in memory at a time -- important for MIMII's
 real corpus size (tens of thousands of ~10-s clips per machine type), never
@@ -274,6 +277,161 @@ def iter_windows_mat_dir(
             continue
 
         resampled = _resample_windows(windows, native_hz, target_hz)
+        standardized = _standardize(resampled)
+        for row in standardized:
+            yield row.astype(np.float32)
+
+
+_PADERBORN_NATIVE_HZ = 64_000.0
+"""Nominal sample rate of Paderborn KAt's `vibration_1`/`phase_current_*`
+channels (the "HostService" raster). Confirmed both by community
+documentation (Task 2's URL-research concerns) and, now, by this task's
+sanctioned real-file smoke check (`.superpowers/sdd/task-3-report.md`):
+`Data.shape[0] / Description.Measurement.Length` measured ~64000.25 Hz
+across 4 real K001/K002 files -- within 0.0004% of this nominal constant, the
+same "nominal, not measured-per-file" convention `iter_windows_mat_dir`
+already uses for CWRU's 12 kHz (`native_hz`'s docstring there)."""
+
+_PADERBORN_VIBRATION_CHANNEL = "vibration_1"
+"""The `Y[i].Name` this function searches for (substring match, mirroring
+`iter_windows_mat_dir`'s `key_substring` convention) -- Paderborn KAt's
+vibration accelerometer channel, per orchestrator resolution 2 and confirmed
+present (as exactly one of 7 named `Y` entries) in every real file this task
+inspected."""
+
+
+def _extract_paderborn_vibration(path: Path) -> np.ndarray | None:
+    """Extract the `"vibration_1"` channel's raw float64 samples from one
+    Paderborn KAt `.mat` file's NESTED struct layout (`iter_windows_paderborn_dir`'s
+    module-level docstring section documents the confirmed real layout in
+    full). Returns `None` -- NEVER raises -- for any file that does not match
+    that layout in any of the ways checked below: a file that `loadmat`
+    itself cannot parse at all (Task 2's completion report flags a known
+    Paderborn v7.3/HDF5-format failure mode as a real possibility, on top of
+    ordinary corruption/truncation), one whose root struct has no `Y` field,
+    or one whose `Y` entries include no channel named `"vibration_1"` --
+    orchestrator resolution 2's explicit "skip file with logged warning on
+    failure -- NEVER crash the corpus build" requirement, which is why this
+    function wraps the ENTIRE load-and-navigate sequence in one broad
+    `except Exception`, deliberately broader than this module's other
+    per-file error handling (`iter_windows_mat_dir` only guards the
+    "missing key" case, not `loadmat` itself, since CWRU's `.mat` files are
+    reliably flat and simple -- Paderborn's real-world failure modes are not
+    yet as well-characterized, so this function trusts nothing beyond "some
+    exception happened").
+
+    Args:
+        path: One `.mat` file.
+
+    Returns:
+        The channel's 1-D float64 samples, or `None` if extraction failed
+        for any reason (a WARNING naming *path* and the reason is logged
+        before returning `None`).
+    """
+    try:
+        data = loadmat(str(path), struct_as_record=False, squeeze_me=True)
+        top_keys = [name for name in data if not name.startswith("__")]
+        if not top_keys:
+            logger.warning(
+                "iter_windows_paderborn_dir: no top-level variable in %s -- skipping", path
+            )
+            return None
+
+        root = data[top_keys[0]]
+        # squeeze_me=True collapses a length-1 struct ARRAY down to a bare
+        # scalar mat_struct (confirmed during this task's real-layout
+        # research) -- np.atleast_1d normalizes both shapes to a uniform,
+        # indexable ndarray without disturbing the already-multi-element case.
+        channels = np.atleast_1d(root.Y)
+        for channel in channels:
+            name = getattr(channel, "Name", None)
+            if isinstance(name, str) and _PADERBORN_VIBRATION_CHANNEL in name:
+                return np.asarray(channel.Data, dtype=np.float64).reshape(-1)
+    except Exception as exc:  # noqa: BLE001 -- "never crash the corpus build" (see docstring)
+        logger.warning(
+            "iter_windows_paderborn_dir: failed to parse %s (%s: %s) -- skipping",
+            path, type(exc).__name__, exc,
+        )
+        return None
+
+    logger.warning(
+        "iter_windows_paderborn_dir: no %r channel found in %s -- skipping",
+        _PADERBORN_VIBRATION_CHANNEL, path,
+    )
+    return None
+
+
+def iter_windows_paderborn_dir(
+    root: Path,
+    *,
+    window_s: float = 1.0,
+    target_hz: int = 8000,
+    limit_clips: int | None = None,
+) -> Iterator[np.ndarray]:
+    """Recursively walk *root* for `*.mat` files (sorted, deterministic) and
+    yield standardized, `target_hz`-resampled, non-overlapping `window_s`
+    windows from each file's `"vibration_1"` channel -- the Paderborn KAt
+    counterpart to `iter_windows_mat_dir` (CWRU), written separately rather
+    than as another `iter_windows_mat_dir` parameterization because real
+    Paderborn `.mat` files nest their channels inside a struct (a per-file
+    `Y` field, itself a struct ARRAY with `Name`/`Data` sub-fields), not a
+    flat top-level variable `iter_windows_mat_dir`'s `key_substring` search
+    can match -- Task 2's own docstring/completion-report already flagged
+    this gap; `_extract_paderborn_vibration` (this function's only real
+    difference from `iter_windows_mat_dir`) closes it.
+
+    Confirmed real layout (this task's sanctioned read-only smoke check
+    against `data/public/paderborn/K001/K001/N15_M07_F04_K001_1.mat` and 3
+    further real K001/K002 files, `.superpowers/sdd/task-3-report.md`):
+    `scipy.io.loadmat(path, struct_as_record=False, squeeze_me=True)` yields
+    a root `mat_struct` (named after the file's own stem -- never relied on
+    here, only that it is the sole non-dunder top-level key) with fields
+    `Info`/`X`/`Y`/`Description`; `root.Y` is a length-7 array of per-channel
+    `mat_struct`s (`force`, `phase_current_1`, `phase_current_2`, `speed`,
+    `temp_2_bearing_module`, `torque`, `vibration_1`, in that order across
+    every real file inspected -- though this function searches by `Name`,
+    never by a fixed index, so a different order or channel SET would still
+    resolve correctly as long as SOME entry is literally named
+    `"vibration_1"`); that channel's `.Data` is a 1-D float64 array sampled
+    at a measured ~64000.25 Hz (`_PADERBORN_NATIVE_HZ`'s docstring).
+
+    Any file that does not match this layout -- including one `loadmat`
+    cannot parse at all (a plausible real failure mode per Task 2's
+    completion report: some Paderborn `.mat` files are reportedly v7.3/HDF5
+    format) -- is SKIPPED with a WARNING naming the file
+    (`_extract_paderborn_vibration`), never raised: this function must NEVER
+    crash the corpus build over one malformed file (orchestrator resolution
+    2's explicit contract).
+
+    Args:
+        root: Directory to walk recursively for `*.mat` files.
+        window_s: See `iter_windows_wav_dir`.
+        target_hz: See `iter_windows_wav_dir`.
+        limit_clips: If given, stop after this many files (in sorted order)
+            have been OPENED -- a file that fails to parse, has no `Y`
+            field, or has no `"vibration_1"` channel still counts against
+            this budget, mirroring `iter_windows_mat_dir`'s identical rule
+            (its own `limit_clips` docstring). `None` processes every file
+            under *root*.
+
+    Yields:
+        `(target_hz,)` float32 arrays, per-window standardized.
+    """
+    processed = 0
+    for path in sorted(root.rglob("*.mat"), key=lambda p: p.as_posix()):
+        if limit_clips is not None and processed >= limit_clips:
+            break
+        processed += 1
+
+        signal = _extract_paderborn_vibration(path)
+        if signal is None:
+            continue
+
+        windows = _cut_windows(signal, _PADERBORN_NATIVE_HZ, window_s)
+        if windows.shape[0] == 0:
+            continue
+
+        resampled = _resample_windows(windows, _PADERBORN_NATIVE_HZ, target_hz)
         standardized = _standardize(resampled)
         for row in standardized:
             yield row.astype(np.float32)

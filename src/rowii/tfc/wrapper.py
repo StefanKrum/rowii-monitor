@@ -48,12 +48,21 @@ if TYPE_CHECKING:
 _TFC_SAMPLE_RATE_HZ = 8000
 """Fixed input rate the TF-C encoder was (and will be) pretrained at -- every
 window is resampled to exactly this many samples before reaching the model,
-regardless of the plant's own mic/vib sample rate (`_resample_to_8khz`)."""
+regardless of the plant's own mic/vib sample rate (`_resample_to_8khz`). Also
+the expected value of a loaded checkpoint's `cfg.sample_rate_hz`/`cfg.n_samples`
+fields (`_validate_checkpoint_geometry`) -- both default to this same 8000."""
 
-_N_FEATURES = 256
+_EXPECTED_EMBED_DIM = 128
+"""The `TfcConfig.embed_dim` every real checkpoint this project trains keeps
+fixed (only `channels` -- the CNN body's width -- legitimately varies between
+the full-size and tiny/test architectures; see `TfcConfig`'s docstring).
+`_N_FEATURES` is defined FROM this constant (not the other way around) so the
+two can never silently drift apart; `_validate_checkpoint_geometry` checks a
+loaded checkpoint's `cfg.embed_dim` against this same value."""
+
+_N_FEATURES = 2 * _EXPECTED_EMBED_DIM
 """Width of `TfcFeaturizer.transform`'s output: `h_t ⊕ h_f`, each
-`TfcConfig.embed_dim` (128, the default every real checkpoint this project
-trains keeps fixed -- see `TfcFeaturizer.feature_names`) wide."""
+`_EXPECTED_EMBED_DIM`-wide -- see `TfcFeaturizer.feature_names`."""
 
 _CHUNK_SIZE = 512
 """Windows per forward pass through the frozen model (`TfcFeaturizer`'s real
@@ -174,6 +183,46 @@ def _standardize(batch: np.ndarray) -> np.ndarray:
     return (batch - mean) / std
 
 
+def _validate_checkpoint_geometry(cfg: TfcConfig) -> None:
+    """Guard `load_tfc_model` against a checkpoint whose `cfg` does not match
+    this module's HARDCODED assumptions (T1-review Medium, closed here):
+    `_N_FEATURES`/`_TFC_SAMPLE_RATE_HZ` are fixed constants that
+    `TfcFeaturizer` (both `feature_names()` and `_resample_to_8khz`) relies
+    on unconditionally, regardless of which checkpoint is actually loaded --
+    ONLY `cfg.channels` (the CNN body's width) is free to vary between the
+    full-size and tiny/test architectures; `embed_dim`, `sample_rate_hz`, and
+    `n_samples` must all match their expected values, or a checkpoint trained
+    with different ones would silently mis-shape (or semantically
+    mis-resample) every downstream embedding instead of failing at load
+    time -- exactly the failure mode this check exists to turn into a loud
+    `ValueError` instead.
+
+    Args:
+        cfg: The `TfcConfig` rebuilt from a checkpoint's own `cfg` field,
+            checked BEFORE it is used to construct a `TfcModel`.
+
+    Raises:
+        ValueError: naming, for every mismatching field, BOTH the expected
+            and the checkpoint's actual value.
+    """
+    mismatches = []
+    if cfg.embed_dim != _EXPECTED_EMBED_DIM:
+        mismatches.append(f"embed_dim: expected {_EXPECTED_EMBED_DIM}, got {cfg.embed_dim}")
+    if cfg.sample_rate_hz != _TFC_SAMPLE_RATE_HZ:
+        mismatches.append(
+            f"sample_rate_hz: expected {_TFC_SAMPLE_RATE_HZ}, got {cfg.sample_rate_hz}"
+        )
+    if cfg.n_samples != _TFC_SAMPLE_RATE_HZ:
+        mismatches.append(f"n_samples: expected {_TFC_SAMPLE_RATE_HZ}, got {cfg.n_samples}")
+    if mismatches:
+        raise ValueError(
+            "TF-C checkpoint cfg does not match TfcFeaturizer's hardcoded assumptions "
+            f"({'; '.join(mismatches)}) -- this checkpoint cannot be loaded through "
+            "load_tfc_model/TfcFeaturizer without silently mis-shaping features "
+            "(only cfg.channels may legitimately differ from a checkpoint's defaults)"
+        )
+
+
 def load_tfc_model(checkpoint: Path, device: torch.device) -> TfcModel:
     """Load a TF-C checkpoint onto *device*, in eval mode.
 
@@ -195,6 +244,9 @@ def load_tfc_model(checkpoint: Path, device: torch.device) -> TfcModel:
 
     Raises:
         FileNotFoundError: if *checkpoint* does not exist.
+        ValueError: if the checkpoint's `cfg.embed_dim`/`sample_rate_hz`/
+            `n_samples` do not match this module's hardcoded assumptions
+            (`_validate_checkpoint_geometry`).
     """
     import torch
 
@@ -211,6 +263,7 @@ def load_tfc_model(checkpoint: Path, device: torch.device) -> TfcModel:
     # when it was already a tuple.
     cfg_dict["channels"] = tuple(cfg_dict["channels"])
     cfg = TfcConfig(**cfg_dict)
+    _validate_checkpoint_geometry(cfg)
 
     model = TfcModel(cfg)
     model.load_state_dict(state["model"])
