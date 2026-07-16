@@ -588,16 +588,23 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     fields that change what a featurizer computes: `cfg.beats_checkpoint`'s path,
     included unconditionally (every variant's payload carries it, even a handcrafted
     one) so a handcrafted-variant cache is never silently reused after switching
-    to/from a beats checkpoint; and, for the two tfc variants (package-4 spec D4),
-    the ONE `cfg.tfc_*_checkpoint` path relevant to *variant* itself --
-    `cfg.tfc_audio_checkpoint` for `"audio-tfc"`, `cfg.tfc_vib_checkpoint` for
-    `"vibration-tfc"`, blank for every other variant (including the OTHER tfc
-    variant). Deliberately narrower than the beats field: TF-C has TWO independent
-    checkpoints rather than one, so folding both in unconditionally for every
-    variant would force a needless recompute of, say, every `audio`/`fusion`/
-    `vibration-tfc` cache entry whenever a user merely points `ROWII_TFC_AUDIO_
-    CHECKPOINT` at a new file -- scoping each field to its own variant keeps a
-    checkpoint change from invalidating caches that never depended on it.
+    to/from a beats checkpoint; and, ONLY for a tfc variant (package-4 spec D4),
+    exactly ONE extra `tfc_*_checkpoint=` line carrying the checkpoint path relevant
+    to *variant* itself -- `cfg.tfc_audio_checkpoint` for `"audio-tfc"`,
+    `cfg.tfc_vib_checkpoint` for `"vibration-tfc"`. Every other variant's payload
+    carries NO tfc line at all, keeping it byte-identical to the pre-package-4
+    format: the payload is a PERSISTENCE format, not an implementation detail --
+    every existing `results/cache/*.npz` stores a fingerprint computed from it, so
+    even a semantically-neutral shape change (e.g. appending blank lines for every
+    variant, the exact package-4 execution finding this wording guards against)
+    silently invalidates every pre-existing cache entry, including hours-expensive
+    BEATs extractions. Scoping the single tfc line to its own variant also keeps a
+    checkpoint change from invalidating caches that never depended on it (TF-C has
+    TWO independent checkpoints rather than beats' one -- folding both in for every
+    variant would force a needless recompute of, say, every `vibration-tfc` cache
+    whenever a user merely points `ROWII_TFC_AUDIO_CHECKPOINT` at a new file). Any
+    future payload change must consciously update `tests/test_pipeline.py`'s golden
+    pins AND deliberately migrate/invalidate the on-disk caches.
     `cfg.detect`/`cfg.gt` are deliberately excluded: they govern clustering/GT
     labeling, never feature EXTRACTION, so changing them must not invalidate this
     cache.
@@ -607,18 +614,16 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
         for files in run.files.values()
         for bf in files
     )
-    tfc_audio_checkpoint = cfg.tfc_audio_checkpoint if variant == "audio-tfc" else None
-    tfc_vib_checkpoint = cfg.tfc_vib_checkpoint if variant == "vibration-tfc" else None
-    payload = "\n".join(
-        [
-            f"variant={variant}",
-            f"window_s={cfg.window.window_s!r}",
-            f"beats_checkpoint={cfg.beats_checkpoint or ''}",
-            f"tfc_audio_checkpoint={tfc_audio_checkpoint or ''}",
-            f"tfc_vib_checkpoint={tfc_vib_checkpoint or ''}",
-            *file_entries,
-        ]
-    )
+    payload_lines = [
+        f"variant={variant}",
+        f"window_s={cfg.window.window_s!r}",
+        f"beats_checkpoint={cfg.beats_checkpoint or ''}",
+    ]
+    if variant == "audio-tfc":
+        payload_lines.append(f"tfc_audio_checkpoint={cfg.tfc_audio_checkpoint or ''}")
+    elif variant == "vibration-tfc":
+        payload_lines.append(f"tfc_vib_checkpoint={cfg.tfc_vib_checkpoint or ''}")
+    payload = "\n".join([*payload_lines, *file_entries])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
