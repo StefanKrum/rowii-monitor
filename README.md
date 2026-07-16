@@ -992,7 +992,7 @@ test. Variants `audio-tfc` / `vibration-tfc`; digest:
 ### Industrial pretraining transfers for STATE SEPARATION where general-audio failed
 
 Step-1 state detection on 010726-tu_ph_tu (kmeans, k=4): audio-tfc state-ARI
-**0.907** / accuracy 0.969 and vibration-tfc **0.920** / 0.972 — where frozen BEATs
+**0.907** / accuracy 0.972 and vibration-tfc **0.920** / 0.973 — where frozen BEATs
 historically collapsed to state-ARI ≈ 0.000 on this pipeline. Both trail the
 handcrafted variants by only ~0.02 ARI (audio 0.929 / vibration 0.941 / fusion
 0.930). The kind of pre-training data matters: machine-sound SSL preserves the
