@@ -1,12 +1,16 @@
-"""Tests for `scripts/adapt_beats.py` (Step-2 package-5 spec D4, Task 3):
-CLI-level end-to-end tests against a monkeypatched `discover`/`load_beats_model`/
-`iter_target_windows` (mirrors `tests/test_warm_cache.py`'s/`tests/
-test_pretrain_tfc.py`'s own established patterns -- no real data tree, no real
-BEATs checkpoint, no network anywhere in this file) plus focused unit tests for
-the pieces of new logic that have no natural home in Task 1/2's own test files:
-the frame-preserving bridge (`_build_frame_bridge`/`_encoder_forward`), mode
-preparation/optimizer-param scoping (`_prepare_model_for_mode`/
-`_trainable_params`), and mode-default resolution (`_resolve_mode_defaults`).
+"""Tests for `scripts/adapt_beats.py` (Step-2 package-5 spec D4, Task 3;
+objective per spec D1 as amended by Amendment A1): CLI-level end-to-end tests
+against a monkeypatched `discover`/`load_beats_model`/`iter_target_windows`
+(mirrors `tests/test_warm_cache.py`'s/`tests/test_pretrain_tfc.py`'s own
+established patterns -- no real data tree, no real BEATs checkpoint, no
+network anywhere in this file) plus focused unit tests for the pieces of new
+logic that have no natural home in Task 1/2's own test files: the native
+token construction (`_native_tokens`/`_encoder_forward` -- including THE
+train/inference-consistency test that pins `_native_tokens` to the exact
+tensor `BEATs.extract_features` hands its encoder, the decoupling bug class
+Amendment A1 exists to close), mode preparation/optimizer-param scoping
+(`_prepare_model_for_mode`/`_trainable_params`), and mode-default resolution
+(`_resolve_mode_defaults`).
 
 `load_beats_model` is monkeypatched to a stub that distinguishes its TWO
 distinct call sites by whether *checkpoint* exists on disk yet: the initial
@@ -36,7 +40,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from rowii.adapt.lora import LoraLinear, lora_parameters  # noqa: E402
-from rowii.adapt.objective import masked_patch_loss  # noqa: E402
+from rowii.adapt.objective import masked_token_loss  # noqa: E402
 from rowii.config import Config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, Run  # noqa: E402
 
@@ -56,17 +60,23 @@ def _force_cpu(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _tiny_beats_config():
+def _tiny_beats_config(embed_dim: int = 32):
     from rowii.vendor.beats.BEATs import BEATsConfig
 
-    # Identical to tests/test_adapt_lora.py::test_structural_match_on_real_
-    # vendored_class's own tiny config (embed_dim == encoder_embed_dim == 32,
-    # so BEATs.__init__ sets post_extract_proj=None -- proven <2s to
-    # construct, no checkpoint weights involved).
+    # The embed_dim=32 default is identical to tests/test_adapt_lora.py::
+    # test_structural_match_on_real_vendored_class's own tiny config
+    # (embed_dim == encoder_embed_dim == 32, so BEATs.__init__ sets
+    # post_extract_proj=None -- proven <2s to construct, no checkpoint
+    # weights involved). Passing a DIFFERENT embed_dim (e.g. 16) makes
+    # BEATs.__init__ construct a real post_extract_proj Linear(embed_dim,
+    # encoder_embed_dim) -- the REAL checkpoint's own configuration shape
+    # (512 -> 768), exercised by the parametrized train/inference-consistency
+    # test so BOTH branches of _native_tokens' post_extract_proj conditional
+    # are pinned against extract_features itself.
     return BEATsConfig(
         {
             "input_patch_size": 16,
-            "embed_dim": 32,
+            "embed_dim": embed_dim,
             "encoder_layers": 2,
             "encoder_embed_dim": 32,
             "encoder_ffn_embed_dim": 64,
@@ -75,10 +85,10 @@ def _tiny_beats_config():
     )
 
 
-def _tiny_beats():
+def _tiny_beats(embed_dim: int = 32):
     from rowii.vendor.beats.BEATs import BEATs
 
-    return BEATs(_tiny_beats_config())
+    return BEATs(_tiny_beats_config(embed_dim))
 
 
 def _fake_index(run_names: list[str]) -> RecordingIndex:
@@ -256,7 +266,7 @@ def test_require_beats_checkpoint_returns_path_when_set():
 
 
 # ---------------------------------------------------------------------------
-# 4. Frame-preserving bridge + mode preparation (unit level, no CLI)
+# 4. Native token construction + mode preparation (unit level, no CLI)
 # ---------------------------------------------------------------------------
 
 
@@ -292,7 +302,7 @@ class TestTrainableParams:
     def test_lora_is_adapters_and_head_only(self):
         model = _tiny_beats()
         adapt_beats._prepare_model_for_mode("lora", model)
-        head = torch.nn.Linear(model.cfg.encoder_embed_dim, 128)
+        head = torch.nn.Linear(model.cfg.encoder_embed_dim, model.cfg.encoder_embed_dim)
 
         params = adapt_beats._trainable_params("lora", model, head)
 
@@ -305,7 +315,7 @@ class TestTrainableParams:
     def test_full_is_every_model_param_and_head(self):
         model = _tiny_beats()
         adapt_beats._prepare_model_for_mode("full", model)
-        head = torch.nn.Linear(model.cfg.encoder_embed_dim, 128)
+        head = torch.nn.Linear(model.cfg.encoder_embed_dim, model.cfg.encoder_embed_dim)
 
         params = adapt_beats._trainable_params("full", model, head)
 
@@ -314,30 +324,80 @@ class TestTrainableParams:
         assert len(params) == len(expected)
 
 
-class TestFrameBridgeAndEncoderForward:
-    def test_bridge_is_frozen_linear_with_expected_shape(self):
-        bridge = adapt_beats._build_frame_bridge(128, 32, torch.device("cpu"))
+class TestNativeTokensAndEncoderForward:
+    @pytest.mark.parametrize(
+        "embed_dim", [32, 16], ids=["no-post-extract-proj", "with-post-extract-proj"]
+    )
+    def test_native_tokens_match_extract_features_encoder_input(self, embed_dim):
+        """THE train/inference-consistency test (Amendment A1; the rework
+        brief's own words: "pins the decoupling bug class forever"): the
+        script's token construction must equal, EXACTLY, the tensor
+        `BEATs.extract_features` -- the deployed inference path, the same
+        method `BeatsFeaturizer._RealBeatsEncoder.extract` mirrors -- hands
+        `model.encoder`. Captured via a forward pre-hook on the encoder
+        during a real `extract_features` call, then compared bitwise
+        (`rtol=0, atol=0`: identical modules, identical op order; eval mode
+        makes the one intervening stage `_native_tokens` omits,
+        `dropout_input`, a guaranteed identity). Parametrized over both
+        branches of `_native_tokens`' post_extract_proj conditional --
+        `embed_dim == encoder_embed_dim` (proj is None; the tiny-config
+        default) and `embed_dim != encoder_embed_dim` (a real Linear proj;
+        the REAL checkpoint's own 512->768 shape).
+        """
+        torch.manual_seed(0)
+        model = _tiny_beats(embed_dim)
+        assert (model.post_extract_proj is not None) == (embed_dim != 32)
+        model.eval()
+        waveform = torch.randn(2, 16_000)
 
-        assert isinstance(bridge, torch.nn.Linear)
-        assert bridge.in_features == 128
-        assert bridge.out_features == 32
-        assert not bridge.weight.requires_grad
-        assert not bridge.bias.requires_grad
+        captured = {}
 
-    def test_encoder_forward_preserves_frame_axis(self):
-        """The load-bearing shape contract masked_patch_loss depends on
-        (module docstring): encoder_forward's OUTPUT frame count must equal
-        its INPUT frame count, unlike BEATs' own patch_embedding."""
+        def _capture(module, args, kwargs):
+            captured["encoder_input"] = args[0].detach().clone()
+
+        handle = model.encoder.register_forward_pre_hook(_capture, with_kwargs=True)
+        try:
+            with torch.no_grad():
+                model.extract_features(waveform)
+        finally:
+            handle.remove()
+
+        with torch.no_grad():
+            fbank = model.preprocess(waveform)
+            tokens = adapt_beats._native_tokens(model, fbank)
+
+        assert "encoder_input" in captured
+        torch.testing.assert_close(tokens, captured["encoder_input"], rtol=0, atol=0)
+
+    def test_native_tokens_shape_is_patchified_not_frame_preserving(self):
+        """The very shape fact that killed the retired bridge design, now an
+        asserted property of the NATIVE path: 1 s at 16 kHz -> ~98 fbank
+        frames -> (98//16) * (128//16) = 6 * 8 = 48 patch tokens of
+        encoder_embed_dim width -- NOT 98 frame-preserving rows."""
+        torch.manual_seed(0)
         model = _tiny_beats()
-        bridge = adapt_beats._build_frame_bridge(
-            128, model.cfg.encoder_embed_dim, torch.device("cpu")
-        )
-        encoder_forward = adapt_beats._encoder_forward(model, bridge)
+        waveform = torch.randn(2, 16_000)
+        with torch.no_grad():
+            fbank = model.preprocess(waveform)
+            tokens = adapt_beats._native_tokens(model, fbank)
 
-        fbank = torch.randn(3, 41, 128)
-        out = encoder_forward(fbank)
+        n_frames, n_mels = fbank.shape[1], fbank.shape[2]
+        expected_t = (n_frames // 16) * (n_mels // 16)
+        assert tokens.shape == (2, expected_t, model.cfg.encoder_embed_dim)
+        assert expected_t < n_frames  # patchified, not frame-preserving
 
-        assert out.shape == (3, 41, model.cfg.encoder_embed_dim)
+    def test_encoder_forward_preserves_token_axis(self):
+        """The shape contract masked_token_loss depends on: encoder_forward's
+        OUTPUT token count must equal its INPUT token count (trivially true
+        for a transformer encoder consuming its own native tokens -- pinned
+        anyway, since the loss indexes predictions with the input mask)."""
+        model = _tiny_beats()
+        encoder_forward = adapt_beats._encoder_forward(model)
+
+        tokens = torch.randn(3, 48, model.cfg.encoder_embed_dim)
+        out = encoder_forward(tokens)
+
+        assert out.shape == (3, 48, model.cfg.encoder_embed_dim)
 
 
 # ---------------------------------------------------------------------------
@@ -348,17 +408,18 @@ class TestFrameBridgeAndEncoderForward:
 
 
 def test_lora_adapter_grads_nonzero_against_real_tiny_encoder():
-    """`rowii.adapt.objective.masked_patch_loss`'s own docstring: a
-    POSITION-WISE encoder_forward (e.g. that module's own test suite's bare
-    nn.Linear) provably yields zero WEIGHT gradient at masked positions --
-    masked frames are zeroed before the encoder ever sees them, and a
-    position-wise map never mixes information across positions, so nothing
-    downstream of a masked position can depend on any OTHER position's
-    weights. A REAL multi-head self-attention encoder is different: a masked
-    query attends to unmasked keys/values, so information genuinely crosses
-    positions. This test proves gradient reaches the LoRA adapters when
-    adapt_beats.py's frame-preserving bridge feeds masked fbank frames into
-    the REAL vendored TransformerEncoder.
+    """`rowii.adapt.objective`'s documented gradient-flow caveat: a
+    POSITION-WISE encoder_forward provably yields zero WEIGHT gradient at
+    masked positions -- masked token rows are zeroed before the encoder ever
+    sees them, and a position-wise map never mixes information across
+    positions, so nothing downstream of a masked position can depend on any
+    OTHER position's weights. A REAL multi-head self-attention encoder is
+    different: a masked query attends to unmasked keys/values, so information
+    genuinely crosses positions. This test proves gradient reaches the LoRA
+    adapters along adapt_beats.py's ACTUAL training path (Amendment A1's
+    native one): `model.preprocess` -> `_native_tokens` ->
+    `masked_token_loss` against the REAL vendored TransformerEncoder --
+    reviewer-verified gradient feasibility, asserted here permanently.
 
     Two backward passes, not one -- LoRA's own zero-init for lora_b (Task 1
     design: "B init zeros") makes lora_a's gradient EXACTLY zero at the very
@@ -381,14 +442,13 @@ def test_lora_adapter_grads_nonzero_against_real_tiny_encoder():
     waveform = torch.randn(2, 16_000)
     with torch.no_grad():
         fbank = model.preprocess(waveform)
-    bridge = adapt_beats._build_frame_bridge(
-        fbank.shape[-1], model.cfg.encoder_embed_dim, torch.device("cpu")
-    )
-    head = torch.nn.Linear(model.cfg.encoder_embed_dim, fbank.shape[-1])
-    encoder_forward = adapt_beats._encoder_forward(model, bridge)
+    tokens = adapt_beats._native_tokens(model, fbank)
+    encoder_dim = model.cfg.encoder_embed_dim
+    head = torch.nn.Linear(encoder_dim, encoder_dim)
+    encoder_forward = adapt_beats._encoder_forward(model)
 
     gen = torch.Generator().manual_seed(7)
-    loss = masked_patch_loss(encoder_forward, fbank, head, generator=gen)
+    loss = masked_token_loss(tokens, encoder_forward, head, generator=gen)
     loss.backward()
 
     assert first_lora.lora_b.weight.grad is not None
@@ -401,7 +461,7 @@ def test_lora_adapter_grads_nonzero_against_real_tiny_encoder():
     opt.zero_grad()
 
     gen2 = torch.Generator().manual_seed(11)
-    loss2 = masked_patch_loss(encoder_forward, fbank, head, generator=gen2)
+    loss2 = masked_token_loss(tokens, encoder_forward, head, generator=gen2)
     loss2.backward()
 
     assert first_lora.lora_a.weight.grad is not None

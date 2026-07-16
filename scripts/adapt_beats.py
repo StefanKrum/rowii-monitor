@@ -1,8 +1,9 @@
-"""BEATs adaptation CLI (Step-2 package-5 spec D4, Task 3): trains a LoRA-adapted
-or fully fine-tuned copy of the vendored BEATs encoder on ONE run's leakage-safe
-target-normal windows (`rowii.adapt.target_windows.iter_target_windows`, Task 2)
-against the masked-frame reconstruction proxy objective
-(`rowii.adapt.objective.masked_patch_loss`, Task 1), exporting a MERGED,
+"""BEATs adaptation CLI (Step-2 package-5 spec D4, Task 3; objective per spec
+D1 as amended by Amendment A1): trains a LoRA-adapted or fully fine-tuned copy
+of the vendored BEATs encoder on ONE run's leakage-safe target-normal windows
+(`rowii.adapt.target_windows.iter_target_windows`, Task 2) against the native
+token-level masked-reconstruction proxy objective
+(`rowii.adapt.objective.masked_token_loss`), exporting a MERGED,
 format-compatible checkpoint that reloads through the EXISTING
 `rowii.signals.beats_model.load_beats_model` path -- D2's integration trick:
 pointing `ROWII_BEATS_CHECKPOINT` at the saved file turns every existing
@@ -13,43 +14,53 @@ Usage: `adapt_beats.py --mode lora|full --run <name> [--epochs] [--batch-size 16
 [--lr] --seed 7 --max-windows 8000 --out models/adapted/` -> `models/adapted/
 beats_lora_<run>.pt` / `beats_ft_<run>.pt` + a sidecar `<same-stem>.json`.
 
-The frame-preserving bridge (READ THIS FIRST -- the one non-obvious design
-choice in this file): `masked_patch_loss`'s contract (`rowii.adapt.objective`'s
-own docstring) requires `encoder_forward` to map a `(B, frames, mels)` fbank to
-`(B, frames, D)` -- the SAME `frames` count in and out, since the loss indexes
-`predicted[mask]`/`fbank[mask]` with a `(B, frames)` boolean mask built from the
-INPUT fbank's own frame axis. The vendored BEATs' own `patch_embedding` (a
-strided `Conv2d(kernel=input_patch_size, stride=input_patch_size)` over the
-`(B, 1, frames, mels)` fbank "image", `rowii.vendor.beats.BEATs.BEATs.
-extract_features`) does NOT preserve that axis: it downsamples BOTH the time
-and mel dimensions and then FLATTENS the resulting time-patch and mel-patch
-axes together into one token axis (`features.reshape(B, embed_dim, -1)`) -- for
-the real `BEATs_iter3_plus_AS2M.pt` checkpoint (`input_patch_size=16`,
-`n_mels=128`, ~98 fbank frames per 1-s window), that is `T = (98//16) * (128//16)
-= 6 * 8 = 48` tokens, not 98. Feeding `masked_patch_loss` a closure built on
-`patch_embedding` therefore does not just produce a worse proxy objective, it
-raises at runtime (`predicted[mask]`'s mask shape would not match `predicted`'s
-shape). `_build_frame_bridge` below stands in for `patch_embedding` +
-`post_extract_proj` + `layer_norm` with a single frame-preserving, FROZEN,
-randomly-initialized `nn.Linear(n_mels, encoder_embed_dim)` (`rowii.adapt.
-objective`'s own docstring anticipates exactly this: "no dependency on how any
-given encoder_forward closure internally patches/PROJECTS/pools its input") --
-one token per input time frame, fed straight into `model.encoder` (the
-vendored `TransformerEncoder`; self-attention and its `pos_conv`'s SAME-padded
-depthwise conv both preserve sequence length by construction, verified by
-reading `rowii/vendor/beats/backbone.py`). `model.encoder` is exactly "the
-(adapted) encoder": it is the ONLY submodule LoRA touches (D2: q/v projections
-under `encoder.layers[*].self_attn`), and in `--mode full` it is the ONLY
-submodule this proxy objective's forward pass actually exercises -- an
-EXTENSION of `masked_patch_loss`'s own already-documented caveat ("a
-position-wise encoder's weight grads are exactly zero at masked positions; a
-real attention encoder's are not"): `--mode full` marks every one of `model`'s
-own parameters trainable (the literal contract), but `patch_embedding` /
-`post_extract_proj` / the top-level `layer_norm` never receive gradient here
-regardless of mode, because the frame-preserving bridge bypasses them by
-design. The bridge itself is FROZEN (`requires_grad_(False)`) specifically so
-it is never a THIRD component in either mode's optimizer (the task's own
-contract: lora -> adapter params + head ONLY; full -> all(model) + head ONLY).
+The native token path (READ THIS FIRST -- the train/inference-consistency
+guarantee, Amendment A1 in `docs/superpowers/specs/2026-07-16-step2-package5-
+adaptation-design.md`): the training forward pass reuses the model's OWN
+pre-encoder pipeline, stage for stage -- `model.preprocess` (fbank; hardcoded
+128 mels, fixed normalization constants) -> `model.patch_embedding` (strided
+Conv2d patchify) -> reshape/transpose to `(B, T, embed_dim)` ->
+`model.layer_norm` -> `model.post_extract_proj` (when present -- it is `None`
+whenever `embed_dim == encoder_embed_dim`, mirroring `BEATs.__init__`'s own
+conditional) -- exactly the stages `BEATs.extract_features` runs before its
+encoder (`_native_tokens` below). The resulting NATIVE patch tokens are what
+`masked_token_loss` masks and reconstructs, and what the (adapted)
+`model.encoder` consumes -- so the adapters train on the SAME token basis the
+deployed inference path (`extract_features`, driven downstream by
+`BeatsFeaturizer._RealBeatsEncoder.extract`) will feed them. This is Amendment
+A1's whole point: the original frame-level objective (`masked_patch_loss`)
+cannot consume BEATs' patchified tokens (its frame-count-preserving contract
+is structurally unsatisfiable across `patch_embedding` -- a strided Conv2d
+that downsamples BOTH fbank axes and flattens the patch grid into ~48 tokens
+where 98 frames went in; see that function's docstring), and bridging the gap
+with a non-native frame-preserving projection (this script's first, retired
+design) trained the adapters on an input distribution DECOUPLED from the
+deployed path -- reviewer-proven to perturb native embeddings in an
+objective-irrelevant direction. `tests/test_adapt_beats.py::
+test_native_tokens_match_extract_features_encoder_input` pins the shared token
+basis forever: it captures (via a forward pre-hook) the exact tensor
+`extract_features` hands `model.encoder` and asserts `_native_tokens` produces
+the identical tensor from the same waveforms.
+
+One deliberate omission from `_native_tokens`: `model.dropout_input`, which
+sits between `post_extract_proj` and the encoder in `extract_features`. Its
+probability is `BEATsConfig.dropout_input = 0.0` (the class default), making
+it an identity even in train mode (`Dropout(p=0)` never drops) -- and at eval
+time (where the consistency test runs, and where every downstream inference
+call happens under `.eval()`/`torch.no_grad()`) ANY dropout is an identity
+regardless. Omitting it keeps the token construction free of a module that
+could, under a hypothetical nonzero-p checkpoint, inject global-RNG noise
+between the seeded mask decision and the encoder.
+
+Freeze semantics per mode (task contract, unchanged by the rework): in lora
+mode the ENTIRE model is frozen first and only injected adapters (+ the
+reconstruction head) train, so the token-construction stages are frozen
+plumbing; in full mode every model parameter is trainable, and -- unlike the
+retired bridge design, which bypassed them entirely -- `patch_embedding`/
+`layer_norm`/`post_extract_proj` now genuinely receive gradient through the
+UNMASKED token rows the encoder attends to (the masked-target side is
+detached inside `masked_token_loss`; see its docstring's stop-gradient
+rationale).
 
 Torch import discipline (plan's Global Constraints: eager only in
 `rowii.adapt.objective`/`rowii.adapt.lora`/`rowii.adapt.student`'s model part/
@@ -104,10 +115,11 @@ _MODE_DEFAULTS: dict[str, tuple[int, float]] = {
 _CHECKPOINT_PREFIX: dict[str, str] = {"lora": "beats_lora", "full": "beats_ft"}
 
 _PROXY_NOTE = (
-    "adaptation objective is masked-frame reconstruction, a DOCUMENTED PROXY "
-    "(spec D1) for BEATs' own unreproducible discrete-acoustic-token pretraining "
-    "objective -- not a reproduction of it. Any Step-1/Step-2 result computed "
-    "from this checkpoint must restate that caveat wherever it appears."
+    "adaptation objective is native token-level masked reconstruction (latent-target "
+    "MAE on the model's own pre-encoder patch tokens; spec D1 as amended by Amendment "
+    "A1), a DOCUMENTED PROXY for BEATs' own unreproducible discrete-acoustic-token "
+    "pretraining objective -- not a reproduction of it. Any Step-1/Step-2 result "
+    "computed from this checkpoint must restate that caveat wherever it appears."
 )
 
 
@@ -198,46 +210,55 @@ def _prepare_model_for_mode(mode: str, model: BEATs) -> int:
     return 0
 
 
-def _build_frame_bridge(n_mels: int, encoder_dim: int, device: torch.device) -> torch.nn.Linear:
-    """Frozen, randomly-initialized `nn.Linear(n_mels, encoder_dim)` --
-    module docstring's "frame-preserving bridge", standing in for BEATs' own
-    `patch_embedding` (which does not preserve the frame axis this proxy
-    objective needs). Frozen so it is never part of either mode's optimizer
-    (`_trainable_params`): it is not "the encoder" being adapted, just fixed
-    plumbing that makes the proxy objective's shapes well-formed against a
-    REAL multi-head self-attention stack. Ordinary default (kaiming-uniform)
-    `nn.Linear` init -- drawn from the caller's already-seeded global torch
-    RNG (`_train`'s `torch.manual_seed(seed)`), so construction is
-    reproducible given a fixed seed and call order, same as everything else
-    in `_train`.
+def _native_tokens(model: BEATs, fbank: torch.Tensor) -> torch.Tensor:
+    """*fbank* `(B, frames, n_mels)` -> the model's NATIVE pre-encoder patch
+    tokens `(B, T, encoder_embed_dim)` -- Amendment A1's token construction,
+    replicating `BEATs.extract_features`'s own stages between `preprocess`
+    and `self.encoder`, in order: `unsqueeze(1)` (the Conv2d's channel dim)
+    -> `patch_embedding` -> `reshape(B, embed_dim, -1)` (flattening the
+    time-patch x mel-patch grid into one token axis) -> `transpose(1, 2)` ->
+    `layer_norm` -> `post_extract_proj` IF the model has one (`BEATs.
+    __init__` only constructs it when `embed_dim != encoder_embed_dim`; the
+    conditional here mirrors `extract_features`'s own `if self.
+    post_extract_proj is not None:` exactly). `model.dropout_input` is
+    deliberately NOT applied -- see the module docstring's dedicated
+    paragraph.
+
+    The train/inference-consistency guarantee rests on this function staying
+    in lockstep with `extract_features` -- pinned by `tests/test_adapt_beats.
+    py::test_native_tokens_match_extract_features_encoder_input`, which
+    asserts this function's output is IDENTICAL to the tensor
+    `extract_features` actually hands `model.encoder` (captured via a
+    forward pre-hook) for the same waveforms.
+
+    NOT wrapped in `torch.no_grad()`: in `--mode full` these stages are
+    trainable and receive gradient through the unmasked token rows (module
+    docstring's freeze-semantics paragraph); in lora mode every stage is
+    frozen, so autograd records no parameter graph anyway.
     """
-    import torch
+    x = model.patch_embedding(fbank.unsqueeze(1))
+    x = x.reshape(x.shape[0], x.shape[1], -1)
+    x = x.transpose(1, 2)
+    x = model.layer_norm(x)
+    if model.post_extract_proj is not None:
+        x = model.post_extract_proj(x)
+    return cast("torch.Tensor", x)
 
-    bridge = torch.nn.Linear(n_mels, encoder_dim)
-    bridge.requires_grad_(False)
-    return bridge.to(device)
 
-
-def _encoder_forward(
-    model: BEATs, bridge: torch.nn.Linear
-) -> Callable[[torch.Tensor], torch.Tensor]:
-    """Builds `masked_patch_loss`'s `encoder_forward` closure: *bridge* (the
-    frame-preserving projection) feeds `model.encoder` (the vendored
-    `TransformerEncoder` -- "the (adapted) encoder", module docstring)
-    directly, bypassing `patch_embedding`/`post_extract_proj`/the top-level
-    `layer_norm` entirely. `model.encoder`'s own `forward` returns `(x,
-    layer_results)`; only `x` (`(B, frames, encoder_embed_dim)`, the SAME
-    `frames` the bridge was given -- self-attention and `pos_conv`'s
-    SAME-padded depthwise conv both preserve sequence length, verified by
-    reading `rowii/vendor/beats/backbone.py`) is what `masked_patch_loss`
-    needs.
+def _encoder_forward(model: BEATs) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Builds `masked_token_loss`'s `encoder_forward` closure over the
+    (adapted) `model.encoder` -- the vendored `TransformerEncoder`, the ONLY
+    submodule LoRA touches (D2: q/v projections under
+    `encoder.layers[*].self_attn`). Its `forward(x, padding_mask=None)`
+    returns `(x, layer_results)` (verified in
+    `rowii/vendor/beats/backbone.py`); only `x` (`(B, T, encoder_embed_dim)`,
+    the same token count in and out -- a transformer encoder consuming its
+    own native tokens) is what `masked_token_loss` needs.
     """
-    import torch
 
-    def _forward(masked_fbank: torch.Tensor) -> torch.Tensor:
-        x = bridge(masked_fbank)
-        encoded, _ = model.encoder(x, padding_mask=None)
-        return cast(torch.Tensor, encoded)
+    def _forward(masked_tokens: torch.Tensor) -> torch.Tensor:
+        encoded, _ = model.encoder(masked_tokens, padding_mask=None)
+        return cast("torch.Tensor", encoded)
 
     return _forward
 
@@ -275,37 +296,44 @@ def _train(
 ) -> tuple[torch.nn.Linear, list[float]]:
     """Trains *model* (already loaded, NOT yet mode-prepared) in place on
     *windows* (`(N, 16000)` float32 16 kHz waveforms, already leakage-filtered
-    by the caller via `iter_target_windows`) against `masked_patch_loss`
-    (module docstring's proxy objective), for *epochs* full passes in
-    *batch_size*-row mini-batches, shuffled each epoch by a *seed*-seeded CPU
-    `torch.Generator` -- mirrors `scripts/pretrain_tfc.py`'s own `_train`
-    (`_train_autoencoder`'s established shuffle-generator pattern), including
-    reusing the SAME generator for `masked_patch_loss`'s per-step masking (a
-    DIFFERENT random subset of frames masked every step -- the intended
-    behaviour of a masked-reconstruction objective -- while the whole run
-    stays exactly reproducible from *seed* alone).
+    by the caller via `iter_target_windows`) against `masked_token_loss`
+    (module docstring's native token-level proxy objective, Amendment A1),
+    for *epochs* full passes in *batch_size*-row mini-batches, shuffled each
+    epoch by a *seed*-seeded CPU `torch.Generator` -- mirrors
+    `scripts/pretrain_tfc.py`'s own `_train` (`_train_autoencoder`'s
+    established shuffle-generator pattern), including reusing the SAME
+    generator for `masked_token_loss`'s per-step masking (a DIFFERENT random
+    subset of tokens masked every step -- the intended behaviour of a
+    masked-reconstruction objective -- while the whole run stays exactly
+    reproducible from *seed* alone).
+
+    Per training step: fbank via `model.preprocess` (under `no_grad` -- pure
+    parameterless signal processing over constant input data, nothing
+    upstream to differentiate) -> `_native_tokens` (under grad: trainable in
+    full mode, parameter-graph-free in lora mode where every stage is
+    frozen) -> `masked_token_loss(tokens, encoder_forward, head)` -> Adam
+    step over `_trainable_params(mode, ...)`.
 
     Self-contained: `torch.manual_seed(seed)` is this function's OWN first
     line (in addition to `main()`'s own call before `load_beats_model`, needed
     there so a monkeypatched loader's own random weight-init is ALSO seeded,
     tested contract (d)) -- re-seeding here makes every draw this function
-    itself performs (mode-preparation's LoRA-adapter init, the frame bridge,
-    `head`, shuffling, masking) reproducible given *seed* and call order,
-    independent of how many draws happened before this function was called.
+    itself performs (mode-preparation's LoRA-adapter init, `head`, shuffling,
+    masking) reproducible given *seed* and call order, independent of how
+    many draws happened before this function was called.
 
     Returns:
-        `(head, epoch_losses)`: *head* (`nn.Linear(encoder_embed_dim, n_mels)`,
-        the reconstruction head trained jointly with the encoder -- needed by
-        the caller only for the reload-verification forward pass's device/
-        eval-mode bookkeeping is NOT required, since the checkpoint never
-        stores *head*; returned so callers/tests can inspect it directly);
-        *epoch_losses*: one mean loss per epoch, in order. *model* is left in
-        `.eval()` mode (mirrors `_train_autoencoder`'s/`pretrain_tfc._train`'s
-        own postcondition).
+        `(head, epoch_losses)`: *head* (`nn.Linear(encoder_embed_dim,
+        encoder_embed_dim)`, the token-reconstruction head trained jointly
+        with the encoder -- never persisted, since the checkpoint format is
+        BEATs' own {"cfg", "model"}; returned so callers/tests can inspect it
+        directly); *epoch_losses*: one mean loss per epoch, in order. *model*
+        is left in `.eval()` mode (mirrors `_train_autoencoder`'s/
+        `pretrain_tfc._train`'s own postcondition).
     """
     import torch
 
-    from rowii.adapt.objective import masked_patch_loss
+    from rowii.adapt.objective import masked_token_loss
 
     torch.manual_seed(seed)
     _prepare_model_for_mode(mode, model)
@@ -315,14 +343,9 @@ def _train(
     x_all = torch.from_numpy(windows.astype(np.float32)).to(device)
     n = x_all.shape[0]
 
-    with torch.no_grad():
-        probe_fbank = model.preprocess(x_all[: min(4, n)])
-    n_mels = int(probe_fbank.shape[-1])
     encoder_dim = int(model.cfg.encoder_embed_dim)
-
-    bridge = _build_frame_bridge(n_mels, encoder_dim, device)
-    head = torch.nn.Linear(encoder_dim, n_mels).to(device)
-    encoder_forward = _encoder_forward(model, bridge)
+    head = torch.nn.Linear(encoder_dim, encoder_dim).to(device)
+    encoder_forward = _encoder_forward(model)
 
     opt = torch.optim.Adam(_trainable_params(mode, model, head), lr=lr)
     gen = torch.Generator().manual_seed(seed)
@@ -337,7 +360,8 @@ def _train(
             with torch.no_grad():
                 fbank = model.preprocess(x_all[idx])
             opt.zero_grad()
-            loss = masked_patch_loss(encoder_forward, fbank, head, generator=gen)
+            tokens = _native_tokens(model, fbank)
+            loss = masked_token_loss(tokens, encoder_forward, head, generator=gen)
             loss.backward()  # type: ignore[no-untyped-call]
             opt.step()
             total_loss += loss.item()
@@ -369,10 +393,10 @@ def _save_and_verify(
     a forward pass on *probe* through the IN-MEMORY *model* (already merged
     for `--mode lora`, already `.eval()`'d by `_train`) via `model.
     extract_features` -- BEATs' own PRODUCTION inference path (patch_embedding
-    -> encoder -> ...), the SAME method `BeatsFeaturizer`'s `_RealBeatsEncoder.
-    extract` drives, deliberately NOT this script's own frame-preserving
-    training bridge -- is compared against the SAME forward pass through the
-    checkpoint immediately RELOADED from disk via `load_beats_model` (the
+    -> encoder -> ..., the SAME method `BeatsFeaturizer`'s `_RealBeatsEncoder.
+    extract` drives, and since Amendment A1 also the same token basis
+    `_native_tokens` trained on) -- is compared against the SAME forward pass
+    through the checkpoint immediately RELOADED from disk via `load_beats_model` (the
     real, established loader; module docstring explains why this name is a
     module-level import rather than lazy, specifically so it stays
     monkeypatchable from outside for the INITIAL load while still exercising
@@ -412,9 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Adapt the vendored BEATs encoder (LoRA or full fine-tune) on ONE run's "
-            "leakage-safe target-normal windows against the masked-frame reconstruction "
-            "proxy objective, exporting a MERGED checkpoint that reloads through the "
-            "existing load_beats_model path (package-5 spec D4, Task 3)."
+            "leakage-safe target-normal windows against the native token-level "
+            "masked-reconstruction proxy objective (spec D1 as amended by Amendment A1), "
+            "exporting a MERGED checkpoint that reloads through the existing "
+            "load_beats_model path (package-5 spec D4, Task 3)."
         )
     )
     parser.add_argument(
@@ -441,8 +466,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seed", type=int, default=7,
-        help="Seeds weight init (incl. the frame bridge/head), window-shuffling, and "
-             "masked-frame selection (default: 7).",
+        help="Seeds weight init (incl. the reconstruction head), window-shuffling, and "
+             "masked-token selection (default: 7).",
     )
     parser.add_argument(
         "--max-windows", type=int, default=8000,
