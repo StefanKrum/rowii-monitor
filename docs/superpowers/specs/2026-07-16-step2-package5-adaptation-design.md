@@ -163,3 +163,23 @@ localisation.
   whole-branch review; PR at the end.
 - Every adapted/distilled/quantized result carries its caveat block (proxy
   objective / data-floor / CPU-only as applicable). No partner values.
+
+## Amendment A1 (2026-07-16, post-T3 review): D1 objective retargeted to native token-level MAE
+
+The original D1 (frame-level masking with a frame-preserving encoder_forward) is
+structurally incompatible with BEATs' native forward (patch_embedding conv
+patchifies 98 fbank frames into 48 tokens); T3's frozen-random-linear bridge
+satisfied D1's letter but trained the adapters on an input distribution decoupled
+from the deployed inference path (reviewer-proven: bridge-trained deltas perturb
+native embeddings measurably in an objective-irrelevant direction). D1 is
+therefore AMENDED: the adaptation objective is **native token-level masked
+reconstruction** — reuse the model's own preprocess → patch_embedding →
+layer_norm → post_extract_proj (all frozen), mask ~30% of the resulting patch
+tokens (zeroed rows, per-sample random via the seeded generator), run the
+(LoRA-adapted or fully-trainable) encoder, and reconstruct the PRE-MASK token
+embeddings with a Linear(encoder_dim, encoder_dim) head, MSE on masked positions
+only (latent-target MAE; documented choice over pixel targets: no patch-pixel
+bookkeeping, same self-supervision signal). The frame-level `masked_patch_loss`
+remains in `rowii.adapt.objective` for non-patchifying encoders, with its caveat
+extended to name this incompatibility. Everything else in T3 (CLI, mode prep,
+optimizer scoping, merged export, verification, sidecar) stands unchanged.
