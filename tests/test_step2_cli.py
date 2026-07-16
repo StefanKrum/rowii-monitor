@@ -1447,8 +1447,9 @@ def _make_ensemble_prepared_pair(
     column 0 is each window's own absolute index (the marker `_AlarmSetScorer` reads);
     the rest is irrelevant filler. `prepared_variant`/`prepared_logmel` differ only in
     filler-column width -- production `--variant`/`logmel` PreparedRuns differ in real
-    feature CONTENT, never in grid/segment_ids/valid_mask, under the `--ensemble`
-    grid-equality precondition this pair satisfies by sharing one `grid` object.
+    feature CONTENT (and, on real data, by a sub-window t0 offset the guard tolerates),
+    while this pair satisfies the guard's exact-alignment case by sharing one `grid`
+    object.
     """
     n = n_segments * seg_len
     grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n)
@@ -1588,6 +1589,10 @@ def test_ensemble_view_end_to_end(tmp_path, monkeypatch) -> None:
     assert "marginal" in notes_text
     assert "empirical" in notes_text.lower()
     assert "majority" in notes_text.lower()
+    # Exact-alignment path (real-data follow-up): the fixture's streams share every
+    # segment t0, so fusion's and logmel's grids coincide exactly -- the notes'
+    # grid-alignment line must report that, not a tolerance offset.
+    assert "exactly time-aligned" in notes_text
 
     # Conditioning/scorer-independent placement: --conditioning all wrote 2 normal
     # sweep combos, but the ensemble view must exist exactly once, at the base
@@ -1618,7 +1623,7 @@ def test_ensemble_alarms_never_exceed_the_most_alarm_prone_member(monkeypatch) -
         run_step2._ENSEMBLE_SEED
     )
 
-    far_table = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
 
@@ -1659,7 +1664,7 @@ def test_ensemble_disjoint_member_alarms_never_reach_majority(monkeypatch) -> No
         },
     )
 
-    far_table = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1693,7 +1698,7 @@ def test_ensemble_two_member_agreement_equals_shared_alarm_set(monkeypatch) -> N
         },
     )
 
-    far_table = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1733,7 +1738,7 @@ def test_ensemble_deciding_pair_includes_lstmae_vote(monkeypatch) -> None:
         },
     )
 
-    far_table = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1803,31 +1808,66 @@ def test_ensemble_requires_mic_primary_variant(
     assert "leakage" in err
 
 
-def test_ensemble_grid_mismatch_guard_exits_2(tmp_path, monkeypatch, capsys) -> None:
-    """(task brief binding detail 6f) `--ensemble`'s grid-alignment guard (binding
-    detail 3): a `logmel` `PreparedRun` whose grid does not match the sweep variant's
-    own grid must abort the whole invocation (exit 2, clear stderr message) instead of
-    silently indexing two prepared runs at mismatched window positions. `prepare_run`
-    is monkeypatched to shift ONLY the logmel call's returned grid."""
-    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
-    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
-    _build_one_day_root(tmp_path / "data")
-
-    import run_step2
-
+def _monkeypatch_logmel_grid(monkeypatch, run_step2, mutate_grid) -> None:
+    """Monkeypatch `run_step2.prepare_run` so ONLY the `logmel` call's returned grid
+    is replaced by `mutate_grid(original_grid)` -- the sweep variant's own
+    preparation stays untouched (shared helper for the grid-guard regime tests
+    below)."""
     real_prepare_run = run_step2.prepare_run
 
     def _shifted_logmel_prepare_run(run, variant, cfg, **kwargs):
         prepared = real_prepare_run(run, variant, cfg, **kwargs)
         if variant != "logmel":
             return prepared
-        shifted_grid = WindowGrid(
-            t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns,
-            n_windows=prepared.grid.n_windows - 1,
-        )
-        return replace(prepared, grid=shifted_grid)
+        return replace(prepared, grid=mutate_grid(prepared.grid))
 
     monkeypatch.setattr(run_step2, "prepare_run", _shifted_logmel_prepare_run)
+
+
+@pytest.mark.parametrize(
+    ("mutate_kind", "expected_err"),
+    [
+        pytest.param("t0-shift-one-window", "misaligned by >= one window",
+                     id="t0-shift-ge-one-window"),
+        pytest.param("n-windows-off-by-one", "grid mismatch",
+                     id="structural-n-windows"),
+    ],
+)
+def test_ensemble_grid_misalignment_guard_exits_2(
+    tmp_path, monkeypatch, capsys, mutate_kind, expected_err
+) -> None:
+    """(task brief binding detail 6f, updated by the real-data follow-up's tolerance
+    semantics) `--ensemble`'s grid guard still hard-aborts (exit 2, clear stderr
+    message) in BOTH remaining fatal regimes: a t0 offset of one full window or more
+    ("misaligned by >= one window" -- window index i no longer refers to overlapping
+    time slots in the two PreparedRuns), and a structural mismatch (window_ns or
+    n_windows differ -- here n_windows off by one, the original binding-detail-6f
+    construction). Sub-window t0 offsets are TOLERATED since the real-data follow-up
+    (see `test_ensemble_sub_window_grid_offset_tolerated_and_documented`), so the
+    exact-equality regime this test originally pinned no longer exists. `prepare_run`
+    is monkeypatched to mutate ONLY the logmel call's returned grid."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    if mutate_kind == "t0-shift-one-window":
+        def _mutate(grid: WindowGrid) -> WindowGrid:
+            # exactly one window: pins the tolerance boundary (offset == window_ns
+            # must already be fatal, not just offset > window_ns)
+            return WindowGrid(
+                t0_ns=grid.t0_ns + grid.window_ns, window_ns=grid.window_ns,
+                n_windows=grid.n_windows,
+            )
+    else:
+        def _mutate(grid: WindowGrid) -> WindowGrid:
+            return WindowGrid(
+                t0_ns=grid.t0_ns, window_ns=grid.window_ns,
+                n_windows=grid.n_windows - 1,
+            )
+
+    _monkeypatch_logmel_grid(monkeypatch, run_step2, _mutate)
     _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -1838,4 +1878,66 @@ def test_ensemble_grid_mismatch_guard_exits_2(tmp_path, monkeypatch, capsys) -> 
             ]
         )
     assert exc_info.value.code == 2
-    assert "grid mismatch" in capsys.readouterr().err.lower()
+    assert expected_err in capsys.readouterr().err.lower()
+
+
+def test_ensemble_sub_window_grid_offset_tolerated_and_documented(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """(real-data follow-up) A SUB-WINDOW t0 offset between the sweep variant's and
+    logmel's grids must NOT abort the ensemble view: on the real data the DAQ's vib
+    streams start tens of ms after the mic, so a fusion grid (stream intersection)
+    anchors later than logmel's mic-only grid -- measured 26 ms (250526-tu) and 97 ms
+    (290626-tu) on 1-s windows, blocking the ensemble on 2 of 3 real days under the
+    original exact-equality guard. Reproduced here with the real 26 ms offset on the
+    fixture's 1-s window: exit 0, far_table_ensemble.csv written, ONE warning logged
+    with the measured offset and the minimum per-window overlap fraction
+    (1 - 26ms/1000ms = 97.4%), and ensemble_notes.md carries the offset line openly
+    (the LSTM-AE member votes on a window shifted by 26.0 ms relative to the
+    classical members' window)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    offset_ns = 26_000_000  # the real 250526-tu fusion-vs-logmel offset (26 ms)
+
+    def _mutate(grid: WindowGrid) -> WindowGrid:
+        return WindowGrid(
+            t0_ns=grid.t0_ns + offset_ns, window_ns=grid.window_ns,
+            n_windows=grid.n_windows,
+        )
+
+    _monkeypatch_logmel_grid(monkeypatch, run_step2, _mutate)
+    _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = run_step2.main(
+            [
+                "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+                "--conditioning", "pooled", "--scorer", "knn", "--ensemble",
+            ]
+        )
+    assert exit_code == 0
+
+    ensemble_dir = (
+        tmp_path / "results" / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "ensemble"
+    )
+    assert (ensemble_dir / "far_table_ensemble.csv").is_file()
+    notes_text = (ensemble_dir / "ensemble_notes.md").read_text()
+    assert "26.0 ms" in notes_text
+    assert "97.4" in notes_text  # minimum per-window overlap percent
+    assert "exactly time-aligned" not in notes_text  # tolerance wording, not exact's
+
+    # "--ensemble grids" is unique to the guard's own warning -- the synthetic
+    # fixture also emits unrelated rowii.io.dataset "UTC offset" warnings that a bare
+    # "offset" substring would sweep in.
+    offset_warnings = [
+        r.message for r in caplog.records
+        if r.levelno == logging.WARNING and "--ensemble grids" in r.message
+    ]
+    assert len(offset_warnings) == 1, offset_warnings  # ONE warning, not per member/combo
+    assert "26.0" in offset_warnings[0]
+    assert "97.4" in offset_warnings[0]

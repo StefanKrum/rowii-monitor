@@ -1816,8 +1816,8 @@ features the LSTM-AE member consumes, so the split is leakage-safe for the LSTM-
 member ONLY when the sweep variant's segment boundaries are logmel's own -- true by
 construction for these four (shared primary stream), NOT for `vibration` (primary
 stream `RAWGeneratorVib__2`, no structural relationship to the mic's file
-boundaries): its grid can equal logmel's by coincidence, sailing past
-`_assert_ensemble_grids_match`, while a vibration-segment-safe split could still cut
+boundaries): its grid can align with logmel's by coincidence, sailing past
+`_check_ensemble_grid_alignment`, while a vibration-segment-safe split could still cut
 one logmel recording segment across calibration and scoring -- silently voiding the
 LSTM-AE member's split-conformal guarantee (reviewer finding). `logmel` itself is
 also excluded, for a different reason: the committed ensemble contrasts OC-SVM/IF on
@@ -1877,46 +1877,94 @@ def _ensemble_member_features(
     return prepared_variant.features
 
 
-def _assert_ensemble_grids_match(
+def _check_ensemble_grid_alignment(
     run_name: str, prepared_variant: PreparedRun, prepared_logmel: PreparedRun
-) -> None:
-    """`--ensemble`'s grid-alignment guard (task brief binding detail 3): the sweep
-    variant's and the `logmel` variant's `PreparedRun`s must describe the IDENTICAL
-    window grid (`t0_ns`, `window_ns`, `n_windows`) for a shared window INDEX to mean
-    the same physical time slot in both -- `_run_ensemble_view`'s single top-level
-    split (below) is drawn once from the variant side and used to index BOTH prepared
-    runs' feature matrices at the SAME window indices. Structurally, every variant
-    the CLI admits to this view (`_ENSEMBLE_VARIANTS`, review follow-up M1) shares
-    the primary generator-mic stream with `logmel` (`rowii.pipeline.
-    _streams_for_variant`), so this always holds in practice -- asserted here anyway
-    (trust but verify, mirroring `rowii.anomaly.sweep._assert_three_way_disjoint`'s
-    identical stance on a different structurally-guaranteed invariant) rather than
-    assumed, and kept as the backstop for a direct programmatic call that bypasses
-    `main`'s guard. Note the guard's limits: grid equality is necessary but NOT
-    sufficient for the LSTM-AE member's leakage safety (a non-mic-primary variant's
-    grid can match by coincidence while its segment boundaries do not) -- which is
-    exactly why `--variant vibration` is rejected up front by `main`'s
-    `_ENSEMBLE_VARIANTS` guard instead of being left to this check.
+) -> int:
+    """`--ensemble`'s grid-alignment guard (task brief binding detail 3, tolerance
+    semantics per the real-data follow-up): the sweep variant's and the `logmel`
+    variant's `PreparedRun`s must be STRUCTURALLY identical (`window_ns`,
+    `n_windows` -- exact) and t0-aligned WITHIN ONE WINDOW for a shared window INDEX
+    to refer to (near-)the-same physical time slot in both -- `_run_ensemble_view`'s
+    single top-level split (below) is drawn once from the variant side and used to
+    index BOTH prepared runs' feature matrices at the SAME window indices.
+
+    Why tolerance, not equality (real-data finding, 2026-07-16): the DAQ's vib
+    streams start tens of ms AFTER the mic streams, so a vibration-bearing sweep
+    variant's grid -- built on the intersection of all its streams
+    (`rowii.signals.windows.common_grid`) -- anchors its t0 slightly LATER than
+    logmel's mic-only grid. Measured on the real days: 26 ms (250526-tu, fusion
+    t0_ns ...763000116 vs logmel ...737000144) and 97 ms (290626-tu) on 1-s windows;
+    010726 coincides exactly. Sub-window offsets are therefore physically inherent
+    to this data -- the original exact-equality guard blocked the ensemble on 2 of
+    the 3 real days. A sub-window offset keeps window i of both grids overlapping by
+    at least `1 - offset/window_ns` (>= 97.4% / 90.3% on the measured days), which
+    is acceptable for a DECISION-level evaluation view -- each member still votes on
+    (almost exactly) the same second of plant operation -- so it is tolerated, but
+    never silently: ONE warning logs the measured offset and overlap, and the same
+    numbers are written into `ensemble_notes.md` (`_ensemble_alignment_note`). An
+    offset of one full window or more breaks the index correspondence outright
+    (window i refers to non-overlapping time slots) and still hard-aborts.
+
+    Structurally, every variant the CLI admits to this view (`_ENSEMBLE_VARIANTS`,
+    review follow-up M1) shares the primary generator-mic stream with `logmel`
+    (`rowii.pipeline._streams_for_variant`), so the fatal branches should never fire
+    in practice -- checked anyway (trust but verify, mirroring `rowii.anomaly.sweep.
+    _assert_three_way_disjoint`'s identical stance) and kept as the backstop for a
+    direct programmatic call that bypasses `main`'s guard. Note the guard's limits:
+    grid alignment is necessary but NOT sufficient for the LSTM-AE member's leakage
+    safety (a non-mic-primary variant's grid can align by coincidence while its
+    segment boundaries do not) -- which is exactly why `--variant vibration` is
+    rejected up front by `main`'s `_ENSEMBLE_VARIANTS` guard instead of being left
+    to this check.
+
+    Returns:
+        The absolute t0 offset in ns between the two grids (`0` when exactly
+        aligned; always `< window_ns`) -- threaded by the caller into
+        `ensemble_notes.md`'s alignment line.
 
     Raises:
         SystemExit: code 2, with a clear message on stderr (parser.error-style; the
             argparse `parser` object itself is out of scope this deep in the call
-            stack, so this raises directly rather than routing back through it) -- a
-            grid mismatch signals a structural inconsistency this view cannot safely
-            paper over, not a per-run/per-combo condition to log-and-skip.
+            stack, so this raises directly rather than routing back through it), if
+            `window_ns`/`n_windows` differ at all, or the t0 offset is one full
+            window or more -- either signals a structural inconsistency this view
+            cannot safely paper over, not a per-run/per-combo condition to
+            log-and-skip.
     """
-    if prepared_variant.grid == prepared_logmel.grid:
-        return
     va, la = prepared_variant.grid, prepared_logmel.grid
-    print(
-        f"run_step2: --ensemble grid mismatch for run {run_name!r}: sweep-variant "
-        f"grid (t0_ns={va.t0_ns}, window_ns={va.window_ns}, n_windows={va.n_windows}) "
-        f"!= logmel grid (t0_ns={la.t0_ns}, window_ns={la.window_ns}, "
-        f"n_windows={la.n_windows}) -- the ensemble view indexes both PreparedRuns at "
-        "the same window indices and needs one shared grid",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
+    if va.window_ns != la.window_ns or va.n_windows != la.n_windows:
+        print(
+            f"run_step2: --ensemble grid mismatch for run {run_name!r}: sweep-variant "
+            f"grid (t0_ns={va.t0_ns}, window_ns={va.window_ns}, "
+            f"n_windows={va.n_windows}) != logmel grid (t0_ns={la.t0_ns}, "
+            f"window_ns={la.window_ns}, n_windows={la.n_windows}) -- window_ns and "
+            "n_windows must be identical for the ensemble view to index both "
+            "PreparedRuns at the same window positions",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    t0_offset_ns = abs(va.t0_ns - la.t0_ns)
+    if t0_offset_ns >= va.window_ns:
+        print(
+            f"run_step2: --ensemble grids for run {run_name!r} are misaligned by >= "
+            f"one window: |t0 offset| = {t0_offset_ns / 1e6:.1f} ms >= window "
+            f"{va.window_ns / 1e6:.0f} ms (sweep-variant t0_ns={va.t0_ns}, logmel "
+            f"t0_ns={la.t0_ns}) -- window index i would refer to non-overlapping "
+            "time slots in the two PreparedRuns",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if t0_offset_ns > 0:
+        logger.warning(
+            "run_step2: --ensemble grids for run %r are offset by %.1f ms on a "
+            "%.0f ms window (minimum per-window overlap %.1f%%) -- proceeding: the "
+            "LSTM-AE member votes on a window shifted by this sub-window DAQ "
+            "stream-start offset relative to the classical members' window "
+            "(documented in ensemble_notes.md)",
+            run_name, t0_offset_ns / 1e6, va.window_ns / 1e6,
+            (1.0 - t0_offset_ns / va.window_ns) * 100.0,
+        )
+    return t0_offset_ns
 
 
 def _ensemble_low_confidence_rows(label: int | str) -> list[_EnsembleRow]:
@@ -2028,7 +2076,7 @@ def _run_ensemble_view(
     alpha: float,
     *,
     run_name: str,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, int]:
     """Majority-ensemble FAR table for one (run, labels_mode): OC-SVM + Isolation
     Forest + LSTM-AE (`_ENSEMBLE_MEMBER_FACTORIES`), each calibrated with its OWN
     per-state split-conformal threshold, plus an `_ENSEMBLE_LABEL` row per state
@@ -2044,28 +2092,35 @@ def _run_ensemble_view(
             split (its own `segment_ids`/`valid_mask`) and supplies `ocsvm`/
             `iforest`'s feature matrix.
         prepared_logmel: The `logmel`-variant `PreparedRun` of the SAME run --
-            supplies `lstmae`'s feature matrix. Must share *prepared_variant*'s exact
-            grid (`_assert_ensemble_grids_match`, checked first).
+            supplies `lstmae`'s feature matrix. Must be structurally identical to
+            *prepared_variant*'s grid (`window_ns`/`n_windows`) and t0-aligned within
+            one window (`_check_ensemble_grid_alignment`, checked first -- sub-window
+            DAQ stream-start offsets are tolerated and documented, see that guard's
+            docstring for the real-data derivation).
         labels: Per-window labels aligned with *prepared_variant*'s (and, by the grid
             guard, *prepared_logmel*'s) windows -- same convention as `run_sweep`'s
             own `labels` argument.
         alpha: Nominal false-alarm rate target for `calibrate`, shared by every
             member.
-        run_name: Named run, for the grid-mismatch guard's error message only.
+        run_name: Named run, for the grid guard's messages only.
 
     Returns:
-        A DataFrame with columns `member, label, n_calibration, n_scored, n_alarms,
-        realized_far, low_confidence` -- one row per (label, member) seen in the
-        calibration or scoring windows, plus one `member="ENSEMBLE"` row per label.
+        `(far_table, t0_offset_ns)`: a DataFrame with columns `member, label,
+        n_calibration, n_scored, n_alarms, realized_far, low_confidence` -- one row
+        per (label, member) seen in the calibration or scoring windows, plus one
+        `member="ENSEMBLE"` row per label -- and the guard's measured absolute t0
+        offset between the two grids in ns (0 = exactly aligned; always <
+        `window_ns`), for `_write_ensemble_outputs`' notes line.
 
     Raises:
-        SystemExit: code 2, if *prepared_variant* and *prepared_logmel* do not share
-            one grid (`_assert_ensemble_grids_match`).
+        SystemExit: code 2, if the two grids differ structurally (`window_ns`/
+            `n_windows`) or are t0-misaligned by one full window or more
+            (`_check_ensemble_grid_alignment`).
         ValueError: propagated from `split_by_segments` if the three-way split cannot
             be formed (too few segments -- identical failure mode to `run_sweep`/
             `_run_score_fusion_view`).
     """
-    _assert_ensemble_grids_match(run_name, prepared_variant, prepared_logmel)
+    t0_offset_ns = _check_ensemble_grid_alignment(run_name, prepared_variant, prepared_logmel)
 
     top_split = split_by_segments(
         prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5, _ENSEMBLE_SEED
@@ -2093,7 +2148,8 @@ def _run_ensemble_view(
             fit_windows, conformal_windows, scoring_windows, alpha,
         ))
 
-    return pd.DataFrame([asdict(r) for r in rows], columns=list(_ENSEMBLE_COLUMNS))
+    far_table = pd.DataFrame([asdict(r) for r in rows], columns=list(_ENSEMBLE_COLUMNS))
+    return far_table, t0_offset_ns
 
 
 _ENSEMBLE_NOTES = """# Majority-ensemble notes
@@ -2147,17 +2203,52 @@ finite-sample guarantee attached to the vote rule itself.
 """
 
 
-def _write_ensemble_outputs(out_dir: Path, far_table: pd.DataFrame) -> None:
+def _ensemble_alignment_note(t0_offset_ns: int, window_ns: int) -> str:
+    """The run-specific "Grid alignment" section appended to `_ENSEMBLE_NOTES` (the
+    one run-dependent datum in an otherwise static notes file) -- real-data follow-up:
+    a tolerated sub-window t0 offset between the sweep variant's and logmel's grids
+    (`_check_ensemble_grid_alignment`'s docstring has the physical derivation) must be
+    stated openly next to the FAR numbers it qualifies, not just logged. `t0_offset_ns`
+    is the guard's return value, guaranteed `0 <= t0_offset_ns < window_ns`.
+    """
+    if t0_offset_ns == 0:
+        return (
+            "\n## Grid alignment (this run)\n\n"
+            "Sweep-variant and logmel grids are exactly time-aligned (identical grid "
+            "t0): every member votes on the identical time slot per window index.\n"
+        )
+    offset_ms = t0_offset_ns / 1e6
+    overlap_pct = (1.0 - t0_offset_ns / window_ns) * 100.0
+    return (
+        "\n## Grid alignment (this run)\n\n"
+        f"Member windows are time-aligned within {offset_ms:.1f} ms on a "
+        f"{window_ns / 1e6:.0f} ms window (>= {overlap_pct:.1f}% per-window overlap): "
+        f"the LSTM-AE member votes on a window shifted by {offset_ms:.1f} ms relative "
+        "to the classical members' window -- a sub-window DAQ stream-start offset "
+        "inherent to this data (the vib streams start tens of ms after the mic, so a "
+        "vibration-bearing sweep variant's intersection grid anchors later than "
+        "logmel's mic-only grid), acceptable for a decision-level evaluation view and "
+        "stated openly here.\n"
+    )
+
+
+def _write_ensemble_outputs(
+    out_dir: Path, far_table: pd.DataFrame, *, t0_offset_ns: int, window_ns: int
+) -> None:
     """Write `far_table_ensemble.csv` + `ensemble_notes.md` into *out_dir* -- mirrors
     `_write_score_fusion_outputs`'s own label-dtype coercion (detected cluster ids are
     ints; keeping the column homogeneous avoids the same round-trip hazard
     `test_per_state_far_table_and_scores_label_dtypes_merge_cleanly` guards against
-    for the main far_table)."""
+    for the main far_table). The notes get the run-specific grid-alignment line
+    appended (`_ensemble_alignment_note`; *t0_offset_ns* is `_run_ensemble_view`'s
+    measured value, *window_ns* the shared grid's window length)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     table = far_table.copy()
     table["label"] = table["label"].astype(str)
     table.to_csv(out_dir / "far_table_ensemble.csv", index=False)
-    (out_dir / "ensemble_notes.md").write_text(_ENSEMBLE_NOTES)
+    (out_dir / "ensemble_notes.md").write_text(
+        _ENSEMBLE_NOTES + _ensemble_alignment_note(t0_offset_ns, window_ns)
+    )
 
 
 def _ensemble_out_dir(
@@ -2225,7 +2316,7 @@ def _run_and_write_ensemble_view(
         return
 
     try:
-        far_table_ensemble = _run_ensemble_view(
+        far_table_ensemble, t0_offset_ns = _run_ensemble_view(
             sweep_prepared, prepared_logmel, labels, alpha, run_name=run.name,
         )
     except ValueError as exc:
@@ -2239,7 +2330,10 @@ def _run_and_write_ensemble_view(
     ensemble_dir = _ensemble_out_dir(
         cfg.results_root, run.name, variant, labels_mode, states=states
     )
-    _write_ensemble_outputs(ensemble_dir, far_table_ensemble)
+    _write_ensemble_outputs(
+        ensemble_dir, far_table_ensemble,
+        t0_offset_ns=t0_offset_ns, window_ns=sweep_prepared.grid.window_ns,
+    )
 
 
 # ---------------------------------------------------------------------------
