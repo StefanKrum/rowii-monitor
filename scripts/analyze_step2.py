@@ -101,6 +101,7 @@ from rowii.pipeline import (  # noqa: E402
     _cache_fingerprint,
     _cache_npz_path,
     _is_beats_variant,
+    _is_tfc_variant,
     _load_cached_prepared_run,
     _streams_for_variant,
     prepare_run,
@@ -247,7 +248,7 @@ def _grid_for_combo(day_name: str, variant: str, cfg: Config) -> WindowGrid:
             f"analyze_step2: run {day_name!r} not discovered under {cfg.data_root} "
             f"(available: {sorted(by_name)})"
         )
-    if _is_beats_variant(variant):
+    if _is_beats_variant(variant) or _is_tfc_variant(variant):
         cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
         fingerprint = _cache_fingerprint(run, variant, cfg)
         streams = _streams_for_variant(variant)
