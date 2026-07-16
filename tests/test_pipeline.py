@@ -545,15 +545,17 @@ def test_assemble_variant_features_tfc_variants_hstack_like_audio_and_vibration(
 def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
     tmp_path,
 ) -> None:
-    """Mirrors `beats_checkpoint`'s own unconditional-payload-line inclusion (module
-    docstring), but variant-SCOPED: TF-C has TWO independent checkpoints (audio vs
+    """Variant-SCOPED checkpoint sensitivity (unlike `beats_checkpoint`'s
+    unconditional payload line): TF-C has TWO independent checkpoints (audio vs
     vibration branch, unlike BEATs' one), so a fingerprint must depend only on the
     ONE relevant to ITS OWN variant -- changing ROWII_TFC_AUDIO_CHECKPOINT must
     change audio-tfc's fingerprint but leave vibration-tfc's and fusion's alone
     (the reverse would force a needless recompute of every OTHER variant's cache
     whenever a user points at a new audio-branch checkpoint). Three cfgs, changing
     exactly ONE field relative to the baseline each, isolate the two checkpoint
-    axes independently."""
+    axes independently. This test pins RELATIVE behavior only; the absolute payload
+    SHAPE (backward compatibility with pre-package-4 caches) is pinned by the
+    golden test below."""
     run = _single_file_audio_run(tmp_path / "burst")
     audio_a, audio_b = tmp_path / "tfc_audio_a.pt", tmp_path / "tfc_audio_b.pt"
     vib_a, vib_b = tmp_path / "tfc_vib_a.pt", tmp_path / "tfc_vib_b.pt"
@@ -588,6 +590,75 @@ def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
     assert fp("fusion", baseline) == fp("fusion", audio_changed) == fp("fusion", vib_changed), (
         "a non-tfc variant's fingerprint must not depend on either tfc checkpoint"
     )
+
+
+def _golden_fingerprint_run(burst_dir: Path) -> Run:
+    """Fixed-name, fixed-size dummy files for the golden-fingerprint test below --
+    `_cache_fingerprint` only ever `stat()`s a burst file (name + byte size enter the
+    payload; content is never read or parsed), so plain zero-filled bytes suffice and
+    keep the golden fully deterministic across machines and tmp dirs (only
+    `path.name`, never the tmp-dir-dependent parent path, is hashed)."""
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    gen, tur = burst_dir / "gen_mic.dat", burst_dir / "tur_mic.dat"
+    gen.write_bytes(b"\x00" * 100)
+    tur.write_bytes(b"\x00" * 200)
+    hint = datetime(2026, 1, 1, tzinfo=UTC)
+    return Run(
+        name="golden-run",
+        files={
+            "RAWGeneratorMic__0": [
+                BurstFile(path=gen, stream="RAWGeneratorMic__0", start_utc_hint=hint)
+            ],
+            "RAWTurbineMic__1": [
+                BurstFile(path=tur, stream="RAWTurbineMic__1", start_utc_hint=hint)
+            ],
+        },
+        day_root=burst_dir,
+    )
+
+
+def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) -> None:
+    """GOLDEN regression pins (package-4 execution finding): the fingerprint payload
+    SHAPE is a persistence format -- every pre-existing `results/cache/*.npz` stores
+    a fingerprint computed from it, and hours-expensive BEATs caches silently
+    invalidate (full re-extraction on next use) if the payload for their variant
+    ever changes shape, even with identical semantics. Task 4's first cut emitted
+    blank `tfc_*_checkpoint=` lines for EVERY variant and did exactly that (real
+    finding: 250526-tu/audio-beats stored d455ca9b... vs recomputed 9bacaa14...).
+
+    The hex literals below are sha256 digests computed ONCE from the intended
+    payloads, independently of `_cache_fingerprint` itself:
+
+    - non-tfc variants: the PRE-package-4 payload format, byte-identical
+      (`variant=` / `window_s=` / `beats_checkpoint=` / sorted `name:size` file
+      entries -- NO tfc lines at all);
+    - tfc variants: that same format + exactly ONE extra line (its own variant's
+      checkpoint) inserted after `beats_checkpoint=`.
+
+    Any future change to `_cache_fingerprint`'s payload must consciously update
+    these constants AND deliberately migrate/invalidate the on-disk caches -- a
+    failing golden here means "you are about to orphan every existing cache entry",
+    not "just update the constant".
+    """
+    run = _golden_fingerprint_run(tmp_path / "burst")
+    cfg_plain = Config(data_root=tmp_path, results_root=tmp_path)  # all checkpoints None
+    cfg_tfc = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        # FIXED absolute paths (never tmp_path-derived): the checkpoint path string
+        # itself enters the payload, so a tmp-dir-dependent path would break the pin.
+        tfc_audio_checkpoint=Path("/fixed/tfc_audio.pt"),
+        tfc_vib_checkpoint=Path("/fixed/tfc_vib.pt"),
+    )
+
+    assert pipeline._cache_fingerprint(run, "audio", cfg_plain) == (
+        "1f9c34523161e0dcd58de6ab3f55da9f321d35304588d786aab8ba06a49513c0"
+    ), "non-tfc payload shape changed -- this would invalidate every pre-existing cache"
+    assert pipeline._cache_fingerprint(run, "audio-tfc", cfg_tfc) == (
+        "5dedd7f15ee2e08d66b2f44ddb90ca3e5be3ebb8498ffcfeb71f8929128be656"
+    ), "audio-tfc payload shape changed (expected: pre-T4 format + ONE tfc_audio line)"
+    assert pipeline._cache_fingerprint(run, "vibration-tfc", cfg_tfc) == (
+        "ccf33c4e323dc21795b30833a623408a93222661fdc148290faf257d6c014b49"
+    ), "vibration-tfc payload shape changed (expected: pre-T4 format + ONE tfc_vib line)"
 
 
 def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:
