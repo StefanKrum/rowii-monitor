@@ -113,11 +113,14 @@ this protocol's per-state numbers are checked against.
 
 - within-day: `results/step2/within-day/<run>/<variant>-<labels>/<conditioning>-<scorer>/`
   (`far_table.csv`, `scores.parquet`, `candidates.md`) -- exactly the spec's literal path.
-  `--states K` (package-3 Task 6, within-day only) appends a `-k<K>` suffix to the
-  `<variant>-<labels>` segment ONLY when K is non-default (`fusion-detected-k8/`), so a
-  non-default conditioning-granularity run never collides with -- or overwrites -- the
-  default-K layout; `summary.csv`'s own `variant` column carries the same suffix
-  (`_within_day_out_dir`/`_summary_row`).
+  `--states K` (package-3 Task 6, within-day + detected-labels only) appends a `-k<K>`
+  suffix to the `<variant>-<labels>` segment ONLY when K is non-default
+  (`fusion-detected-k8/`), so a non-default conditioning-granularity run never collides
+  with -- or overwrites -- the default-K layout; `summary.csv`'s own `variant` column
+  and the combo's `candidate_register.md` section header carry the same suffix
+  (`_within_day_out_dir`/`_summary_row`/`_register_section_markdown` -- the register
+  would otherwise accumulate identical headers across a K-granularity sweep of one
+  run/variant).
 - cross-day: the spec only writes `results/step2/cross-day/<variant>/<dayA>__to__<dayB>/`
   literally, with no room for the `--labels`/`--scorer` axes a single invocation can still
   sweep over (`--scorer all`, `--labels gt`) without collision. Binding extension
@@ -342,10 +345,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Conditioning granularity (package-3 Task 6): number of detected "
             "sub-clusters (k) the within-day sweep's own detector fits, overriding "
-            "cfg.detect.n_states (default: 4). within-day only (parser.error for any "
-            "other --protocol); must be >= 2. A non-default value suffixes the combo "
-            "out-dir and its summary.csv 'variant' with '-k<K>', so it never collides "
-            "with -- or overwrites -- the default-K layout."
+            "cfg.detect.n_states (default: 4). within-day + detected-labels only "
+            "(parser.error for any other --protocol or for --labels gt, which never "
+            "fits a detector); must be >= 2. A non-default value suffixes the combo "
+            "out-dir, its summary.csv 'variant', and its candidate-register section "
+            "header with '-k<K>', so it never collides with -- or overwrites -- the "
+            "default-K layout."
         ),
     )
     parser.add_argument(
@@ -1105,13 +1110,24 @@ def _register_path(results_root: Path) -> Path:
 def _register_section_markdown(
     run_name: str, variant: str, labels_mode: str, conditioning: str, scorer: str,
     alpha: float, candidates: pd.DataFrame, grid: WindowGrid, scada: pd.DataFrame | None,
+    *, states: int | None = None,
 ) -> str:
     """One append-only register section for a (run, variant, combo) -- the same top-k-
     per-label content as that combo's own `candidates.md` (module docstring), with
     `source`/`assessment` provenance columns appended.
+
+    `states` (package-3 Task 6 follow-up): the section header's `<variant>-<labels>`
+    part carries the SAME `-k<states>` suffix `_within_day_out_dir` puts on the combo
+    directory, and only under the same condition (`--states` given) -- without it, a
+    conditioning-granularity sweep (K=4/8/12 on one run/variant, package-3 T7) would
+    append several sections with IDENTICAL headers to this append-only, human-facing
+    review artifact, distinguishable only by position. `None` reproduces the prior
+    header byte-for-byte.
     """
+    k_suffix = f"-k{states}" if states is not None else ""
     lines = [
-        f"### {run_name} / {variant}-{labels_mode} / {conditioning}-{scorer} (alpha={alpha})",
+        f"### {run_name} / {variant}-{labels_mode}{k_suffix} / {conditioning}-{scorer} "
+        f"(alpha={alpha})",
         "",
     ]
     if candidates.empty:
@@ -1169,8 +1185,12 @@ def _write_register_header(path: Path) -> None:
 def _append_candidate_register(
     results_root: Path, run_name: str, variant: str, labels_mode: str,
     conditioning: str, scorer: str, alpha: float, candidates: pd.DataFrame,
-    grid: WindowGrid, scada: pd.DataFrame | None,
+    grid: WindowGrid, scada: pd.DataFrame | None, *, states: int | None = None,
 ) -> None:
+    """`states`: forwarded to `_register_section_markdown`'s section-header suffix
+    (its docstring) -- only `_run_within_day_for_run` ever passes it; the cross-day
+    call sites keep the default `None` (`--states` is rejected for their protocols
+    up front, `main`'s parser.error guard)."""
     path = _register_path(results_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -1179,7 +1199,8 @@ def _append_candidate_register(
         _quarantine_corrupt_file(path, "candidate_register.md header missing or truncated")
         _write_register_header(path)
     section = _register_section_markdown(
-        run_name, variant, labels_mode, conditioning, scorer, alpha, candidates, grid, scada
+        run_name, variant, labels_mode, conditioning, scorer, alpha, candidates, grid,
+        scada, states=states,
     )
     with path.open("a", encoding="utf-8") as f:
         f.write(section)
@@ -1784,11 +1805,14 @@ def _run_within_day_for_run(
 
     `states` (`--states`, package-3 Task 6, `None` by default): the conditioning
     granularity override for THIS run's own detector, forwarded to `_detected_labels_
-    and_detector`'s `k` parameter -- only meaningful for `labels_mode == "detected"`
-    (a `gt`-labels sweep never fits a detector at all, so `states` is simply unused on
-    that branch). Also forwarded to `_within_day_out_dir`/`_summary_row` so a non-
-    default value's combo outputs and summary row stay disambiguated from -- and never
-    overwrite -- the default-K layout (see those functions' own docstrings).
+    and_detector`'s `k` parameter -- only meaningful for `labels_mode == "detected"`,
+    and `main`'s own parser.error guard rejects `--states` + `--labels gt` before
+    this function is ever called (a `gt`-labels sweep never fits a detector at all;
+    a direct programmatic call with both would just ignore `states` on the gt
+    branch). Also forwarded to `_within_day_out_dir`/`_summary_row`/`_append_
+    candidate_register` so a non-default value's combo outputs, summary row, and
+    register section stay disambiguated from -- and never overwrite or collide with
+    -- the default-K layout (see those functions' own docstrings).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -1848,7 +1872,7 @@ def _run_within_day_for_run(
         )
         _append_candidate_register(
             cfg.results_root, run.name, variant, labels_mode, conditioning, scorer,
-            alpha, result.candidates, sweep_prepared.grid, scada,
+            alpha, result.candidates, sweep_prepared.grid, scada, states=states,
         )
         n_written += 1
 
@@ -2138,6 +2162,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "--states requires --protocol within-day (conditions the within-day "
             f"sweep's own detector only) -- got --protocol {args.protocol!r}"
+        )
+    if args.states is not None and args.labels == "gt":
+        parser.error(
+            "--states is detected-labels only (a gt-labels sweep never fits a "
+            "detector, so there is no cluster count to override -- rejecting rather "
+            "than silently ignoring the flag) -- got --labels 'gt'"
         )
 
     cfg = load_config()
