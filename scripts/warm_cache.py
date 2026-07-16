@@ -43,12 +43,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rowii.config import load_config  # noqa: E402
+from rowii.config import Config, load_config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, discover  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _TFC_INSTALL_HINT,
     _cache_npz_path,
     _is_beats_variant,
+    _is_tfc_variant,
     prepare_run,
 )
 
@@ -66,7 +68,8 @@ _DEFAULT_RUNS: tuple[str, ...] = (
 )
 _DEFAULT_VARIANTS: tuple[str, ...] = ("audio-beats", "fusion-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
-    "audio", "vibration", "fusion", "audio-beats", "fusion-beats", "logmel",
+    "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
+    "audio-tfc", "vibration-tfc", "logmel",
 )
 
 
@@ -108,6 +111,26 @@ def _import_beats_or_exit() -> None:
         ) from exc
 
 
+def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
+    """Mirrors `scripts/run_step1.py`'s own private helper of the same name
+    (duplicated, not imported -- see `_import_beats_or_exit`'s docstring). Extends
+    the beats-import-guard pattern (package-4 spec D4): torch missing (checked
+    first) -> SystemExit naming the shared `[beats]` extra; else the ONE checkpoint
+    relevant to *variant* itself missing -> SystemExit naming its own env var."""
+    try:
+        import rowii.tfc.wrapper  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"TF-C featurizer not available ({exc}); {_TFC_INSTALL_HINT}"
+        ) from exc
+    if variant == "audio-tfc":
+        checkpoint, env_var = cfg.tfc_audio_checkpoint, "ROWII_TFC_AUDIO_CHECKPOINT"
+    else:
+        checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
+    if checkpoint is None:
+        raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
+
+
 def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
     """Names in *names* with no matching discovered run, de-duplicated, in the
     order first seen -- empty if every name resolves."""
@@ -144,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if any(_is_beats_variant(variant) for _, variant in combos):
         _import_beats_or_exit()
+    for variant in sorted({v for _, v in combos if _is_tfc_variant(v)}):
+        _import_tfc_or_exit(cfg, variant)
 
     n_failed = 0
     for run_name, variant in combos:

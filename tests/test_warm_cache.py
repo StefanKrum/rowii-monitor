@@ -313,3 +313,51 @@ def test_import_beats_or_exit_raises_systemexit_with_install_hint(monkeypatch) -
     assert "beats" in message
     assert 'pip install -e ".[beats]"' in message
     assert "ROWII_BEATS_CHECKPOINT" in message
+
+
+# ---------------------------------------------------------------------------
+# 7. _import_tfc_or_exit (package-4 spec D4): mirrors #6 above, plus the
+#    checkpoint-name-mismatch case _import_beats_or_exit has no analogue for
+#    (BEATs has one checkpoint; TF-C has two, one per branch).
+# ---------------------------------------------------------------------------
+
+
+def test_import_tfc_or_exit_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    import warm_cache
+
+    from rowii.config import Config
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.tfc.wrapper" or name.startswith("rowii.tfc.wrapper."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        warm_cache._import_tfc_or_exit(cfg, "audio-tfc")
+
+    message = str(exc_info.value)
+    assert 'pip install -e ".[beats]"' in message
+
+
+@pytest.mark.parametrize(
+    "variant,env_var",
+    [("audio-tfc", "ROWII_TFC_AUDIO_CHECKPOINT"), ("vibration-tfc", "ROWII_TFC_VIB_CHECKPOINT")],
+)
+def test_import_tfc_or_exit_names_the_right_env_var_when_checkpoint_missing(
+    variant, env_var
+) -> None:
+    import warm_cache
+
+    from rowii.config import Config
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        warm_cache._import_tfc_or_exit(cfg, variant)
+
+    assert env_var in str(exc_info.value)

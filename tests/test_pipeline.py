@@ -473,6 +473,123 @@ def _single_file_logmel_run(burst_dir: Path, *, n_seconds: int = 3) -> Run:
     return Run(name="unit-test-logmel-run", files=files, day_root=burst_dir)
 
 
+# ---------------------------------------------------------------------------
+# 7. audio-tfc / vibration-tfc variants (package-4 spec D4): stream mapping,
+# featurizer dispatch (with the RELEVANT checkpoint path injected via cfg),
+# feature-column assembly, and cache-fingerprint checkpoint scoping.
+# ---------------------------------------------------------------------------
+
+
+def test_streams_for_variant_tfc_variants_mirror_audio_and_vibration() -> None:
+    assert pipeline._streams_for_variant("audio-tfc") == pipeline._streams_for_variant("audio")
+    assert pipeline._streams_for_variant("vibration-tfc") == pipeline._streams_for_variant(
+        "vibration"
+    )
+
+
+def test_featurizer_for_stream_dispatches_tfc_variants_with_cfg_checkpoint(tmp_path) -> None:
+    from rowii.tfc.wrapper import TfcFeaturizer
+
+    audio_ckpt = tmp_path / "tfc_audio.pt"
+    vib_ckpt = tmp_path / "tfc_vib.pt"
+    cfg = Config(
+        data_root=tmp_path, results_root=tmp_path / "results",
+        tfc_audio_checkpoint=audio_ckpt, tfc_vib_checkpoint=vib_ckpt,
+    )
+
+    audio_feat = pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio-tfc", cfg)
+    assert isinstance(audio_feat, TfcFeaturizer)
+    assert audio_feat._checkpoint == audio_ckpt
+
+    vib_feat = pipeline._featurizer_for_stream("RAWGeneratorVib__2", "vibration-tfc", cfg)
+    assert isinstance(vib_feat, TfcFeaturizer)
+    assert vib_feat._checkpoint == vib_ckpt
+
+    # Pre-existing dispatch stays untouched by the restructuring this needed
+    # (_featurizer_for_stream's vibration-stream branch could no longer be a flat
+    # "any non-audio stream -> VibFeaturizer" rule once vibration-tfc existed):
+    # ordinary "vibration" still gets a plain VibFeaturizer, ordinary "audio" still
+    # gets a plain AudioFeaturizer.
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorVib__2", "vibration", cfg), VibFeaturizer
+    )
+    assert isinstance(
+        pipeline._featurizer_for_stream("RAWGeneratorMic__0", "audio", cfg), AudioFeaturizer
+    )
+
+
+def test_assemble_variant_features_tfc_variants_hstack_like_audio_and_vibration() -> None:
+    audio_result = pipeline._StreamFeatureResult(
+        features=np.array([[1.0, 2.0]]), coverage=np.array([1.0])
+    )
+    vib_result = pipeline._StreamFeatureResult(
+        features=np.array([[3.0]]), coverage=np.array([1.0])
+    )
+    stream_results = {
+        "RAWGeneratorMic__0": audio_result,
+        "RAWTurbineMic__1": audio_result,
+        "RAWGeneratorVib__2": vib_result,
+        "RAWTurbineVib__3": vib_result,
+    }
+
+    np.testing.assert_array_equal(
+        pipeline.assemble_variant_features("audio-tfc", stream_results),
+        pipeline.assemble_variant_features("audio", stream_results),
+    )
+    np.testing.assert_array_equal(
+        pipeline.assemble_variant_features("vibration-tfc", stream_results),
+        pipeline.assemble_variant_features("vibration", stream_results),
+    )
+
+
+def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
+    tmp_path,
+) -> None:
+    """Mirrors `beats_checkpoint`'s own unconditional-payload-line inclusion (module
+    docstring), but variant-SCOPED: TF-C has TWO independent checkpoints (audio vs
+    vibration branch, unlike BEATs' one), so a fingerprint must depend only on the
+    ONE relevant to ITS OWN variant -- changing ROWII_TFC_AUDIO_CHECKPOINT must
+    change audio-tfc's fingerprint but leave vibration-tfc's and fusion's alone
+    (the reverse would force a needless recompute of every OTHER variant's cache
+    whenever a user points at a new audio-branch checkpoint). Three cfgs, changing
+    exactly ONE field relative to the baseline each, isolate the two checkpoint
+    axes independently."""
+    run = _single_file_audio_run(tmp_path / "burst")
+    audio_a, audio_b = tmp_path / "tfc_audio_a.pt", tmp_path / "tfc_audio_b.pt"
+    vib_a, vib_b = tmp_path / "tfc_vib_a.pt", tmp_path / "tfc_vib_b.pt"
+    baseline = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        tfc_audio_checkpoint=audio_a, tfc_vib_checkpoint=vib_a,
+    )
+    audio_changed = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        tfc_audio_checkpoint=audio_b, tfc_vib_checkpoint=vib_a,  # only audio differs
+    )
+    vib_changed = Config(
+        data_root=tmp_path, results_root=tmp_path,
+        tfc_audio_checkpoint=audio_a, tfc_vib_checkpoint=vib_b,  # only vib differs
+    )
+
+    def fp(variant: str, cfg: Config) -> str:
+        return pipeline._cache_fingerprint(run, variant, cfg)
+
+    assert fp("audio-tfc", baseline) != fp("audio-tfc", audio_changed), (
+        "audio-tfc's fingerprint must change when ROWII_TFC_AUDIO_CHECKPOINT changes"
+    )
+    assert fp("audio-tfc", baseline) == fp("audio-tfc", vib_changed), (
+        "audio-tfc's fingerprint must not depend on tfc_vib_checkpoint"
+    )
+    assert fp("vibration-tfc", baseline) == fp("vibration-tfc", audio_changed), (
+        "vibration-tfc's fingerprint must not depend on tfc_audio_checkpoint"
+    )
+    assert fp("vibration-tfc", baseline) != fp("vibration-tfc", vib_changed), (
+        "vibration-tfc's fingerprint must change when ROWII_TFC_VIB_CHECKPOINT changes"
+    )
+    assert fp("fusion", baseline) == fp("fusion", audio_changed) == fp("fusion", vib_changed), (
+        "a non-tfc variant's fingerprint must not depend on either tfc checkpoint"
+    )
+
+
 def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:
     """End-to-end `prepare_run(run, "logmel", ...)` over real (synthetic) 50 kHz
     burst data: (W, 3136) features, stream-prefixed logmel feature names, and a
