@@ -1203,7 +1203,7 @@ transfers to a foreign machine at 0.89 AUC in 0.78 MB. TPR@alpha=0.05 is
 exactly 0 below fraction 0.5 — CORRECT conformal behavior, not failure: the
 calibration side holds < 19 clips there (11 at fraction 0.25), so the
 distribution-free guarantee forces the threshold to +inf; at 0.5/1.0 the
-realized normal-clip FAR is 0.03–0.06 ≈ alpha with TPR up to 0.71 (BEATs) /
+realized normal-clip FAR is 0.03–0.06 ≈ alpha (per-representation means; per-cell spreads are wider) with TPR up to 0.71 (BEATs) /
 0.75 (TF-C). Caveats restated from the harness outputs: public-proxy evidence
 in the machine-id domain (never PSHP), per-window standardization erases
 absolute-level cues, pAUC = standardized/McClish (sklearn max_fpr=0.1).
