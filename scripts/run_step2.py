@@ -268,7 +268,9 @@ from rowii.pipeline import (  # noqa: E402
     _is_beats_variant,
     _is_student_variant,
     _is_tfc_variant,
+    _streams_for_variant,
     prepare_run,
+    stream_columns,
 )
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
@@ -2410,9 +2412,11 @@ def _run_and_write_ensemble_view(
 _XATTN_NOTES = """# Cross-attention fusion view -- notes
 
 - The joint embedding is produced by a cross-attention head trained CLIP-style
-  on the CALIBRATION side of this run's own top split (audio-beats embeddings
-  vs the fusion cache's vibration columns of the SAME window as the positive
-  pair) -- `scripts/train_xattn.py`. The head therefore never saw a
+  on the CALIBRATION side of this run's own top split (the audio-beats cache's
+  PRIMARY-mic 768-d embedding slice vs the fusion cache's vibration columns of
+  the SAME window as the positive pair) -- `scripts/train_xattn.py`; this view
+  applies the identical `rowii.pipeline.stream_columns` slice at scoring time.
+  The head therefore never saw a
   scoring-side segment, but it IS fitted on the same calibration data the
   conformal thresholds use; stated openly (package-5 spec D8).
 - Scoring is kNN (k=1, cosine) on the joint embedding with per-state
@@ -2473,6 +2477,19 @@ def _run_xattn_view(
     del audio_idx  # the audio side comes from the audio-beats cache, not fusion
     vib_features = sweep_prepared.features[:, vib_idx]
 
+    # The audio-beats cache concatenates BOTH mic streams (1536 columns); the
+    # head's query side is defined on the PRIMARY-mic 768-d slice only -- the
+    # SAME rowii.pipeline.stream_columns slice train_xattn.py trained on.
+    primary_mic = _streams_for_variant("audio-beats")[0]
+    audio_cols = stream_columns(prepared_audio.feature_names, primary_mic)
+    if int(audio_cols.size) != head.cfg.audio_dim:
+        raise ValueError(
+            f"audio-beats primary-mic block ({primary_mic}) is {audio_cols.size} "
+            f"column(s) wide but the xattn checkpoint's audio_dim is "
+            f"{head.cfg.audio_dim} -- geometry mismatch"
+        )
+    audio_features = prepared_audio.features[:, audio_cols]
+
     valid_both = sweep_prepared.valid_mask & prepared_audio.valid_mask
     top = split_by_segments(sweep_prepared.segment_ids, valid_both, 0.5, _CROSS_DAY_SEED)
     calib_mask = np.zeros(sweep_prepared.features.shape[0], dtype=bool)
@@ -2485,7 +2502,7 @@ def _run_xattn_view(
 
     def _joint(windows: np.ndarray) -> np.ndarray:
         return joint_embeddings(
-            head, prepared_audio.features[windows], vib_features[windows], device
+            head, audio_features[windows], vib_features[windows], device
         )
 
     min_ref = SweepConfig().min_ref

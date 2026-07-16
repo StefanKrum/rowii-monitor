@@ -2080,27 +2080,34 @@ def test_xattn_fusion_view_end_to_end(tmp_path, monkeypatch) -> None:
             return real_prepare(run, variant, cfg, use_cache=use_cache)
         fusion = real_prepare(run, "fusion", cfg, use_cache=use_cache)
         rng = np.random.default_rng(0)
+        # Faithful to the real audio-beats cache SHAPE CONTRACT: two mic
+        # streams' blocks concatenated, stream-prefixed names -- the view must
+        # slice out the primary mic's block (4 columns here, 768 in reality).
         return _dc.replace(
             fusion,
-            features=rng.normal(0.0, 1.0, (fusion.features.shape[0], 768)),
-            feature_names=[f"beats_e{i}" for i in range(768)],
+            features=rng.normal(0.0, 1.0, (fusion.features.shape[0], 8)),
+            feature_names=(
+                [f"RAWGeneratorMic__0::e{i}" for i in range(4)]
+                + [f"RAWTurbineMic__1::e{i}" for i in range(4)]
+            ),
         )
 
     monkeypatch.setattr(run_step2, "prepare_run", fake_prepare)
 
     import rowii.fusionx.wrapper as fusionx_wrapper
 
-    stub_head = SimpleNamespace(cfg=SimpleNamespace(out_dim=8))
+    stub_head = SimpleNamespace(cfg=SimpleNamespace(out_dim=8, audio_dim=4))
     monkeypatch.setattr(
         fusionx_wrapper, "load_xattn_head", lambda checkpoint, device: stub_head
     )
-    monkeypatch.setattr(
-        fusionx_wrapper,
-        "joint_embeddings",
-        lambda head, audio, vib, device: np.hstack(
-            [audio[:, :4], vib[:, :4]]
-        ).astype(np.float64),
-    )
+    def fake_joint_embeddings(head, audio, vib, device):
+        assert audio.shape[1] == head.cfg.audio_dim, (
+            "the view must pass the primary-mic slice, never the full "
+            "two-stream audio-beats matrix"
+        )
+        return np.hstack([audio[:, :4], vib[:, :4]]).astype(np.float64)
+
+    monkeypatch.setattr(fusionx_wrapper, "joint_embeddings", fake_joint_embeddings)
     import rowii.signals.beats as beats_mod
 
     monkeypatch.setattr(beats_mod, "best_device", lambda: "cpu")

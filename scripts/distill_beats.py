@@ -104,6 +104,7 @@ from rowii.pipeline import (  # noqa: E402
     _cache_npz_path,
     _load_cached_prepared_run,
     _streams_for_variant,
+    stream_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,20 +256,22 @@ def _teacher_target_columns(
     first real-data failure). Columns are selected by feature-name prefix, not
     by position, so a stream-order change in the cache breaks loudly here
     instead of silently mis-slicing; a slice width that disagrees with the
-    student's `out_dim` is likewise a hard exit, not a broadcast.
+    student's `out_dim` is likewise a hard exit, not a broadcast. Column
+    selection itself is `rowii.pipeline.stream_columns` (shared with
+    `scripts/train_xattn.py`'s audio-query slice and `scripts/run_step2.py`'s
+    `--xattn-fusion` view -- ONE definition of "this stream's block"); this
+    wrapper only adds the CLI's exit-code semantics and the out_dim check.
     """
-    prefix = f"{stream}::"
-    cols = np.flatnonzero(
-        np.array([name.startswith(prefix) for name in teacher.feature_names])
-    )
-    if cols.size == 0:
+    try:
+        cols = stream_columns(teacher.feature_names, stream)
+    except ValueError:
         print(
             f"distill_beats: teacher cache has no columns for stream {stream!r} "
-            f"(no feature name starts with {prefix!r}) -- cannot slice the "
+            f"(no feature name starts with '{stream}::') -- cannot slice the "
             "distillation target",
             file=sys.stderr,
         )
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     if int(cols.size) != expected_dim:
         print(
             f"distill_beats: teacher slice for stream {stream!r} has {cols.size} "

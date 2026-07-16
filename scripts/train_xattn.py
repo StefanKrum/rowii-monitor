@@ -1,6 +1,9 @@
 """Cross-attention fusion-head training CLI (Step-2 package-5 spec D8, plan Task
 6): trains `rowii.fusionx.model.XattnHead` CLIP-style on `audio-beats`'
-ALREADY-CACHED 768-d embeddings and the `fusion` cache's own vibration-branch
+ALREADY-CACHED 768-d embeddings (the PRIMARY-mic column slice of that cache,
+which concatenates both mic streams -- `rowii.pipeline.stream_columns`, shared
+with `scripts/distill_beats.py`'s teacher slice and `scripts/run_step2.py`'s
+`--xattn-fusion` view) and the `fusion` cache's own vibration-branch
 columns (`rowii.anomaly.fusion.split_branch_columns`) -- audio and vibration
 views of the SAME window are the ONE positive pair (`rowii.tfc.model.tfc_loss`,
 the symmetric InfoNCE this objective needs, reused verbatim -- see `rowii.
@@ -109,6 +112,7 @@ from rowii.pipeline import (  # noqa: E402
     _cache_npz_path,
     _load_cached_prepared_run,
     _streams_for_variant,
+    stream_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -480,6 +484,24 @@ def main(argv: list[str] | None = None) -> int:
 
     audio_idx, vib_idx = split_branch_columns(vib_source.feature_names)
 
+    xattn_cfg = XattnConfig()
+    primary_mic = _streams_for_variant(_AUDIO_VARIANT)[0]
+    try:
+        audio_cols = stream_columns(audio.feature_names, primary_mic)
+    except ValueError as exc:
+        print(f"train_xattn: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if int(audio_cols.size) != xattn_cfg.audio_dim:
+        print(
+            f"train_xattn: audio-beats primary-mic block ({primary_mic}) is "
+            f"{audio_cols.size} column(s) wide but XattnConfig.audio_dim is "
+            f"{xattn_cfg.audio_dim} -- geometry mismatch (the audio-beats cache "
+            "concatenates BOTH mic streams; the head trains on the primary-mic "
+            "slice only)",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     calibration_windows = _select_calibration_windows(vib_source, audio, seed=args.seed)
     if calibration_windows.size == 0:
         print(
@@ -489,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    audio_inputs = audio.features[calibration_windows]
+    audio_inputs = audio.features[calibration_windows][:, audio_cols]
     vib_inputs = vib_source.features[calibration_windows][:, vib_idx]
     vib_dim = int(vib_idx.shape[0])
     logger.info(
@@ -500,7 +522,6 @@ def main(argv: list[str] | None = None) -> int:
         vib_dim, int(audio_idx.shape[0]),
     )
 
-    xattn_cfg = XattnConfig()
     model, epoch_losses = _train_xattn_head(
         audio_inputs, vib_inputs, xattn_cfg, vib_dim,
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed,
@@ -513,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     sidecar = {
         "run": run.name,
         "audio_variant": _AUDIO_VARIANT,
+        "audio_stream": primary_mic,
         "vib_source_variant": _VIB_SOURCE_VARIANT,
         "vib_dim": vib_dim,
         "epochs": args.epochs,

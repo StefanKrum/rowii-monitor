@@ -972,3 +972,33 @@ def test_prepare_run_logmel_cache_round_trip(tmp_path, monkeypatch) -> None:
     np.testing.assert_array_equal(first.segment_ids, second.segment_ids)
     assert first.feature_names == second.feature_names
     assert first.grid == second.grid
+
+
+# --- stream_columns (per-stream column-block selection) ----------------------
+
+
+class TestStreamColumns:
+    def test_selects_contiguous_block_by_name_prefix(self):
+        names = ["MicA::e0", "MicA::e1", "MicB::e0", "MicB::e1"]
+        np.testing.assert_array_equal(
+            pipeline.stream_columns(names, "MicA"), np.array([0, 1])
+        )
+        np.testing.assert_array_equal(
+            pipeline.stream_columns(names, "MicB"), np.array([2, 3])
+        )
+
+    def test_selection_is_by_prefix_not_position(self):
+        names = ["MicB::e0", "MicA::e0", "MicB::e1", "MicA::e1"]
+        np.testing.assert_array_equal(
+            pipeline.stream_columns(names, "MicA"), np.array([1, 3])
+        )
+
+    def test_prefix_match_is_exact_up_to_separator(self):
+        # "Mic" must not swallow "MicA::..." -- the separator is part of the prefix.
+        names = ["MicA::e0", "MicA::e1"]
+        with pytest.raises(ValueError, match="Mic"):
+            pipeline.stream_columns(names, "Mic")
+
+    def test_unknown_stream_raises_value_error(self):
+        with pytest.raises(ValueError, match="MicC"):
+            pipeline.stream_columns(["MicA::e0"], "MicC")
