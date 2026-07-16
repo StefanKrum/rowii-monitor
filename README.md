@@ -1140,3 +1140,82 @@ with suffixes (`audio-beats-{lora,ft,int8}-detected`), caches are not. All five
 checkpoints under `models/adapted/` with JSON sidecars (objective caveat,
 leakage note, seeds); adapters merge back into the standard `{"cfg","model"}`
 format, so every downstream path loads them unchanged.
+
+## Step 2 package-6 evidence (2026-07-17): runtime prototype + pillar-3 readiness
+
+The LAST package of the code roadmap: the "runs at the plant" requirement made
+concrete, the labeled-fault evaluation prepared for the induced-fault campaign,
+and the design's central figure realized on a public proxy.
+
+### One artifact runs the plant recipe: snapshot + monitor CLI
+
+`rowii.runtime.MonitorSnapshot` persists the fitted detector (HMM as plain
+arrays — no pickle anywhere, `allow_pickle=False` end to end), per-state
+reference matrices, calibration scores, and conformal thresholds as ONE npz +
+JSON sidecar (14.5 MB for the 010726 fusion fit, 4 states). Round-trip verified
+BITWISE on 29,344 real windows (apply labels, per-state scores, thresholds).
+`scripts/monitor.py <snapshot> <new run>` then emits the state timeline,
+`alarms.parquet`, alarm segments, and provenance notes:
+
+| monitored day | `--thresholds recalibrate` (default) | `--thresholds frozen` |
+|---|---|---|
+| 250526-tu | pooled alarm rate **0.022** | **0.776** (state 2: 100%) |
+| 290626-tu | pooled alarm rate **0.052** | 0.522 |
+
+Package-2's central finding ("transfer detector + references, recalibrate
+thresholds per day") is now a one-command contrast at nominal alpha = 0.05; the
+frozen mode's notes carry the distribution-shift warning verbatim. 290626
+honestly reports `no_conformal_data` for one state (683 windows with no
+calibration-side coverage). Alarms remain CANDIDATES — no fault labels exist.
+
+### Pillar-3 event harness: ready for the campaign, demonstrated on synthetic intervals
+
+`rowii.eval.events.evaluate_events` + `scripts/eval_events.py`: per-event TPR,
+first-alarm latency, and false-alarm rate outside events, against a documented
+`events.csv` contract (tz-aware ISO-8601). Campaign day = `monitor.py` then
+`eval_events.py`. The committed demo (3 synthetic 5-min intervals over
+290626's real alarms) is labeled a HARNESS DEMO in every output: 0/3 detected
+(expected — alarms are FAR-level noise), 362 false-alarm windows = 194/h at
+window FAR 0.054 ≈ alpha.
+
+### Detection-performance scarcity on the MIMII proxy: SSL wins exactly when data is scarce
+
+`scripts/scarcity_detection.py` (clip-level splits, leakage rule
+review-verified by runtime instrumentation; conformal thresholds calibrated on
+CLIP-level scores) on MIMII pump 0 dB, 4 machine ids, caps 300 normal clips/id,
+90 test-normal + 100–143 abnormal clips per id, seeds 7/8/9. Clip-level AUC
+(mean over ids × seeds):
+
+| representation | 5% (8 fit clips) | 10% | 25% | 50% | 100% |
+|---|---|---|---|---|---|
+| frozen BEATs | **0.911** | 0.927 | 0.940 | 0.948 | 0.953 |
+| TF-C (MIMII-pretrained) | 0.773 | 0.843 | 0.908 | 0.933 | **0.958** |
+| student (0.78 MB, PSHP-distilled) | 0.733 | 0.791 | 0.840 | 0.869 | 0.890 |
+| logmel | 0.708 | 0.726 | 0.720 | 0.721 | 0.722 |
+| handcrafted | 0.659 | 0.693 | 0.751 | 0.766 | 0.771 |
+
+The design's scarcity question answered on the proxy: frozen general-audio SSL
+is nearly data-free (0.911 from EIGHT normal clips; per-seed range
+[0.897, 0.924] does not overlap TF-C's [0.742, 0.795]), while industrial
+pretraining (TF-C, pretrained on THIS corpus's normals) needs data and only
+overtakes at the full set (0.958 vs 0.953). The PSHP-distilled student
+transfers to a foreign machine at 0.89 AUC in 0.78 MB. TPR@alpha=0.05 is
+exactly 0 below fraction 0.5 — CORRECT conformal behavior, not failure: the
+calibration side holds < 19 clips there (11 at fraction 0.25), so the
+distribution-free guarantee forces the threshold to +inf; at 0.5/1.0 the
+realized normal-clip FAR is 0.03–0.06 ≈ alpha with TPR up to 0.71 (BEATs) /
+0.75 (TF-C). Caveats restated from the harness outputs: public-proxy evidence
+in the machine-id domain (never PSHP), per-window standardization erases
+absolute-level cues, pAUC = standardized/McClish (sklearn max_fpr=0.1).
+
+### Review honesty
+
+Per-task adversarial reviews: T1 approved (zero functional defects; covars
+bit-exactness, split parity, on-disk mutation propagation all probed), T2
+fix-required → resolved (an --alpha mutation-test gap closed; the min_ref
+question resolved as a documented sweeps-identical reading), T3 approved with
+zero findings, T4/T5 fix-required → resolved (window_s-aware resampling,
+machine-id collision refusal, mtime in the cache fingerprint, corpus-gone
+honesty with exit 1). The scarcity harness's leakage-freedom and clip-level
+calibration coherence were confirmed by the reviewer with adversarially
+constructed divergence cases, not just re-reads.
