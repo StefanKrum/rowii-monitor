@@ -186,6 +186,52 @@ proxy:
 5. README package-6 section + master-thesis research note + final whole-branch
    review → PR #9 → merge. Roadmap check-off: every ⬜ code item closed.
 
+## 3b. Amendment A1 (pre-implementation adversarial review, 2026-07-16)
+
+Verified against the real code/library before any implementation; these bind:
+
+1. **hmmlearn covars trap (D1, measured):** for `covariance_type="diag"` the
+   `covars_` GETTER returns full `(k, F, F)` matrices while the SETTER demands
+   `(k, F)` diagonals (probed: direct set fails with "'diag' covars must have
+   shape (n_components, n_dim)"). The snapshot stores
+   `np.diagonal(covars_, axis1=1, axis2=2)`; reconstruction assigns that. Viterbi
+   parity of the reconstructed model was verified empirically (identical
+   `predict` on 120 windows, non-contiguous label ids).
+2. **k<=1 degenerate detector (D1):** `StickyHmmSmoother.fit_decode` with one
+   unique init id leaves `last_model_ = None` and `decode` returns the single
+   fitted id for every window. The snapshot format carries `fitted_ids` always
+   and HMM arrays only when `k >= 2`; load reconstructs the degenerate smoother
+   faithfully (no HMM). Test-pinned.
+3. **Monitor per-state semantics on the new run (D2):** states can be absent or
+   thin on the monitored day. Recalibrate mode follows the sweep row
+   conventions exactly: a state with no snapshot reference → excluded row; a
+   state with zero calibration-side windows on the new run → no-conformal-data
+   row; below-`min_ref` gating identical to sweeps. In recalibrate mode alarms
+   are emitted for SCORING-side windows only (the new run's calibration-side
+   windows are consumed by threshold calibration and are reported as
+   `consumed_for_calibration`, never alarmed — calibration bias rule). In
+   frozen mode every valid window gets a verdict.
+4. **Scarcity metric coherence (D4):** the conformal threshold for TPR@alpha is
+   calibrated on CLIP-LEVEL scores (mean over windows) of held-out
+   training-normal clips, and applied to clip-level scores of test clips —
+   never window-calibrated/clip-applied. Reported metrics per cell: clip-level
+   AUC, clip-level pAUC (`sklearn.roc_auc_score(max_fpr=0.1)`, the
+   STANDARDIZED/McClish partial AUC — definition named in every output), clip
+   TPR@(conformal alpha=0.05), window-level AUC (secondary). No pAUC utility
+   exists in this repo yet; this harness introduces it with the definition
+   pinned by a test against a hand-computed case.
+5. **MIMII windows are per-window standardized** (P4 corpus convention,
+   `_standardize`) for every representation — removes clip-gain confounds AND
+   absolute-level anomaly cues; documented as the conservative choice in all
+   outputs. `AudioFeaturizer`'s output width varies with `rate_hz` (bands
+   capped at Nyquist) — self-consistent within the 16 kHz corpus, stated in the
+   notes. The student on MIMII measures TRANSFERABILITY of a PSHP-distilled
+   encoder (framing restated in outputs).
+6. **run_sweep split parity confirmed:** top split (`calibration_frac`, seed) →
+   nested split of the calibration half (0.5, seed+1) → references from fit
+   windows, thresholds from conformal windows — `fit_snapshot` mirrors this
+   1:1 (verified against `run_sweep`'s actual code, not its docstring).
+
 ## 4. Leakage & honesty rules (restated once, enforced everywhere)
 
 - Snapshot fitting follows the sweeps' split discipline; the monitor never refits
