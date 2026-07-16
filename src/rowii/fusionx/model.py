@@ -50,12 +50,18 @@ The FIRST term is the actual CLIP-style alignment objective: it shapes
 up close in a SHARED aligned subspace, exactly `rowii.tfc.model.tfc_loss`'s own
 job for the time/frequency pair. The SECOND term additionally shapes the JOINT
 (post-attention) embedding toward that SAME aligned lift space, at HALF weight
-and through a DETACHED `lift_a` -- training the attention block + output
-projection to agree with the already-established lift alignment, without
-letting its own gradient reshape `audio_lift` a SECOND time via a different
-pairing (which would happen if `lift_a` were not detached: the joint term's
-gradient would then flow back into `audio_lift` too, competing with the first
-term's own, cleaner alignment signal for the exact same parameters). Both terms
+and through a DETACHED `lift_a`. Be precise about what the detach does and does
+NOT do (the original wording here overclaimed, caught by the final whole-branch
+review with a runtime gradient probe): `joint = model(audio, vib)` recomputes
+`audio_lift(audio)` inside `forward` (query + residual), so the second term's
+gradient DOES flow into `audio_lift` through the prediction side -- measured
+per-submodule grad norms on a fresh head under the term-2-only loss:
+`audio_lift` 11.18 (the largest), `out` 4.63, `attn.out_proj` 2.00, `vib_lift`
+0.70. What `lift_a.detach()` actually removes is the TARGET side: without it,
+term 2 could reduce its loss by dragging the alignment target toward the joint
+prediction (target chasing), instead of moving the prediction toward a target
+the FIRST term alone owns. The auxiliary term's influence is bounded by its
+`0.5` weight, not by the detach. Both terms
 share one `temperature` (`cfg.temperature`). The `0.5` weight and the
 `lift_a.detach()` choice are this task's own binding design constants -- `scripts/
 train_xattn.py`'s `_JOINT_LOSS_WEIGHT` module constant is where they are

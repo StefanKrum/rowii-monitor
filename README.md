@@ -1044,21 +1044,25 @@ data contains no confirmed faults), not detection performance. Detected states
 are re-derived per encoder, so per-state rows are not label-aligned across
 encoders; compare at pooled level.
 
-| encoder | size | 250526 pooled FAR | 290626 pooled FAR | 010726 pooled FAR (adaptation day) |
+The FAR columns are the per-state-conformal AGGREGATE (the `pooled` summary row
+of `per-state-knn/far_table.csv`: total alarms / total scored across states) —
+NOT the repo's "pooled" mode-agnostic conditioning, which is a different sweep.
+
+| encoder | size | 250526 aggr. FAR | 290626 aggr. FAR | 010726 aggr. FAR (adaptation day) |
 |---|---|---|---|---|
 | frozen BEATs | 361.5 MB | **0.007** | 0.130 | 0.058 |
-| + LoRA (r=8, q/v, 4 min MPS) | 361.5 MB merged | 0.069 | **0.136** | 0.028 |
-| + full FT (2 epochs, 3 min) | 361.5 MB | 0.051 | 0.364 | **0.025** |
+| + LoRA (r=8, q/v, 4 min MPS) | 361.3 MB merged | 0.069 | **0.136** | 0.028 |
+| + full FT (2 epochs, 3 min) | 361.3 MB | 0.051 | 0.364 | **0.025** |
 | distilled student (KD) | **0.78 MB** | 0.019 | 0.189 | 0.035 |
 | + INT8 (dynamic) | 124.3 MB | — | — | 0.059 |
 
 ### Adaptation helps ON the adaptation day; full FT pays for it elsewhere
 
-Both adapted encoders roughly HALVE the frozen encoder's pooled FAR excess on the
+Both adapted encoders roughly HALVE the frozen encoder's aggregate FAR excess on the
 day they were adapted on (0.058 → 0.028/0.025; 8,000 windows, native token-level
 masked latent-MAE — a documented PROXY objective for BEATs' unreproducible
 tokenizer pretraining, restated in every checkpoint sidecar). Off-day the picture
-inverts: on 290626 full FT degrades to pooled FAR 0.364 (7.3x nominal) while LoRA
+inverts: on 290626 full FT degrades to aggregate FAR 0.364 (7.3x nominal) while LoRA
 stays at the frozen encoder's level (0.136 vs 0.130) — the classic
 adapter-vs-full-FT robustness trade-off, reproduced on real plant data. On the
 already-well-calibrated 250526 both adapted encoders are worse than frozen
@@ -1072,7 +1076,7 @@ package-4 rescue story (BEATs is not degenerate on this day to begin with).
 The KD student (192,643-param CNN on log-mel patches → the teacher's primary-mic
 768-d embedding; MSE 0.0041 after 30 epochs / 44 s) is **464x smaller** and
 **~40x faster on CPU** (0.5–0.8 ms/window vs ~30 ms) than its teacher, yet lands
-state ARI 0.9187 on 010726 (teacher: 0.9220) and pooled FARs in the frozen
+state ARI 0.9187 on 010726 (teacher: 0.9220) and aggregate FARs in the frozen
 encoder's range on all three days. Asterisk: it was distilled on 010726's
 calibration side, so its 010726 numbers are in-domain for the distillation day
 (still leakage-safe — calibration side only, never scoring windows; sidecar
@@ -1081,7 +1085,7 @@ restates this).
 ### INT8: a size tool, not a latency tool (here)
 
 Dynamic INT8 quantization: 361.5 → 124.3 MB (2.91x), embedding drift on 2,000
-real windows mean cosine 0.9983 (min 0.9962), pooled FAR 0.059 vs frozen 0.058 on
+real windows mean cosine 0.9983 (min 0.9962), aggregate FAR 0.059 vs frozen 0.058 on
 the same day — parity. Latency does NOT improve (~30 ms/window either way): the
 pipeline is preprocessing- and attention-bound, and the dynamically quantized
 linear kernels return no net win on this workload/CPU. The benchmark's

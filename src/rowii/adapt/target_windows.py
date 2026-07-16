@@ -2,8 +2,9 @@
 Task 2, design spec D3: `docs/superpowers/specs/2026-07-16-step2-package5-
 adaptation-design.md`).
 
-`iter_target_windows` feeds `scripts/adapt_beats.py`'s masked-patch
-adaptation objective (Task 1, `rowii.adapt.objective.masked_patch_loss`)
+`iter_target_windows` feeds `scripts/adapt_beats.py`'s masked-token
+adaptation objective (Task 1 as amended by spec Amendment A1,
+`rowii.adapt.objective.masked_token_loss`)
 1-second windows of a run's PRIMARY MIC stream (`RAWGeneratorMic__0` --
 `PreparedRun.segment_ids`'s own primary-stream convention for the "audio"
 variant), resampled to BEATs' 16 kHz input rate, drawn ONLY from the

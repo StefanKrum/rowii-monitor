@@ -124,7 +124,12 @@ _LEAKAGE_NOTE = (
     "-- the SAME top-level split every Step-2 within-day sweep draws its own "
     "calibration/scoring windows from for this run. Any Step-1/Step-2 result computed "
     "from this checkpoint's audio-student variant must restate that the student was "
-    "distilled on this run's calibration side."
+    "distilled on this run's calibration side. Grid caveat: split membership is drawn "
+    "on the logmel cache's grid (primary mic alone), while audio-student SCORING runs "
+    "on the both-mic grid (_streams_for_variant('audio-student')); if the two mic "
+    "streams are not coextensive for a run, the grids can differ in n_windows and "
+    "index-based membership need not correspond (coincides on the single-burst days "
+    "this checkpoint was produced and evaluated on)."
 )
 
 

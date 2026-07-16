@@ -232,3 +232,63 @@ class TestCosineDrift:
         result = quantize_beats.cosine_drift(a, b)
 
         assert np.isfinite(result)
+
+
+# ---------------------------------------------------------------------------
+# 4. --drift-run (persisted fp32-vs-int8 drift stats, final-review finding)
+# ---------------------------------------------------------------------------
+
+
+def test_drift_run_persists_row_cosine_stats_in_sidecar(tmp_path, monkeypatch):
+    _patch_beats_checkpoint(monkeypatch, tmp_path)
+    out_path = tmp_path / "out" / "beats_int8.pt"
+
+    # 6 fake raw windows (fewer than the 2000 default: exercises the clamp).
+    rng = np.random.default_rng(7)
+    fake_windows = rng.normal(0.0, 0.1, (6, 100, 1)).astype(np.float32)
+    monkeypatch.setattr(
+        quantize_beats, "_drift_windows_for_run", lambda run, n, cfg: fake_windows
+    )
+
+    base = rng.normal(size=(6, 4))
+
+    class _StubFeaturizer:
+        """fp32 vs int8 telling: the int8 instance (int8_model_path set)
+        returns a slightly perturbed copy of the fp32 embeddings, so the
+        cosine stats are non-trivial (< 1) but high (> 0.9)."""
+
+        def __init__(self, checkpoint, device=None, encoder=None, int8_model_path=None):
+            self._perturb = int8_model_path is not None
+
+        def transform(self, windows, rate_hz):
+            assert windows.shape == fake_windows.shape
+            out = base.copy()
+            if self._perturb:
+                out[:, 0] += 0.05
+            return out
+
+    import rowii.signals.beats as beats_mod
+
+    monkeypatch.setattr(beats_mod, "BeatsFeaturizer", _StubFeaturizer)
+
+    rc = quantize_beats.main(
+        ["--out", str(out_path), "--drift-run", "some-run", "--drift-windows", "2000"]
+    )
+    assert rc == 0
+
+    sidecar = json.loads(out_path.with_suffix(".json").read_text())
+    drift = sidecar["drift"]
+    assert drift["run"] == "some-run"
+    assert drift["n_windows"] == 6  # clamped to what the fake reader returned
+    assert 0.9 < drift["mean_cosine"] < 1.0
+    assert drift["min_cosine"] <= drift["p5_cosine"] <= drift["mean_cosine"]
+    assert "CPU" in drift["note"]
+
+
+def test_without_drift_run_sidecar_has_no_drift_key(tmp_path, monkeypatch):
+    _patch_beats_checkpoint(monkeypatch, tmp_path)
+    out_path = tmp_path / "out2" / "beats_int8.pt"
+    rc = quantize_beats.main(["--out", str(out_path)])
+    assert rc == 0
+    sidecar = json.loads(out_path.with_suffix(".json").read_text())
+    assert "drift" not in sidecar
