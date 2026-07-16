@@ -163,7 +163,9 @@ def test_real_declared_sha256_matching_passes(monkeypatch, tmp_path) -> None:
     assert row["sha256"] == real_hash
 
 
-def test_real_declared_sha256_mismatch_raises(monkeypatch, tmp_path) -> None:
+def test_real_declared_sha256_mismatch_raises_and_removes_the_corrupt_file(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(
         download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(b"actual bytes")
     )
@@ -178,15 +180,47 @@ def test_real_declared_sha256_mismatch_raises(monkeypatch, tmp_path) -> None:
     with pytest.raises(download_corpora.ChecksumMismatchError):
         download_corpora._download_file(spec, tmp_path)
 
+    # The mismatching (corrupt/truncated/wrong) file must not survive on disk
+    # for a later run to mistake for a good download.
+    assert not (tmp_path / "fake.bin").exists()
+
 
 # ---------------------------------------------------------------------------
-# 5. End-to-end (monkeypatched network) corpus download: manifest + extraction
+# 5. End-to-end (monkeypatched network) corpus download: manifest + extraction.
+#
+# These tests monkeypatch `_CORPUS_FILES`' per-corpus tuples with TEST-OWNED
+# entries rather than downloading against the shipped table: the shipped
+# table's sha256 values are the REAL, measured hashes of the actual multi-GB
+# corpus files (transcribed after the first verified download), which a tiny
+# synthetic payload can never match. Sentinel-sha entries exercise the
+# compute-and-record flow; a real-sha entry whose hash IS the fake payload's
+# exercises the verify flow -- either way the tests stay independent of
+# whatever sha state the shipped table happens to be in.
 # ---------------------------------------------------------------------------
 
 
 def test_download_corpus_cwru_writes_manifest_with_computed_hashes(monkeypatch, tmp_path) -> None:
+    payload = b"x" * 128
     monkeypatch.setattr(
-        download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(b"x" * 128)
+        download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(payload)
+    )
+    monkeypatch.setitem(
+        download_corpora._CORPUS_FILES,
+        "cwru",
+        (
+            download_corpora._CorpusFile(
+                url="https://example.invalid/a.mat",
+                filename="a.mat",
+                sha256=download_corpora._SHA256_TBD,
+                license="academic-free",
+            ),
+            download_corpora._CorpusFile(
+                url="https://example.invalid/b.mat",
+                filename="b.mat",
+                sha256=download_corpora._SHA256_TBD,
+                license="academic-free",
+            ),
+        ),
     )
 
     download_corpora._download_corpus("cwru", tmp_path)
@@ -194,9 +228,10 @@ def test_download_corpus_cwru_writes_manifest_with_computed_hashes(monkeypatch, 
     manifest_path = tmp_path / "cwru" / "MANIFEST.json"
     assert manifest_path.is_file()
     rows = json.loads(manifest_path.read_text())
-    assert len(rows) == len(download_corpora._CORPUS_FILES["cwru"])
+    assert len(rows) == 2
+    expected_sha256 = hashlib.sha256(payload).hexdigest()
     for row in rows:
-        assert row["sha256"] != download_corpora._SHA256_TBD
+        assert row["sha256"] == expected_sha256  # computed, never the sentinel
         assert row["license"] == "academic-free"
         assert row["bytes"] == 128
         assert "downloaded_at" in row
@@ -210,6 +245,21 @@ def test_download_corpus_mimii_extracts_zip_into_pump_0db(monkeypatch, tmp_path)
 
     monkeypatch.setattr(
         download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(payload)
+    )
+    # Real-sha entry matching the fake payload: this test doubles as the
+    # verify-flow SUCCESS case (declared == computed -> no error, manifest
+    # written, extraction proceeds).
+    monkeypatch.setitem(
+        download_corpora._CORPUS_FILES,
+        "mimii",
+        (
+            download_corpora._CorpusFile(
+                url="https://example.invalid/0_dB_pump.zip",
+                filename="0_dB_pump.zip",
+                sha256=hashlib.sha256(payload).hexdigest(),
+                license="CC BY-SA 4.0",
+            ),
+        ),
     )
 
     download_corpora._download_corpus("mimii", tmp_path)
@@ -226,6 +276,18 @@ def test_download_corpus_paderborn_without_extractor_prints_manual_instructions_
         download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(b"fake-rar-bytes")
     )
     monkeypatch.setattr(download_corpora.shutil, "which", lambda name: None)
+    monkeypatch.setitem(
+        download_corpora._CORPUS_FILES,
+        "paderborn",
+        (
+            download_corpora._CorpusFile(
+                url="https://example.invalid/K001.rar",
+                filename="K001.rar",
+                sha256=download_corpora._SHA256_TBD,
+                license="CC BY-NC 4.0",
+            ),
+        ),
+    )
 
     with caplog.at_level(logging.WARNING):
         download_corpora._download_corpus("paderborn", tmp_path)  # must not raise
@@ -238,3 +300,39 @@ def test_download_corpus_paderborn_without_extractor_prints_manual_instructions_
     assert "unar" in err and "unrar" in err
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any("K001.rar" in w for w in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# 6. Verify-flow FAILURE semantics (pinned): a recorded-sha mismatch aborts
+#    the corpus with a clean non-zero exit naming the file, the partial
+#    (corrupt) file is removed, and NO MANIFEST.json is written.
+# ---------------------------------------------------------------------------
+
+
+def test_sha_mismatch_exits_nonzero_removes_file_and_writes_no_manifest(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setattr(
+        download_corpora.urllib.request, "urlopen", lambda url: _FakeResponse(b"corrupted bytes")
+    )
+    monkeypatch.setitem(
+        download_corpora._CORPUS_FILES,
+        "cwru",
+        (
+            download_corpora._CorpusFile(
+                url="https://example.invalid/a.mat",
+                filename="a.mat",
+                sha256="0" * 64,  # real (non-sentinel) hash that cannot match
+                license="academic-free",
+            ),
+        ),
+    )
+
+    exit_code = download_corpora.main(["--corpus", "cwru", "--dest", str(tmp_path)])
+
+    assert exit_code == 1  # clean non-zero exit, not a traceback
+    err = capsys.readouterr().err
+    assert "a.mat" in err
+    assert "sha256 mismatch" in err
+    assert not (tmp_path / "cwru" / "a.mat").exists()  # corrupt file removed
+    assert not (tmp_path / "cwru" / "MANIFEST.json").exists()  # nothing recorded
