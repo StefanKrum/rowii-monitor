@@ -120,7 +120,15 @@ this protocol's per-state numbers are checked against.
   and the combo's `candidate_register.md` section header carry the same suffix
   (`_within_day_out_dir`/`_summary_row`/`_register_section_markdown` -- the register
   would otherwise accumulate identical headers across a K-granularity sweep of one
-  run/variant).
+  run/variant). `--ensemble` (Task 4, design chapter's committed majority-voting
+  ensemble) writes `far_table_ensemble.csv` + `ensemble_notes.md` into a dedicated
+  `<variant>-<labels>[-k<K>]/ensemble/` sibling directory, ONE level above the
+  `<conditioning>-<scorer>/` combo dirs -- the view is conditioning/scorer-
+  independent, so (unlike `--score-fusion`, which currently re-writes an identical
+  copy into every combo dir) it is written exactly once per (run, `--labels`,
+  `--states`) rather than duplicated (`_ensemble_out_dir`'s own docstring has the
+  full placement rationale; the score-fusion redundancy is deliberately left as-is,
+  noted for the final whole-branch review).
 - cross-day: the spec only writes `results/step2/cross-day/<variant>/<dayA>__to__<dayB>/`
   literally, with no room for the `--labels`/`--scorer` axes a single invocation can still
   sweep over (`--scorer all`, `--labels gt`) without collision. Binding extension
@@ -193,6 +201,7 @@ import logging
 import math
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -377,6 +386,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Per-branch scorer for --score-fusion (default: knn); fit "
             "independently on the audio branch's and the vibration branch's own "
             "columns."
+        ),
+    )
+    parser.add_argument(
+        "--ensemble", action="store_true",
+        help=(
+            "Also compute the majority-ensemble evaluation view (design chapter's "
+            "committed ensemble: OC-SVM + Isolation Forest + LSTM-AE, decision-"
+            "level -- an alarm requires >= 2 of the 3 members to agree): writes "
+            "far_table_ensemble.csv + ensemble_notes.md into a dedicated "
+            "'ensemble/' sibling directory alongside each run's normal sweep-combo "
+            "dirs, once per (run, --labels, --states) -- conditioning/scorer-"
+            "independent, unlike --score-fusion. Only valid with --protocol "
+            "within-day and --labels detected."
         ),
     )
     return parser
@@ -1755,6 +1777,433 @@ def _write_score_fusion_outputs(out_dir: Path, far_table: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Majority-ensemble evaluation view (Task 4, design chapter's committed ensemble: a
+# majority-voting ensemble of OC-SVM + Isolation Forest + LSTM-AE, "requiring
+# agreement before an alarm suppresses false alarms"). Voting is DECISION-level (each
+# member keeps its own scorer/reference/threshold; only the ALARM booleans are
+# combined), so it lives here in orchestration, not as a `Scorer` itself.
+# ---------------------------------------------------------------------------
+
+_ENSEMBLE_MEMBER_FACTORIES: dict[str, Callable[[], Scorer]] = {
+    "ocsvm": OcSvmScorer,
+    "iforest": IsolationForestScorer,
+    "lstmae": LstmAeScorer,
+}
+"""Module-level test seam (task brief): each factory returns a FRESH, unfitted
+`Scorer` for one ensemble member. Tests monkeypatch this whole dict
+(`monkeypatch.setattr(run_step2, "_ENSEMBLE_MEMBER_FACTORIES", {...})`) to substitute
+a lightweight, torch-free stub for `"lstmae"` -- `LstmAeScorer.fit` needs torch
+(`rowii.anomaly.recon` module docstring's lazy-import contract), which the CLI test
+suite never requires. Iteration order (`ocsvm`, `iforest`, `lstmae`) is insertion
+order (Python dict guarantee) and determines `far_table_ensemble.csv`'s row order
+within each label."""
+
+_ENSEMBLE_SEED = 7
+"""Top-level split seed for `_run_ensemble_view` -- matches `SweepConfig.seed`'s own
+default (7) and `_SCORE_FUSION_SEED`'s identical choice; the nested fit/conformal
+split uses `_ENSEMBLE_SEED + 1` (=8), the same `run_sweep`-mirroring convention
+`_run_score_fusion_view` already established (its own docstring)."""
+
+_ENSEMBLE_MIN_REF = 20
+"""Matches `SweepConfig.min_ref`'s own default and `_SCORE_FUSION_MIN_REF`'s
+identical choice -- the minimum fit-side window count a state needs before any
+ensemble member gets a real reference for it."""
+
+_ENSEMBLE_VOTE_THRESHOLD = 2
+"""Majority rule: an ENSEMBLE alarm requires at least this many of the 3 members
+(`len(_ENSEMBLE_MEMBER_FACTORIES)`) to alarm on the same window (design chapter's
+committed majority-voting ensemble: "requiring agreement before an alarm suppresses
+false alarms")."""
+
+_ENSEMBLE_LABEL = "ENSEMBLE"
+"""`member` value for the >=2-of-3 majority-vote row -- uppercase by convention so it
+never collides with a real (lowercase) member name from `_ENSEMBLE_MEMBER_FACTORIES`,
+mirroring `_POOLED_LABEL`'s comparable role for `run_sweep`'s own aggregate row."""
+
+_ENSEMBLE_COLUMNS: tuple[str, ...] = (
+    "member", "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+    "low_confidence",
+)
+
+
+@dataclass
+class _EnsembleRow:
+    """Mutable row builder for `far_table_ensemble.csv` -- one instance per (label,
+    member) pair, plus one per (label, `_ENSEMBLE_LABEL`) majority-vote row, mirroring
+    `_ScoreFusionRow`'s own "converted to a plain dict via `dataclasses.asdict` at the
+    very end" pattern."""
+
+    member: str
+    label: int | str
+    n_calibration: float
+    n_scored: float
+    n_alarms: float
+    realized_far: float
+    low_confidence: bool
+
+
+def _ensemble_member_features(
+    member_name: str, prepared_variant: PreparedRun, prepared_logmel: PreparedRun
+) -> np.ndarray:
+    """Which `PreparedRun`'s feature matrix *member_name* fits/scores on: the
+    `logmel`-variant's for `"lstmae"` (`rowii.anomaly.recon.LstmAeScorer` needs a
+    flattened logmel patch, its own module docstring), the sweep `--variant`'s own
+    features for every other member (`"ocsvm"`/`"iforest"`, or any future addition to
+    `_ENSEMBLE_MEMBER_FACTORIES`)."""
+    if member_name == "lstmae":
+        return prepared_logmel.features
+    return prepared_variant.features
+
+
+def _assert_ensemble_grids_match(
+    run_name: str, prepared_variant: PreparedRun, prepared_logmel: PreparedRun
+) -> None:
+    """`--ensemble`'s grid-alignment guard (task brief binding detail 3): the sweep
+    variant's and the `logmel` variant's `PreparedRun`s must describe the IDENTICAL
+    window grid (`t0_ns`, `window_ns`, `n_windows`) for a shared window INDEX to mean
+    the same physical time slot in both -- `_run_ensemble_view`'s single top-level
+    split (below) is drawn once from the variant side and used to index BOTH prepared
+    runs' feature matrices at the SAME window indices. Structurally, both
+    preparations share the primary generator-mic stream for every audio-bearing sweep
+    variant (`audio`, `audio-beats`, `fusion`, `fusion-beats`, `logmel` itself --
+    `rowii.pipeline._streams_for_variant`), so this should always hold in practice --
+    asserted here anyway (trust but verify, mirroring `rowii.anomaly.sweep.
+    _assert_three_way_disjoint`'s identical stance on a different structurally-
+    guaranteed invariant) rather than assumed, since `--variant vibration` shares NO
+    stream with `logmel` at all and could plausibly desync.
+
+    Raises:
+        SystemExit: code 2, with a clear message on stderr (parser.error-style; the
+            argparse `parser` object itself is out of scope this deep in the call
+            stack, so this raises directly rather than routing back through it) -- a
+            grid mismatch signals a structural inconsistency this view cannot safely
+            paper over, not a per-run/per-combo condition to log-and-skip.
+    """
+    if prepared_variant.grid == prepared_logmel.grid:
+        return
+    va, la = prepared_variant.grid, prepared_logmel.grid
+    print(
+        f"run_step2: --ensemble grid mismatch for run {run_name!r}: sweep-variant "
+        f"grid (t0_ns={va.t0_ns}, window_ns={va.window_ns}, n_windows={va.n_windows}) "
+        f"!= logmel grid (t0_ns={la.t0_ns}, window_ns={la.window_ns}, "
+        f"n_windows={la.n_windows}) -- the ensemble view indexes both PreparedRuns at "
+        "the same window indices and needs one shared grid",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def _ensemble_low_confidence_rows(label: int | str) -> list[_EnsembleRow]:
+    """All 3 members + the `_ENSEMBLE_LABEL` row for *label*, NaN metrics +
+    `low_confidence=True` -- mirrors `_score_fusion_low_confidence_rows`'s identical
+    fallback for a label that cannot get a real per-member reference or threshold at
+    all."""
+    names = [*_ENSEMBLE_MEMBER_FACTORIES, _ENSEMBLE_LABEL]
+    return [
+        _EnsembleRow(name, label, math.nan, math.nan, math.nan, math.nan, True)
+        for name in names
+    ]
+
+
+def _ensemble_rows_for_label(
+    label: int | str,
+    prepared_variant: PreparedRun,
+    prepared_logmel: PreparedRun,
+    labels: np.ndarray,
+    fit_windows: np.ndarray,
+    conformal_windows: np.ndarray,
+    scoring_windows: np.ndarray,
+    alpha: float,
+) -> list[_EnsembleRow]:
+    """One `_EnsembleRow` per member (`_ENSEMBLE_MEMBER_FACTORIES`) plus the
+    majority-vote `_ENSEMBLE_LABEL` row, for *label* -- mirrors
+    `_score_fusion_rows_for_label`'s own per-label gating/shape (same construction,
+    this view's own members/features in place of that view's audio/vibration
+    branches): a label whose fit-side window count is below `_ENSEMBLE_MIN_REF`, or
+    that has zero conformal-side windows, reports every member AND the ENSEMBLE row as
+    `low_confidence=True` with NaN metrics (`_ensemble_low_confidence_rows`) rather
+    than partially succeeding.
+    """
+    label_fit = fit_windows[labels[fit_windows] == label]
+    if label_fit.shape[0] < _ENSEMBLE_MIN_REF:
+        return _ensemble_low_confidence_rows(label)
+
+    label_conformal = conformal_windows[labels[conformal_windows] == label]
+    if label_conformal.shape[0] == 0:
+        return _ensemble_low_confidence_rows(label)
+
+    label_scoring = scoring_windows[labels[scoring_windows] == label]
+    n_scored = int(label_scoring.shape[0])
+    shared_n_calibration = float(label_conformal.shape[0])
+
+    member_rows: list[_EnsembleRow] = []
+    member_alarms: dict[str, np.ndarray] = {}
+    any_low_confidence = False
+
+    for member_name, factory in _ENSEMBLE_MEMBER_FACTORIES.items():
+        member_features = _ensemble_member_features(
+            member_name, prepared_variant, prepared_logmel
+        )
+        scorer = factory().fit(member_features[label_fit])
+        conformal_scores = scorer.score(member_features[label_conformal])
+        threshold = calibrate(conformal_scores, alpha)
+        any_low_confidence = any_low_confidence or threshold.low_confidence
+
+        if n_scored == 0:
+            # No alarm array recorded here -- the ensemble aggregate below branches
+            # on this SAME `n_scored == 0` condition without ever reading
+            # `member_alarms`, so populating it in this branch would be dead writes.
+            member_rows.append(_EnsembleRow(
+                member_name, label, float(threshold.n_calibration), 0.0, 0.0,
+                math.nan, threshold.low_confidence,
+            ))
+            continue
+
+        scores = scorer.score(member_features[label_scoring])
+        alarms = scores > threshold.threshold
+        member_alarms[member_name] = alarms
+        n_alarms = int(alarms.sum())
+        member_rows.append(_EnsembleRow(
+            member_name, label, float(threshold.n_calibration), float(n_scored),
+            float(n_alarms), n_alarms / n_scored, threshold.low_confidence,
+        ))
+
+    if n_scored == 0:
+        ensemble_row = _EnsembleRow(
+            _ENSEMBLE_LABEL, label, shared_n_calibration, 0.0, 0.0, math.nan,
+            any_low_confidence,
+        )
+    else:
+        votes = np.zeros(n_scored, dtype=np.int64)
+        for member_name in _ENSEMBLE_MEMBER_FACTORIES:
+            votes += member_alarms[member_name].astype(np.int64)
+        ensemble_alarms = votes >= _ENSEMBLE_VOTE_THRESHOLD
+        n_ensemble_alarms = int(ensemble_alarms.sum())
+        ensemble_row = _EnsembleRow(
+            _ENSEMBLE_LABEL, label, shared_n_calibration, float(n_scored),
+            float(n_ensemble_alarms), n_ensemble_alarms / n_scored, any_low_confidence,
+        )
+
+    return [*member_rows, ensemble_row]
+
+
+def _run_ensemble_view(
+    prepared_variant: PreparedRun,
+    prepared_logmel: PreparedRun,
+    labels: np.ndarray,
+    alpha: float,
+    *,
+    run_name: str,
+) -> pd.DataFrame:
+    """Majority-ensemble FAR table for one (run, labels_mode): OC-SVM + Isolation
+    Forest + LSTM-AE (`_ENSEMBLE_MEMBER_FACTORIES`), each calibrated with its OWN
+    per-state split-conformal threshold, plus an `_ENSEMBLE_LABEL` row per state
+    counting windows where >= `_ENSEMBLE_VOTE_THRESHOLD` of the 3 members alarm
+    (design chapter's committed majority-voting ensemble). Mirrors
+    `_run_score_fusion_view`'s own three-way split construction exactly
+    (`_ENSEMBLE_SEED`=7 top-level, `_ENSEMBLE_SEED + 1`=8 nested), so an `--ensemble`
+    run and a same-run `run_sweep`/`--score-fusion` call all partition
+    *prepared_variant*'s windows identically.
+
+    Args:
+        prepared_variant: The sweep `--variant`'s own `PreparedRun` -- drives the
+            split (its own `segment_ids`/`valid_mask`) and supplies `ocsvm`/
+            `iforest`'s feature matrix.
+        prepared_logmel: The `logmel`-variant `PreparedRun` of the SAME run --
+            supplies `lstmae`'s feature matrix. Must share *prepared_variant*'s exact
+            grid (`_assert_ensemble_grids_match`, checked first).
+        labels: Per-window labels aligned with *prepared_variant*'s (and, by the grid
+            guard, *prepared_logmel*'s) windows -- same convention as `run_sweep`'s
+            own `labels` argument.
+        alpha: Nominal false-alarm rate target for `calibrate`, shared by every
+            member.
+        run_name: Named run, for the grid-mismatch guard's error message only.
+
+    Returns:
+        A DataFrame with columns `member, label, n_calibration, n_scored, n_alarms,
+        realized_far, low_confidence` -- one row per (label, member) seen in the
+        calibration or scoring windows, plus one `member="ENSEMBLE"` row per label.
+
+    Raises:
+        SystemExit: code 2, if *prepared_variant* and *prepared_logmel* do not share
+            one grid (`_assert_ensemble_grids_match`).
+        ValueError: propagated from `split_by_segments` if the three-way split cannot
+            be formed (too few segments -- identical failure mode to `run_sweep`/
+            `_run_score_fusion_view`).
+    """
+    _assert_ensemble_grids_match(run_name, prepared_variant, prepared_logmel)
+
+    top_split = split_by_segments(
+        prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5, _ENSEMBLE_SEED
+    )
+    calibration_windows = top_split.calibration_windows
+    scoring_windows = top_split.scoring_windows
+
+    calib_mask = np.zeros(prepared_variant.features.shape[0], dtype=bool)
+    calib_mask[calibration_windows] = True
+    nested_split = split_by_segments(
+        prepared_variant.segment_ids, calib_mask, 0.5, _ENSEMBLE_SEED + 1
+    )
+    fit_windows = nested_split.calibration_windows
+    conformal_windows = nested_split.scoring_windows
+
+    _assert_three_way_disjoint(fit_windows, conformal_windows, scoring_windows)
+
+    all_windows = np.concatenate([calibration_windows, scoring_windows])
+    all_labels = sorted(np.unique(labels[all_windows]).tolist())
+
+    rows: list[_EnsembleRow] = []
+    for label in all_labels:
+        rows.extend(_ensemble_rows_for_label(
+            label, prepared_variant, prepared_logmel, labels,
+            fit_windows, conformal_windows, scoring_windows, alpha,
+        ))
+
+    return pd.DataFrame([asdict(r) for r in rows], columns=list(_ENSEMBLE_COLUMNS))
+
+
+_ENSEMBLE_NOTES = """# Majority-ensemble notes
+
+## What this view measures
+
+`far_table_ensemble.csv` scores three independently-calibrated anomaly detectors --
+`ocsvm` (`rowii.anomaly.scorers.OcSvmScorer`), `iforest` (`rowii.anomaly.scorers.
+IsolationForestScorer`), and `lstmae` (`rowii.anomaly.recon.LstmAeScorer`, on the SAME
+run's `logmel` features) -- against the SAME per-state split-conformal machinery every
+other Step-2 view uses (`rowii.anomaly.conformal.calibrate`, one threshold per member
+per state, held out on that state's own conformal-side windows). `ocsvm`/`iforest` fit
+on the sweep `--variant`'s own features; `lstmae` fits on the `logmel` variant's
+features of the SAME run (`rowii.anomaly.recon` module docstring: the reconstruction
+scorers need a flattened logmel patch). The `ENSEMBLE` row per state counts windows
+where AT LEAST 2 of the 3 members alarm -- the design chapter's committed
+majority-voting ensemble ("requiring agreement before an alarm suppresses false
+alarms").
+
+## Honesty note
+
+Each member holds its OWN marginal split-conformal guarantee, calibrated
+independently at the same nominal alpha on its own per-state conformal-side scores --
+exactly like every other per-member/per-branch Step-2 view. NO distribution-free
+guarantee is claimed for the MAJORITY DECISION itself: combining three
+independently-calibrated marginal guarantees into a joint statement about a ">= 2 of
+3" vote is not a construction split conformal covers (unlike `--score-fusion`'s Fisher
+rule, which re-calibrates ONE combined statistic through its own conformal threshold,
+`rowii.anomaly.fusion` module docstring). `ENSEMBLE` rows report EMPIRICAL realized
+FARs only -- exactly as measured on this run's own scoring-side windows, with no
+finite-sample guarantee attached to the vote rule itself.
+
+## Scope
+
+- A state whose fit-side window count falls below the same `min_ref=20` floor the
+  rest of Step-2 uses (or has zero conformal-side windows) reports every member AND
+  the `ENSEMBLE` row as `low_confidence=True` with NaN metrics -- the same "do not
+  alarm under a false promise" convention as `rowii.anomaly.sweep.far_row_excluded`.
+- This view is conditioning/scorer-independent: it runs ONCE per (run, `--labels`,
+  `--states`), not once per `--conditioning`/`--scorer` combination (unlike
+  `--score-fusion`, which currently re-writes an identical copy into every combo dir
+  -- see `_ensemble_out_dir`'s own docstring for the placement rationale).
+- `--ensemble` requires `--protocol within-day` and `--labels detected` (the design
+  chapter's committed ensemble is the runtime-realistic detected-label pipeline; GT
+  states play no role in this view).
+"""
+
+
+def _write_ensemble_outputs(out_dir: Path, far_table: pd.DataFrame) -> None:
+    """Write `far_table_ensemble.csv` + `ensemble_notes.md` into *out_dir* -- mirrors
+    `_write_score_fusion_outputs`'s own label-dtype coercion (detected cluster ids are
+    ints; keeping the column homogeneous avoids the same round-trip hazard
+    `test_per_state_far_table_and_scores_label_dtypes_merge_cleanly` guards against
+    for the main far_table)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table = far_table.copy()
+    table["label"] = table["label"].astype(str)
+    table.to_csv(out_dir / "far_table_ensemble.csv", index=False)
+    (out_dir / "ensemble_notes.md").write_text(_ENSEMBLE_NOTES)
+
+
+def _ensemble_out_dir(
+    results_root: Path, run_name: str, variant: str, labels_mode: str, *,
+    states: int | None = None,
+) -> Path:
+    """`results/step2/within-day/<run>/<variant>-<labels>[-k<states>]/ensemble/` --
+    the ensemble view is conditioning/scorer-independent (task brief binding detail
+    4), so unlike `--score-fusion` (which writes an IDENTICAL copy into EVERY
+    `<conditioning>-<scorer>/` combo dir -- `_run_within_day_for_run`'s own
+    docstring: "a deliberately simple... not a shared/deduplicated write") this view
+    writes exactly ONCE per (run, variant, labels, states) into a dedicated sibling
+    directory at the SAME level as every `<conditioning>-<scorer>/` combo dir, rather
+    than duplicating into each one or arbitrarily picking one of them. The
+    score-fusion redundancy itself is deliberately left as-is here (out of this
+    task's scope; noted for the final whole-branch review). `states` mirrors
+    `_within_day_out_dir`'s own `-k<states>` suffix convention, applied under the
+    identical condition (only when `--states` is given), so a conditioning-
+    granularity sweep's ensemble output stays disambiguated the same way its normal
+    combo outputs already are.
+    """
+    k_suffix = f"-k{states}" if states is not None else ""
+    return (
+        results_root / "step2" / "within-day" / run_name
+        / f"{variant}-{labels_mode}{k_suffix}" / "ensemble"
+    )
+
+
+def _run_and_write_ensemble_view(
+    run: Run,
+    variant: str,
+    cfg: Config,
+    sweep_prepared: PreparedRun,
+    labels_mode: str,
+    labels: np.ndarray,
+    alpha: float,
+    *,
+    use_cache: bool,
+    states: int | None = None,
+) -> None:
+    """`--ensemble`'s full per-run step (task brief binding detail 4): load the
+    `logmel` `PreparedRun` for *run* ONCE (regardless of how many conditioning/scorer
+    combos the caller's own sweep loop covers), compute `_run_ensemble_view`, and
+    write its outputs into the dedicated `ensemble/` sibling directory
+    (`_ensemble_out_dir`) -- called once per (run, variant, labels_mode, states) by
+    `_run_within_day_for_run`, AFTER that run's own per-combo sweep loop (this view is
+    conditioning/scorer-independent, module docstring). A failure at either stage
+    (`prepare_run`'s `RuntimeError`, `_run_ensemble_view`'s `ValueError`) is logged
+    and skipped -- never crashes the invocation or affects the normal sweep outputs
+    already written for this run (same "strict addition, never a gate" principle
+    `_run_within_day_for_run`'s own `score_fusion` docstring already documents for
+    `--score-fusion`'s comparable failure mode). A grid mismatch
+    (`_run_ensemble_view`'s own `SystemExit`) is NOT caught here -- it is a hard
+    usage-level abort, propagated all the way up through `main`.
+    """
+    try:
+        prepared_logmel = prepare_run(run, "logmel", cfg, use_cache=use_cache)
+    except RuntimeError as exc:
+        logger.warning(
+            "run_step2: --ensemble's logmel prepare_run failed for run %r (%s) -- "
+            "skipping the ensemble view (that run's normal sweep outputs, if any, "
+            "are unaffected)",
+            run.name, exc,
+        )
+        return
+
+    try:
+        far_table_ensemble = _run_ensemble_view(
+            sweep_prepared, prepared_logmel, labels, alpha, run_name=run.name,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "run_step2: --ensemble view failed for %s/%s-%s (%s) -- skipping (that "
+            "run's normal sweep outputs, if any, are unaffected)",
+            run.name, variant, labels_mode, exc,
+        )
+        return
+
+    ensemble_dir = _ensemble_out_dir(
+        cfg.results_root, run.name, variant, labels_mode, states=states
+    )
+    _write_ensemble_outputs(ensemble_dir, far_table_ensemble)
+
+
+# ---------------------------------------------------------------------------
 # within-day orchestration
 # ---------------------------------------------------------------------------
 
@@ -1774,6 +2223,7 @@ def _run_within_day_for_run(
     states: int | None = None,
     score_fusion: bool = False,
     score_fusion_scorer: str = "knn",
+    ensemble: bool = False,
 ) -> int:
     """Prepare *run*, attach labels once, then run one sweep per (conditioning,
     scorer) pair, writing that combo's outputs/summary-row/register-section. Returns
@@ -1813,6 +2263,19 @@ def _run_within_day_for_run(
     candidate_register` so a non-default value's combo outputs, summary row, and
     register section stay disambiguated from -- and never overwrite or collide with
     -- the default-K layout (see those functions' own docstrings).
+
+    `ensemble` (`--ensemble`, Task 4, design chapter's committed majority-voting
+    ensemble; caller-guaranteed `protocol == "within-day"` and `labels_mode ==
+    "detected"` via `main`'s own `parser.error` guards, mirroring `--states`'):
+    AFTER this run's own per-combo loop finishes (this view is conditioning/scorer-
+    independent, unlike `score_fusion` which re-runs once per combo), load the
+    `logmel` `PreparedRun` for THIS run ONCE, compute `_run_ensemble_view`, and write
+    `far_table_ensemble.csv` + `ensemble_notes.md` into a dedicated `ensemble/`
+    sibling directory (`_ensemble_out_dir`) -- see `_run_and_write_ensemble_view`'s
+    own docstring for the full per-run step and its failure handling. Runs
+    regardless of whether any combo in the loop above actually succeeded (`n_written`
+    may be 0): the ensemble view never reads a combo's own `SweepResult`, only
+    *sweep_prepared*/*labels* themselves.
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -1890,6 +2353,13 @@ def _run_within_day_for_run(
                 )
             else:
                 _write_score_fusion_outputs(out_dir, sf_table)
+
+    if ensemble:
+        _run_and_write_ensemble_view(
+            run, variant, cfg, sweep_prepared, labels_mode, labels, alpha,
+            use_cache=use_cache, states=states,
+        )
+
     return n_written
 
 
@@ -2156,6 +2626,18 @@ def main(argv: list[str] | None = None) -> int:
             "--score-fusion requires --protocol within-day and --variant fusion "
             f"(got --protocol {args.protocol!r} --variant {args.variant!r})"
         )
+    if args.ensemble and args.protocol != "within-day":
+        parser.error(
+            "--ensemble requires --protocol within-day (the ensemble view "
+            "conditions on the within-day sweep's own per-state references only) "
+            f"-- got --protocol {args.protocol!r}"
+        )
+    if args.ensemble and args.labels == "gt":
+        parser.error(
+            "--ensemble is detected-labels only (the design chapter's committed "
+            "ensemble is the runtime-realistic detected-label pipeline; GT states "
+            "play no role in this view) -- got --labels 'gt'"
+        )
     if args.states is not None and args.states < 2:
         parser.error(f"--states must be >= 2, got {args.states}")
     if args.states is not None and args.protocol != "within-day":
@@ -2202,6 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
                 states=args.states,
                 score_fusion=args.score_fusion,
                 score_fusion_scorer=args.score_fusion_scorer,
+                ensemble=args.ensemble,
             )
         print(
             f"run_step2: wrote {n_combos} within-day combo(s) across {len(runs)} run(s) "

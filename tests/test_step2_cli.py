@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from rowii.anomaly.references import split_by_segments
 from rowii.config import Config, load_config
 from rowii.pipeline import PreparedRun
 from rowii.signals.windows import WindowGrid
@@ -1379,3 +1380,393 @@ def test_states_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None:
     # cross-day-per-state gt guard's message also contains "detected-labels only" but
     # cannot fire here (--protocol defaults to within-day).
     assert "--states is detected-labels only" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# 13. --ensemble majority-vote view (Task 4, design chapter's committed ensemble:
+# OC-SVM + Isolation Forest + LSTM-AE, decision-level majority vote)
+# ---------------------------------------------------------------------------
+
+
+class _MeanDistanceStubScorer:
+    """Torch-free stand-in for `LstmAeScorer` (monkeypatched into
+    `run_step2._ENSEMBLE_MEMBER_FACTORIES["lstmae"]`): Euclidean distance to the
+    fit-time reference's own per-feature mean plays the same "higher = more
+    anomalous" reconstruction-error role a real autoencoder would, without any
+    actual training or torch import -- deterministic, cheap, and satisfies the
+    `Scorer` protocol structurally (`name`/`fit`/`score`)."""
+
+    name = "lstmae"
+
+    def __init__(self) -> None:
+        self._mean: np.ndarray | None = None
+
+    def fit(self, reference: np.ndarray) -> _MeanDistanceStubScorer:
+        self._mean = reference.mean(axis=0)
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        assert self._mean is not None
+        return np.linalg.norm(x - self._mean, axis=1)
+
+
+class _AlarmSetScorer:
+    """Test-only stub `Scorer` with FULL, PRECISE control over which windows it
+    alarms on: column 0 of every feature row is that window's own absolute index
+    (embedded by `_make_ensemble_prepared_pair`, the marker this class reads), and
+    `.score()` returns `1.0` for a marker in `alarm_windows`, else `0.0`. The test
+    never places an `alarm_windows` marker on a fit/conformal-side window (only ever
+    on scoring-side windows, disjoint from calibration by `split_by_segments`'s own
+    segment-level partition), so every conformal-side score is `0.0`, `calibrate`'s
+    threshold lands at exactly `0.0`, and `score > threshold` reproduces `marker in
+    alarm_windows` exactly -- deterministic, no fitting or torch involved.
+    """
+
+    name = "stub"
+
+    def __init__(self, alarm_windows: frozenset[int]) -> None:
+        self._alarm_windows = alarm_windows
+
+    def fit(self, reference: np.ndarray) -> _AlarmSetScorer:
+        return self
+
+    def score(self, x: np.ndarray) -> np.ndarray:
+        markers = x[:, 0].astype(np.int64)
+        return np.array(
+            [1.0 if int(m) in self._alarm_windows else 0.0 for m in markers],
+            dtype=np.float64,
+        )
+
+
+def _make_ensemble_prepared_pair(
+    n_segments: int = 8, seg_len: int = 40
+) -> tuple[PreparedRun, PreparedRun, np.ndarray]:
+    """A single-label (`label=0` everywhere), grid/segment_ids/valid_mask-sharing
+    `PreparedRun` pair for direct `run_step2._run_ensemble_view` unit tests -- mirrors
+    `TestCrossDayPerStateSweep._make_prepared`'s hand-built-fixture style. Feature
+    column 0 is each window's own absolute index (the marker `_AlarmSetScorer` reads);
+    the rest is irrelevant filler. `prepared_variant`/`prepared_logmel` differ only in
+    filler-column width -- production `--variant`/`logmel` PreparedRuns differ in real
+    feature CONTENT, never in grid/segment_ids/valid_mask, under the `--ensemble`
+    grid-equality precondition this pair satisfies by sharing one `grid` object.
+    """
+    n = n_segments * seg_len
+    grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n)
+    segment_ids = np.concatenate(
+        [np.full(seg_len, s, dtype=np.int64) for s in range(n_segments)]
+    )
+    valid_mask = np.ones(n, dtype=bool)
+    marker = np.arange(n, dtype=np.float64)
+    variant_features = np.stack([marker, np.zeros(n)], axis=1)
+    logmel_features = np.stack([marker, np.zeros(n), np.zeros(n)], axis=1)
+    prepared_variant = PreparedRun(
+        features=variant_features, grid=grid, valid_mask=valid_mask,
+        feature_names=["marker", "f1"], segment_ids=segment_ids,
+    )
+    prepared_logmel = PreparedRun(
+        features=logmel_features, grid=grid, valid_mask=valid_mask,
+        feature_names=["marker", "f1", "f2"], segment_ids=segment_ids,
+    )
+    labels = np.zeros(n, dtype=np.int64)
+    return prepared_variant, prepared_logmel, labels
+
+
+def _make_prepared_pair_with_outliers(
+    top_split_seed: int,
+    n_segments: int = 12,
+    seg_len: int = 30,
+    n_outliers: int = 5,
+    seed: int = 0,
+) -> tuple[PreparedRun, PreparedRun, np.ndarray]:
+    """A single-label `PreparedRun` pair with `n_outliers` windows on the TOP-LEVEL
+    split's SCORING side (seeded with *top_split_seed*, matching `run_step2.
+    _ENSEMBLE_SEED` so the caller and this builder agree on which windows end up
+    where) pushed far from the N(0, 0.1) background (+5.0 mean shift) -- built so
+    real `OcSvmScorer`/`IsolationForestScorer` members and a realistic
+    reconstruction-distance stub all converge on catching the SAME obvious outliers,
+    making the majority-vote max-alarms property (task brief binding detail 6b) a
+    check on genuine agreement rather than pure-noise small-sample luck. Fit/
+    conformal windows (the nested split's own calibration side) are left untouched --
+    outliers land ONLY on the top-level scoring side, so every member's own
+    calibration stays uncontaminated.
+    """
+    n = n_segments * seg_len
+    grid = WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n)
+    segment_ids = np.concatenate(
+        [np.full(seg_len, s, dtype=np.int64) for s in range(n_segments)]
+    )
+    valid_mask = np.ones(n, dtype=bool)
+
+    rng = np.random.default_rng(seed)
+    base_variant = rng.normal(0.0, 0.1, size=(n, 4))
+    base_logmel = rng.normal(0.0, 0.1, size=(n, 6))
+
+    top = split_by_segments(segment_ids, valid_mask, 0.5, top_split_seed)
+    outlier_windows = top.scoring_windows[:n_outliers]
+    assert outlier_windows.size == n_outliers, (
+        "fixture too small for the requested outlier count -- grow n_segments/seg_len"
+    )
+
+    variant_features = base_variant.copy()
+    variant_features[outlier_windows] += 5.0
+    logmel_features = base_logmel.copy()
+    logmel_features[outlier_windows] += 5.0
+
+    prepared_variant = PreparedRun(
+        features=variant_features, grid=grid, valid_mask=valid_mask,
+        feature_names=["a", "b", "c", "d"], segment_ids=segment_ids,
+    )
+    prepared_logmel = PreparedRun(
+        features=logmel_features, grid=grid, valid_mask=valid_mask,
+        feature_names=["p", "q", "r", "s", "t", "u"], segment_ids=segment_ids,
+    )
+    labels = np.zeros(n, dtype=np.int64)
+    return prepared_variant, prepared_logmel, labels
+
+
+def _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2) -> None:
+    """Shared monkeypatch for every `--ensemble` test below: real `OcSvmScorer`/
+    `IsolationForestScorer` (fast, torch-free already) plus `_MeanDistanceStubScorer`
+    standing in for the torch-dependent `LstmAeScorer` -- task brief's own seam
+    (`_ENSEMBLE_MEMBER_FACTORIES`, module-level dict, replaced wholesale)."""
+    monkeypatch.setattr(
+        run_step2, "_ENSEMBLE_MEMBER_FACTORIES",
+        {
+            "ocsvm": run_step2.OcSvmScorer,
+            "iforest": run_step2.IsolationForestScorer,
+            "lstmae": _MeanDistanceStubScorer,
+        },
+    )
+
+
+def test_ensemble_view_end_to_end(tmp_path, monkeypatch) -> None:
+    """(task brief binding detail 6a) `--ensemble` on the existing synthetic fixture:
+    exit 0, `far_table_ensemble.csv` exists with all four `member` values, and the
+    honesty note is present. Also exercises binding detail 4's "write ONCE, not per
+    combo" placement decision: `--conditioning all` sweeps 2 combos, but exactly one
+    `ensemble/` directory is written, not one per combo dir.
+    """
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+            "--conditioning", "all", "--scorer", "knn", "--ensemble",
+        ]
+    )
+    assert exit_code == 0
+
+    results_root = tmp_path / "results"
+    ensemble_dir = (
+        results_root / "step2" / "within-day" / "tu" / "fusion-detected" / "ensemble"
+    )
+    far_table_path = ensemble_dir / "far_table_ensemble.csv"
+    assert far_table_path.is_file(), f"missing {far_table_path}"
+    far_table = pd.read_csv(far_table_path)
+    assert list(far_table.columns) == [
+        "member", "label", "n_calibration", "n_scored", "n_alarms", "realized_far",
+        "low_confidence",
+    ]
+    assert set(far_table["member"]) == {"ocsvm", "iforest", "lstmae", "ENSEMBLE"}
+
+    # Fixture sized (file docstring) to give run_sweep's default min_ref=20 a real
+    # non-excluded label -- the ensemble view shares that same split/min_ref, so at
+    # least one row must be real (not low-confidence, actually scored).
+    real_rows = far_table[~far_table["low_confidence"]]
+    assert len(real_rows) > 0
+    assert (real_rows["n_scored"] > 0).any()
+
+    notes_path = ensemble_dir / "ensemble_notes.md"
+    assert notes_path.is_file(), f"missing {notes_path}"
+    notes_text = notes_path.read_text()
+    assert "marginal" in notes_text
+    assert "empirical" in notes_text.lower()
+    assert "majority" in notes_text.lower()
+
+    # Conditioning/scorer-independent placement: --conditioning all wrote 2 normal
+    # sweep combos, but the ensemble view must exist exactly once, at the base
+    # variant-labels level, not duplicated into either combo dir.
+    per_state_dir = (
+        results_root / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "per-state-knn"
+    )
+    pooled_dir = (
+        results_root / "step2" / "within-day" / "tu" / "fusion-detected" / "pooled-knn"
+    )
+    assert per_state_dir.is_dir()
+    assert pooled_dir.is_dir()
+    assert not (per_state_dir / "far_table_ensemble.csv").exists()
+    assert not (pooled_dir / "far_table_ensemble.csv").exists()
+
+
+def test_ensemble_alarms_never_exceed_the_most_alarm_prone_member(monkeypatch) -> None:
+    """(task brief binding detail 6b) For every state, the ENSEMBLE (>= 2-of-3) row's
+    `n_alarms` must not exceed the largest individual member's `n_alarms` -- checked on
+    the controlled outlier fixture (`_make_prepared_pair_with_outliers`) where real
+    OC-SVM/Isolation-Forest members and the reconstruction-distance stub all converge
+    on the same handful of obvious anomalies."""
+    import run_step2
+
+    _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
+    prepared_variant, prepared_logmel, labels = _make_prepared_pair_with_outliers(
+        run_step2._ENSEMBLE_SEED
+    )
+
+    far_table = run_step2._run_ensemble_view(
+        prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
+    )
+
+    for label, sub in far_table.groupby("label"):
+        by_member = sub.set_index("member")["n_alarms"]
+        member_values = [
+            by_member[m] for m in ("ocsvm", "iforest", "lstmae") if pd.notna(by_member[m])
+        ]
+        if not member_values:
+            continue
+        ensemble_alarms = by_member["ENSEMBLE"]
+        if pd.isna(ensemble_alarms):
+            continue
+        assert ensemble_alarms <= max(member_values), (label, by_member.to_dict())
+
+
+def test_ensemble_disjoint_member_alarms_never_reach_majority(monkeypatch) -> None:
+    """(task brief binding detail 6c) Constructed disagreement: three members with
+    pairwise DISJOINT alarm sets never reach the >= 2-of-3 majority anywhere ->
+    ENSEMBLE `n_alarms` == 0."""
+    import run_step2
+
+    prepared_variant, prepared_logmel, labels = _make_ensemble_prepared_pair()
+    top = split_by_segments(
+        prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5,
+        run_step2._ENSEMBLE_SEED,
+    )
+    scoring_windows = top.scoring_windows
+    assert scoring_windows.size >= 6  # enough to carve 3 non-empty disjoint groups
+    groups = np.array_split(scoring_windows, 3)
+
+    monkeypatch.setattr(
+        run_step2, "_ENSEMBLE_MEMBER_FACTORIES",
+        {
+            "ocsvm": lambda: _AlarmSetScorer(frozenset(groups[0].tolist())),
+            "iforest": lambda: _AlarmSetScorer(frozenset(groups[1].tolist())),
+            "lstmae": lambda: _AlarmSetScorer(frozenset(groups[2].tolist())),
+        },
+    )
+
+    far_table = run_step2._run_ensemble_view(
+        prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
+    )
+    ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
+    assert ensemble_row["n_alarms"] == 0.0
+
+
+def test_ensemble_two_member_agreement_equals_shared_alarm_set(monkeypatch) -> None:
+    """(task brief binding detail 6d) Constructed agreement: two members alarm on the
+    EXACT SAME window set, the third on a disjoint set -> ENSEMBLE `n_alarms` equals
+    that shared set's size exactly (every shared window gets 2 votes regardless of the
+    third member; no other window ever reaches 2)."""
+    import run_step2
+
+    prepared_variant, prepared_logmel, labels = _make_ensemble_prepared_pair()
+    top = split_by_segments(
+        prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5,
+        run_step2._ENSEMBLE_SEED,
+    )
+    scoring_windows = top.scoring_windows
+    assert scoring_windows.size >= 4
+    half = scoring_windows.size // 2
+    shared = frozenset(scoring_windows[:half].tolist())
+    rest = frozenset(scoring_windows[half:].tolist())
+
+    monkeypatch.setattr(
+        run_step2, "_ENSEMBLE_MEMBER_FACTORIES",
+        {
+            "ocsvm": lambda: _AlarmSetScorer(shared),
+            "iforest": lambda: _AlarmSetScorer(shared),
+            "lstmae": lambda: _AlarmSetScorer(rest),
+        },
+    )
+
+    far_table = run_step2._run_ensemble_view(
+        prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
+    )
+    ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
+    assert ensemble_row["n_alarms"] == len(shared)
+
+
+@pytest.mark.parametrize("protocol", ["cross-day", "cross-day-per-state"])
+def test_ensemble_requires_within_day_protocol(
+    tmp_path, monkeypatch, capsys, protocol
+) -> None:
+    """(task brief binding detail 6e) `--ensemble` mirrors `--states`' own
+    within-day-only guard: any other protocol is a usage error, rejected before any
+    run is ever prepared."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--protocol", protocol, "--variant", "fusion", "--ensemble"])
+    assert exc_info.value.code == 2
+    assert "requires --protocol within-day" in capsys.readouterr().err
+
+
+def test_ensemble_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None:
+    """(task brief binding detail 6e) `--ensemble` mirrors `--states`' own
+    detected-labels-only guard."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--labels", "gt", "--ensemble"])
+    assert exc_info.value.code == 2
+    assert "--ensemble is detected-labels only" in capsys.readouterr().err
+
+
+def test_ensemble_grid_mismatch_guard_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    """(task brief binding detail 6f) `--ensemble`'s grid-alignment guard (binding
+    detail 3): a `logmel` `PreparedRun` whose grid does not match the sweep variant's
+    own grid must abort the whole invocation (exit 2, clear stderr message) instead of
+    silently indexing two prepared runs at mismatched window positions. `prepare_run`
+    is monkeypatched to shift ONLY the logmel call's returned grid."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    real_prepare_run = run_step2.prepare_run
+
+    def _shifted_logmel_prepare_run(run, variant, cfg, **kwargs):
+        prepared = real_prepare_run(run, variant, cfg, **kwargs)
+        if variant != "logmel":
+            return prepared
+        shifted_grid = WindowGrid(
+            t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns,
+            n_windows=prepared.grid.n_windows - 1,
+        )
+        return replace(prepared, grid=shifted_grid)
+
+    monkeypatch.setattr(run_step2, "prepare_run", _shifted_logmel_prepare_run)
+    _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+                "--conditioning", "pooled", "--scorer", "knn", "--ensemble",
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "grid mismatch" in capsys.readouterr().err.lower()
