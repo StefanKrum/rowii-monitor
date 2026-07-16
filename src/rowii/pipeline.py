@@ -136,6 +136,33 @@ def _streams_for_variant(variant: str) -> tuple[str, ...]:
     raise ValueError(f"unknown variant {variant!r}")
 
 
+def stream_columns(feature_names: list[str], stream: str) -> np.ndarray:
+    """Column indices (ascending) of the feature columns belonging to *stream*.
+
+    Multi-stream variants concatenate per-stream column blocks
+    (`_streams_for_variant` order, names `"<stream>::<local>"` via
+    `_assemble_feature_names`); consumers defined on ONE stream's block -- the
+    distillation teacher target and the cross-attention audio query are both
+    defined on the primary mic's 768-d BEATs embedding, never the full two-mic
+    1536-column concatenation (packages 5 D5/D8; regressing/projecting against
+    the full matrix was the package-5 execution's recurring real-data failure)
+    -- select it here, by name prefix rather than position, so a stream-order
+    change breaks loudly at the caller's own width check instead of silently
+    mis-slicing.
+
+    Raises:
+        ValueError: no feature name starts with `"<stream>::"`.
+    """
+    prefix = f"{stream}::"
+    cols = np.flatnonzero(np.array([name.startswith(prefix) for name in feature_names]))
+    if cols.size == 0:
+        raise ValueError(
+            f"no feature column belongs to stream {stream!r} "
+            f"(no feature name starts with {prefix!r})"
+        )
+    return cols
+
+
 def _is_beats_variant(variant: str) -> bool:
     return variant in ("audio-beats", "fusion-beats")
 

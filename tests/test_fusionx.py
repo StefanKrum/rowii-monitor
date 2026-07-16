@@ -667,8 +667,15 @@ class TestTrainXattnMainEndToEnd:
         segment_ids = np.array([0] * (n // 2) + [1] * (n - n // 2), dtype=np.int64)
         _write_synthetic_cache(
             cfg, run, "audio-beats",
-            features=rng.normal(size=(n, 768)),
+            # Faithful to the real cache: BOTH mic streams' 768-d embeddings
+            # concatenated (1536 columns), stream-prefixed names -- the trainer
+            # must slice out the primary mic's 768, never project 1536.
+            features=rng.normal(size=(n, 1536)),
             valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+            feature_names=(
+                [f"RAWGeneratorMic__0::beats_{i}" for i in range(768)]
+                + [f"RAWTurbineMic__1::beats_{i}" for i in range(768)]
+            ),
         )
         _write_synthetic_cache(
             cfg, run, "fusion",
@@ -712,6 +719,7 @@ class TestTrainXattnMainEndToEnd:
         sidecar = json.loads(sidecar_path.read_text())
         assert sidecar["run"] == run.name
         assert sidecar["audio_variant"] == "audio-beats"
+        assert sidecar["audio_stream"] == "RAWGeneratorMic__0"
         assert sidecar["vib_source_variant"] == "fusion"
         assert sidecar["vib_dim"] == _N_VIB_COLS
         assert sidecar["epochs"] == 2
