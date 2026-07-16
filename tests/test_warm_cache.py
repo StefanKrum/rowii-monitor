@@ -361,3 +361,79 @@ def test_import_tfc_or_exit_names_the_right_env_var_when_checkpoint_missing(
         warm_cache._import_tfc_or_exit(cfg, variant)
 
     assert env_var in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# 8. audio-student variant + _import_student_or_exit (package-5 spec D5):
+#    mirrors #6/#7 above, simplified to ONE checkpoint (no variant-based
+#    checkpoint selection).
+# ---------------------------------------------------------------------------
+
+
+def test_audio_student_is_a_variant_choice() -> None:
+    import warm_cache
+
+    assert "audio-student" in warm_cache._VARIANT_CHOICES
+
+    args = warm_cache.build_parser().parse_args(["--variants", "audio-student"])
+    assert args.variants == ["audio-student"]
+
+
+def test_real_invocation_never_touches_student_guard_for_non_student_variants(
+    monkeypatch, tmp_path
+) -> None:
+    """Mirrors test #3's beats-guard isolation, for the student guard: a combo
+    list with no audio-student variant must never call `_import_student_or_exit`."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+
+    import warm_cache
+
+    monkeypatch.setattr(warm_cache, "discover", lambda data_root: _fake_index(["run-a"]))
+    monkeypatch.setattr(warm_cache, "_import_beats_or_exit", lambda: None)
+
+    def _boom_import_student_or_exit(cfg):
+        raise AssertionError("_import_student_or_exit must not be called for non-student variants")
+
+    monkeypatch.setattr(warm_cache, "_import_student_or_exit", _boom_import_student_or_exit)
+    monkeypatch.setattr(
+        warm_cache, "prepare_run", lambda run, variant, cfg, *, use_cache: None
+    )
+
+    exit_code = warm_cache.main(["--runs", "run-a", "--variants", "audio-beats"])
+    assert exit_code == 0
+
+
+def test_import_student_or_exit_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    import warm_cache
+
+    from rowii.config import Config
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.adapt.student" or name.startswith("rowii.adapt.student."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        warm_cache._import_student_or_exit(cfg)
+
+    message = str(exc_info.value)
+    assert 'pip install -e ".[beats]"' in message
+
+
+def test_import_student_or_exit_names_env_var_when_checkpoint_missing() -> None:
+    import warm_cache
+
+    from rowii.config import Config
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))  # student_checkpoint None
+
+    with pytest.raises(SystemExit) as exc_info:
+        warm_cache._import_student_or_exit(cfg)
+
+    assert "ROWII_STUDENT_CHECKPOINT" in str(exc_info.value)

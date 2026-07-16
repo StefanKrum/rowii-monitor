@@ -206,6 +206,58 @@ def test_run_step2_help_exits_zero(capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. audio-student variant (Step-2 package-5 spec D5): choices inclusion +
+# _import_student_or_exit guard messages.
+# ---------------------------------------------------------------------------
+
+
+def test_audio_student_is_a_variant_choice() -> None:
+    import run_step2
+
+    assert "audio-student" in run_step2._VARIANT_CHOICES
+
+    args = run_step2.build_parser().parse_args(["--variant", "audio-student"])
+    assert args.variant == "audio-student"
+
+
+def test_student_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
+    """Mirrors run_step2's own tfc-extra guard shape (package-5 spec D5): torch
+    missing -> SystemExit naming the shared `[beats]` extra, checked BEFORE the
+    checkpoint."""
+    import builtins
+
+    import run_step2
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "rowii.adapt.student" or name.startswith("rowii.adapt.student."):
+            raise ImportError("No module named 'torch'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2._import_student_or_exit(cfg)
+
+    message = str(exc_info.value)
+    assert 'pip install -e ".[beats]"' in message
+
+
+def test_student_variant_without_checkpoint_raises_systemexit_naming_env_var() -> None:
+    import run_step2
+
+    cfg = Config(data_root=Path("/fake"), results_root=Path("/fake"))  # student_checkpoint None
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2._import_student_or_exit(cfg)
+
+    assert "ROWII_STUDENT_CHECKPOINT" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # 2. within-day miniature e2e: fusion, detected labels, both conditionings x knn
 # ---------------------------------------------------------------------------
 

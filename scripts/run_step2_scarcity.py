@@ -97,9 +97,11 @@ from rowii.config import Config, load_config  # noqa: E402
 from rowii.io.dataset import RecordingIndex, Run, discover  # noqa: E402
 from rowii.pipeline import (  # noqa: E402
     _BEATS_INSTALL_HINT,
+    _STUDENT_INSTALL_HINT,
     _TFC_INSTALL_HINT,
     PreparedRun,
     _is_beats_variant,
+    _is_student_variant,
     _is_tfc_variant,
     prepare_run,
 )
@@ -116,7 +118,7 @@ _DEFAULT_RUNS: tuple[str, ...] = ("010726-tu_ph_tu", "290626-tu")
 _DEFAULT_VARIANTS: tuple[str, ...] = ("fusion", "audio-beats")
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
-    "audio-tfc", "vibration-tfc", "logmel",
+    "audio-tfc", "vibration-tfc", "audio-student", "logmel",
 )
 """Duplicated from `scripts/run_step2.py`'s own `_VARIANT_CHOICES` (and `scripts/
 warm_cache.py`'s) -- scripts must not import from a sibling script, see this
@@ -260,6 +262,27 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
         checkpoint, env_var = cfg.tfc_vib_checkpoint, "ROWII_TFC_VIB_CHECKPOINT"
     if checkpoint is None:
         raise SystemExit(f"variant {variant!r} needs {env_var} set; {_TFC_INSTALL_HINT}")
+
+
+def _import_student_or_exit(cfg: Config) -> None:
+    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    distilled student has only ONE checkpoint (unlike TF-C's two independent
+    branches), so there is no variant-based checkpoint selection -- torch
+    missing (checked first) -> SystemExit naming the shared `[beats]` extra;
+    else `cfg.student_checkpoint` missing -> SystemExit naming
+    ROWII_STUDENT_CHECKPOINT. Duplicated (not imported) -- see module
+    docstring."""
+    try:
+        import rowii.adapt.student  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"Student featurizer not available ({exc}); {_STUDENT_INSTALL_HINT}"
+        ) from exc
+    if cfg.student_checkpoint is None:
+        raise SystemExit(
+            f"variant 'audio-student' needs ROWII_STUDENT_CHECKPOINT set; "
+            f"{_STUDENT_INSTALL_HINT}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +817,8 @@ def main(argv: list[str] | None = None) -> int:
             _import_beats_or_exit()
         if _is_tfc_variant(variant):
             _import_tfc_or_exit(cfg, variant)
+        if _is_student_variant(variant):
+            _import_student_or_exit(cfg)
         try:
             prepared = prepare_run(by_name[run_name], variant, cfg, use_cache=True)
         except RuntimeError as exc:
