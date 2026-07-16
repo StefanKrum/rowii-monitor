@@ -1326,3 +1326,56 @@ def test_states_default_produces_unsuffixed_dir(tmp_path, monkeypatch) -> None:
 
     summary = pd.read_csv(results_root / "step2" / "summary.csv")
     assert (summary["variant"] == "fusion").all()
+
+
+def test_states_register_sections_disambiguate_k(tmp_path, monkeypatch) -> None:
+    """Two invocations of the SAME (run, variant, labels, conditioning, scorer) combo
+    at different conditioning granularities (default K, then `--states 3`) must append
+    DISTINCT section headers to the append-only candidate register -- otherwise a
+    granularity sweep (T7: K=4/8/12 on one run/variant) produces colliding,
+    indistinguishable sections in the human-facing review artifact (coordinator
+    resolution to Task 6 concern 2). The section identity carries the same `-k<K>`
+    suffix convention as the combo out-dir (`_within_day_out_dir`), applied to its
+    `<variant>-<labels>` part, and ONLY when `--states` is given -- a default run's
+    header stays byte-compatible with the pre-Task-6 register."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    base_args = [
+        "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+        "--conditioning", "pooled", "--scorer", "knn",
+    ]
+    assert run_step2.main(base_args) == 0
+    assert run_step2.main([*base_args, "--states", "3"]) == 0
+
+    register_text = (
+        tmp_path / "results" / "step2" / "candidate_register.md"
+    ).read_text()
+    assert "### tu / fusion-detected / pooled-knn" in register_text
+    assert "### tu / fusion-detected-k3 / pooled-knn" in register_text
+    # exactly the two combos' own sections, nothing colliding or duplicated
+    assert register_text.count("### ") == 2
+
+
+def test_states_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None:
+    """`--states` conditions the DETECTED-labels detector only -- a gt-labels sweep
+    never fits a detector at all, so combining `--states` with `--labels gt` would be
+    a silent no-op inviting misread results (coordinator resolution to Task 6 concern
+    4); rejected up front instead, same `parser.error` pattern as the flag's other two
+    guards."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()  # guard fires before any run is ever looked up
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--labels", "gt", "--states", "3"])
+    assert exc_info.value.code == 2
+    # Specific to main()'s own semantic parser.error for THIS flag combination -- the
+    # cross-day-per-state gt guard's message also contains "detected-labels only" but
+    # cannot fire here (--protocol defaults to within-day).
+    assert "--states is detected-labels only" in capsys.readouterr().err
