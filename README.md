@@ -925,10 +925,12 @@ conformal harness, so differences are attributable to the scorer alone.
 
 Across 12 (run × variant × conditioning) cells, Isolation Forest posts the best FAR
 in 5, LOF in 3, OC-SVM in 2, kNN and Mahalanobis in 1 each — and kNN is the WORST in
-6/12. Per-cell spreads run 0.015–0.116. The design-cited kNN default is not an
-empirical champion here; at these calibration sizes single-split realized FARs
-scatter per the exact Beta distribution, so the honest reading is that all five
-scorers are competitive and representation × day effects dominate scorer choice.
+6/12. Per-cell spreads run 0.015–0.116; the smaller spreads are within single-split
+Beta scatter while the largest (010726 fusion pooled, 0.027–0.143) reflects the same
+within-day exchangeability violations noted under score fusion below, which hit some
+scorers harder than others. The design-cited kNN default is not an empirical
+champion here; the honest reading is that all five scorers are competitive and
+representation × day effects dominate scorer choice.
 The starved-day pattern (290626: 3/4 states excluded) is scorer-independent — it is
 a property of the split, confirmed identical across all five scorers.
 
@@ -953,12 +955,18 @@ members keep their own marginal guarantees.
 
 ### Score-level fusion: no consistent edge over feature-level fusion
 
-Fisher-combined branch p-values (the guaranteed rule, leave-one-out-calibrated) sit
-at/below alpha in 6/11 floor-clearing states with the rest inside the expected
-single-split Beta scatter; Tippett (documented-excess max-rule contrast) behaves
-similarly on a different subset. Neither rule consistently beats package-1's
-feature-level fusion numbers — score fusion is a validity-preserving alternative,
-not an accuracy upgrade, on this data.
+Fisher-combined branch p-values (the rule whose simulation-mean FAR guarantee is
+verified, leave-one-out-calibrated) sit at/below alpha in 6/11 floor-clearing
+states. Of the remaining five, one is within single-split Beta scatter; the other
+four exceed alpha by far more than scatter explains (up to 0.139 vs a 99% Beta
+bound of 0.069) — and the SAME states exceed under every rule including the
+single-branch baselines, so these are genuine within-day exchangeability
+violations (operating-point drift between held-out calibration and scoring
+segments, the finite-sample limitation already documented in package 2), not a
+Fisher artifact. Tippett (documented-excess max-rule contrast) behaves similarly
+on a different subset. Neither rule consistently beats package-1's feature-level
+fusion numbers — score fusion is a validity-preserving alternative, not an
+accuracy upgrade, on this data.
 
 ### Conditioning granularity: sub-state structure is real, and it costs calibration
 
