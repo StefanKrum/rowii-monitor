@@ -363,6 +363,15 @@ def _recalibrate_verdicts(
 
         scorer = scorer_for_label(snapshot, label)
         cal_scores = scorer.score(prepared.features[label_cal])
+        # Deliberately NO `min_ref` gate here (T2-review finding, resolved as a
+        # documented reading of A1.3's "identical to sweeps"): `run_sweep` gates
+        # the FIT side with `min_ref` (reference quality -- enforced for this
+        # snapshot at BUILD time by `fit_snapshot`) and governs the conformal/
+        # calibration side ONLY by `calibrate`'s own achievable-alpha floor
+        # (`low_confidence`), zero-count aside. A tiny calibration side therefore
+        # yields a VALID conformal threshold whose sample count is visible in the
+        # notes' per-state `n_consumed` column and whose confidence is carried by
+        # `low_confidence` -- exactly the sweeps' semantics, not a second gate.
         threshold = calibrate(cal_scores, alpha)
         # Calibration-bias rule (A1.3): scores are recorded for provenance (they ARE
         # the threshold's empirical distribution), but no p-value, never an alarm.
