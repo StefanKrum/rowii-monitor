@@ -2409,6 +2409,14 @@ def _run_and_write_ensemble_view(
 # --xattn-fusion view (package-5 Task 6, spec D8: the third fusion level)
 # ---------------------------------------------------------------------------
 
+_XATTN_SEED = 7
+"""Top-level split seed for `_run_xattn_view` -- matches `SweepConfig.seed`'s own
+default (7) and `_SCORE_FUSION_SEED`'s/`_ENSEMBLE_SEED`'s identical choice; the
+nested fit/conformal split uses `_XATTN_SEED + 1` (=8), the same
+`run_sweep`-mirroring convention (a view-local constant, not `_CROSS_DAY_SEED`:
+this is a WITHIN-day view, the earlier reuse of the cross-day constant was a
+final-review naming nit)."""
+
 _XATTN_NOTES = """# Cross-attention fusion view -- notes
 
 - The joint embedding is produced by a cross-attention head trained CLIP-style
@@ -2491,11 +2499,11 @@ def _run_xattn_view(
     audio_features = prepared_audio.features[:, audio_cols]
 
     valid_both = sweep_prepared.valid_mask & prepared_audio.valid_mask
-    top = split_by_segments(sweep_prepared.segment_ids, valid_both, 0.5, _CROSS_DAY_SEED)
+    top = split_by_segments(sweep_prepared.segment_ids, valid_both, 0.5, _XATTN_SEED)
     calib_mask = np.zeros(sweep_prepared.features.shape[0], dtype=bool)
     calib_mask[top.calibration_windows] = True
     nested = split_by_segments(
-        sweep_prepared.segment_ids, calib_mask, 0.5, _CROSS_DAY_SEED + 1
+        sweep_prepared.segment_ids, calib_mask, 0.5, _XATTN_SEED + 1
     )
     fit_w, conf_w = nested.calibration_windows, nested.scoring_windows
     scoring_w = top.scoring_windows

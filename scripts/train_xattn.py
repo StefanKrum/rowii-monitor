@@ -127,12 +127,15 @@ calibration/scoring split fraction every Step-2 sweep uses (module docstring's
 
 _JOINT_LOSS_WEIGHT = 0.5
 """Weight of the joint (post-attention) alignment term in the composite loss
-(`rowii.fusionx.model`'s own module docstring has the full derivation) -- HALF
-the weight of the primary lift-alignment term, a binding design constant: the
-first term (`tfc_loss(lift_a, lift_v, T)`) is the actual CLIP-style objective
-that must dominate; this second term is auxiliary, shaping the attention block
-+ output projection toward the already-established lift alignment rather than
-competing with it on equal footing."""
+(`rowii.fusionx.model`'s own module docstring has the full derivation,
+including what `lift_a.detach()` does and does NOT do) -- HALF the weight of
+the primary lift-alignment term, a binding design constant: the first term
+(`tfc_loss(lift_a, lift_v, T)`) is the actual CLIP-style objective that must
+dominate. The second term's gradient reaches EVERY parameter on the prediction
+path (including `audio_lift`, via `forward`'s own recomputed lift -- measured,
+see the model docstring); its influence is bounded by this 0.5 weight, while
+the detach only pins the TARGET to the first term's alignment (no target
+chasing)."""
 
 _LEAKAGE_NOTE = (
     "xattn training trains on calibration-side windows only (rowii.anomaly.references."

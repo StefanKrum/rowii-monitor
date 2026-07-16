@@ -144,6 +144,20 @@ def _measure(
     rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     featurizer = _featurizer_for_stream(_MIC_STREAM, _CONFIG_VARIANTS[config_name], cfg)
 
+    if windows.shape[0] < batch_size:
+        # Tile up to the requested batch size so a "b=256" row really measures
+        # 256-window batches (final-review finding: with the 200-window default
+        # pool, the old cycling silently measured 200-window batches under a
+        # b=256 label). Repeated windows are fine for a latency measurement --
+        # the compute is identical.
+        reps = -(-batch_size // windows.shape[0])
+        windows = np.tile(windows, (reps, 1, 1))
+        logger.info(
+            "benchmark_inference: window pool smaller than batch size -- tiled "
+            "%dx to %d windows so every batch truly holds %d",
+            reps, windows.shape[0], batch_size,
+        )
+
     def batch(i: int) -> np.ndarray:
         start = (i * batch_size) % max(1, windows.shape[0] - batch_size + 1)
         return windows[start : start + batch_size]

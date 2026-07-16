@@ -57,7 +57,11 @@ every call).
 between two `(N, D)` embedding matrices, exposed here for the execution phase
 (design spec D9) -- comparing fp32 vs int8 `audio-beats` embeddings for the
 SAME real cached windows, in the SAME order, is the INT8 embedding-drift
-evidence the design calls for.
+evidence the design calls for. `--drift-run <name>` performs that measurement
+INSIDE this CLI (first primary-mic burst file, `--drift-windows` 1-s windows,
+both featurizers on CPU) and PERSISTS the stats into the sidecar JSON -- added
+after the final whole-branch review found the execution's original drift
+figure lived only in a shell log, citable nowhere.
 """
 from __future__ import annotations
 
@@ -90,6 +94,39 @@ _QUANTIZED_NOTE = (
 )
 
 
+_MIC_STREAM = "RAWGeneratorMic__0"
+"""Primary mic stream the drift measurement reads windows from -- duplicated
+from `scripts/benchmark_inference.py` (one script must not depend on a sibling
+script's internals, `warm_cache.py`'s own documented rationale)."""
+_RAW_RATE_HZ = 50_000.0
+_RAW_SAMPLES = 50_000
+
+
+def _row_cosines(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Per-row cosine similarities between ROW-paired vectors of *a* and *b*
+    (the shared core of `cosine_drift` and the `--drift-run` stats; see
+    `cosine_drift` for the zero-norm-row convention).
+
+    Raises:
+        ValueError: *a*/*b* have different shapes.
+    """
+    if a.shape != b.shape:
+        raise ValueError(f"cosine_drift: shape mismatch a={a.shape} b={b.shape}")
+
+    a64 = a.astype(np.float64)
+    b64 = b.astype(np.float64)
+    norm_a = np.linalg.norm(a64, axis=1)
+    norm_b = np.linalg.norm(b64, axis=1)
+    denom = norm_a * norm_b
+    dot = np.sum(a64 * b64, axis=1)
+    # A zero-norm row (a degenerate all-zero embedding) has no defined
+    # direction to compare -- treated as similarity 0.0 for that row rather
+    # than dividing by zero (which would silently poison the overall mean
+    # with a NaN).
+    safe_denom = np.where(denom > 0, denom, 1.0)
+    return np.asarray(np.where(denom > 0, dot / safe_denom, 0.0))
+
+
 def cosine_drift(a: np.ndarray, b: np.ndarray) -> float:
     """Mean cosine similarity between ROW-paired vectors of *a* and *b*.
 
@@ -113,22 +150,72 @@ def cosine_drift(a: np.ndarray, b: np.ndarray) -> float:
     Raises:
         ValueError: *a*/*b* have different shapes.
     """
-    if a.shape != b.shape:
-        raise ValueError(f"cosine_drift: shape mismatch a={a.shape} b={b.shape}")
+    return float(_row_cosines(a, b).mean())
 
-    a64 = a.astype(np.float64)
-    b64 = b.astype(np.float64)
-    norm_a = np.linalg.norm(a64, axis=1)
-    norm_b = np.linalg.norm(b64, axis=1)
-    denom = norm_a * norm_b
-    dot = np.sum(a64 * b64, axis=1)
-    # A zero-norm row (a degenerate all-zero embedding) has no defined
-    # direction to compare -- treated as similarity 0.0 for that row rather
-    # than dividing by zero (which would silently poison the overall mean
-    # with a NaN).
-    safe_denom = np.where(denom > 0, denom, 1.0)
-    similarities = np.where(denom > 0, dot / safe_denom, 0.0)
-    return float(similarities.mean())
+
+def _drift_windows_for_run(run_name: str, n: int, cfg: Config) -> np.ndarray:
+    """First *n* whole 1-s windows `(n, 50000, 1)` of *run_name*'s first
+    primary-mic burst file, read-only (mirrors `scripts/benchmark_inference.
+    py`'s `_real_windows`, duplicated per the sibling-script rule). Clamps to
+    what the file holds, with a warning.
+
+    Raises:
+        SystemExit: unknown run name.
+    """
+    from rowii.io.dataset import discover
+    from rowii.io.gantner import read_gantner
+
+    index = discover(cfg.data_root)
+    run = next((r for r in index.runs if r.name == run_name), None)
+    if run is None:
+        raise SystemExit(f"quantize_beats: unknown --drift-run {run_name!r}")
+    burst = sorted(run.files[_MIC_STREAM], key=lambda f: f.start_utc_hint)[0]
+    gf = read_gantner(burst.path)
+    mono = gf.data.mean(axis=1) if gf.data.ndim == 2 else gf.data
+    usable = min(n, mono.shape[0] // _RAW_SAMPLES)
+    if usable < n:
+        logger.warning(
+            "quantize_beats: burst file holds only %d whole windows "
+            "(requested %d) -- measuring drift on %d", usable, n, usable,
+        )
+    out = mono[: usable * _RAW_SAMPLES].reshape(usable, _RAW_SAMPLES, 1)
+    return np.asarray(out, dtype=np.float32)
+
+
+def _measure_drift(
+    run_name: str, n_windows: int, fp32_checkpoint: Path, int8_path: Path, cfg: Config
+) -> dict[str, object]:
+    """fp32-vs-int8 embedding drift on real windows, PERSISTED (design spec D9;
+    final-review finding: the execution's original drift figure lived only in a
+    log). Embeds the SAME raw windows through `BeatsFeaturizer` twice -- fp32
+    from *fp32_checkpoint* and int8 from *int8_path* -- BOTH on CPU (the int8
+    kernels are CPU-only; running fp32 on CPU too keeps the comparison
+    device-homogeneous), then reports row-cosine stats.
+    """
+    import torch
+
+    from rowii.signals.beats import BeatsFeaturizer
+
+    windows = _drift_windows_for_run(run_name, n_windows, cfg)
+    cpu = torch.device("cpu")
+    fp32 = BeatsFeaturizer(fp32_checkpoint, device=cpu).transform(windows, _RAW_RATE_HZ)
+    int8 = BeatsFeaturizer(fp32_checkpoint, int8_model_path=int8_path).transform(
+        windows, _RAW_RATE_HZ
+    )
+    cosines = _row_cosines(fp32, int8)
+    return {
+        "run": run_name,
+        "stream": _MIC_STREAM,
+        "n_windows": int(windows.shape[0]),
+        "mean_cosine": float(cosines.mean()),
+        "p5_cosine": float(np.percentile(cosines, 5)),
+        "min_cosine": float(cosines.min()),
+        "note": (
+            "row-paired cosine similarity of fp32 vs int8 BEATs embeddings of the "
+            "SAME raw 1-s windows (first primary-mic burst file of the run), both "
+            "featurizers on CPU"
+        ),
+    }
 
 
 def _import_beats_or_exit() -> None:
@@ -171,6 +258,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=DEFAULT_OUT,
         help=f"Output checkpoint path (default: {DEFAULT_OUT}); a sidecar "
              "<stem>.json is written alongside it.",
+    )
+    parser.add_argument(
+        "--drift-run", default=None, metavar="RUN",
+        help="Optionally measure fp32-vs-int8 embedding drift on this run's real "
+             "windows (first primary-mic burst file) and persist the stats into "
+             "the sidecar (design spec D9 evidence).",
+    )
+    parser.add_argument(
+        "--drift-windows", type=int, default=2000,
+        help="Number of 1-s windows for --drift-run (clamped to the burst "
+             "file's length; default 2000).",
     )
     return parser
 
@@ -217,12 +315,23 @@ def main(argv: list[str] | None = None) -> int:
         args.out, size_int8_bytes / 1e6, shrink_ratio,
     )
 
-    sidecar = {
+    sidecar: dict[str, object] = {
         "source_checkpoint": str(checkpoint),
         "size_fp32_bytes": size_fp32_bytes,
         "size_int8_bytes": size_int8_bytes,
         "created_at": datetime.now(UTC).isoformat(),
     }
+    if args.drift_run is not None:
+        drift = _measure_drift(
+            args.drift_run, args.drift_windows, checkpoint, args.out, cfg
+        )
+        sidecar["drift"] = drift
+        logger.info(
+            "quantize_beats: drift on %s real window(s) of %s -- mean cosine %.6f, "
+            "p5 %.6f, min %.6f",
+            drift["n_windows"], args.drift_run, drift["mean_cosine"],
+            drift["p5_cosine"], drift["min_cosine"],
+        )
     sidecar_path = args.out.with_suffix(".json")
     sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
 

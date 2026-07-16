@@ -102,6 +102,50 @@ def test_torch_config_with_missing_checkpoint_file_is_skipped(
     assert len(skipped) == 1
 
 
+def test_count_params_on_both_checkpoint_formats(tmp_path) -> None:
+    """Pins the format-discriminating branch (final-review finding: previously
+    exercised only in real execution): {"cfg","model"} state dicts sum tensor
+    sizes; a module pickle (the int8 format) sums LIVE parameters -- for a
+    dynamically quantized module that means residual fp32 params only, which
+    is why the README discloses the int8 n_params as residual."""
+    torch = pytest.importorskip("torch")
+
+    sd_path = tmp_path / "sd.pt"
+    torch.save(
+        {"cfg": {}, "model": {"a.weight": torch.zeros(3, 4), "a.bias": torch.zeros(3)}},
+        sd_path,
+    )
+    assert benchmark_inference._count_params("beats", sd_path) == 15
+
+    mod_path = tmp_path / "mod.pt"
+    torch.save(torch.nn.Linear(4, 2), mod_path)
+    assert benchmark_inference._count_params("beats-int8", mod_path) == 10
+
+
+def test_batch_size_larger_than_pool_is_tiled_to_full_batches(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A b=8 row measured from a 3-window pool must really run 8-window
+    batches (final-review finding: the old cycling silently measured
+    pool-sized batches under the requested-batch label)."""
+    import logging
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    out = tmp_path / "bench"
+    exit_code = benchmark_inference.main(
+        [
+            "--configs", "logmel", "--n-windows", "3", "--n-batches", "1",
+            "--batch-sizes", "8", "--devices", "cpu", "--out", str(out),
+        ]
+    )
+    assert exit_code == 0
+    table = pd.read_csv(out / "inference.csv")
+    assert len(table) == 1
+    tiled = [r.getMessage() for r in caplog.records if "tiled" in r.getMessage()]
+    assert len(tiled) == 1
+
+
 def test_unknown_config_exits_2(tmp_path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         benchmark_inference.main(
