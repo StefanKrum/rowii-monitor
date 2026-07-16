@@ -1084,9 +1084,12 @@ restates this).
 
 ### INT8: a size tool, not a latency tool (here)
 
-Dynamic INT8 quantization: 361.5 → 124.3 MB (2.91x), embedding drift on 2,000
-real windows mean cosine 0.9983 (min 0.9962), aggregate FAR 0.059 vs frozen 0.058 on
-the same day — parity. Latency does NOT improve (~30 ms/window either way): the
+Dynamic INT8 quantization: 361.5 → 124.3 MB (2.91x). Embedding drift, measured
+and PERSISTED by `quantize_beats.py --drift-run` (sidecar
+`models/adapted/beats_int8.json`): on the 704 real windows of the run's first
+burst file, mean cosine 0.9982, p5 0.9973, min 0.9960 (an earlier 2,000-window
+cache-based measurement agreed to the third decimal). Aggregate FAR 0.059 vs
+frozen 0.058 on the same day — parity. Latency does NOT improve (~30 ms/window either way): the
 pipeline is preprocessing- and attention-bound, and the dynamically quantized
 linear kernels return no net win on this workload/CPU. The benchmark's
 `n_params` column counts only residual fp32 parameters for the int8 module —
@@ -1111,12 +1114,12 @@ numbers throughout:
 
 | config | params | size | CPU b=1 | CPU b=256 | MPS b=256 |
 |---|---|---|---|---|---|
-| handcrafted | 0 | — | 2.9 ms | 2.9 ms | — |
-| logmel | 0 | — | 0.47 ms | 0.23 ms | — |
-| BEATs fp32 | 90.4 M | 361.5 MB | 30.8 ms | 32.0 ms | 30.0 ms |
-| BEATs INT8 | (residual fp32: 4.9 M) | 124.3 MB | 30.0 ms | 30.0 ms | cpu-only |
+| handcrafted | 0 | — | 3.0 ms | 2.9 ms | — |
+| logmel | 0 | — | 0.48 ms | 0.23 ms | — |
+| BEATs fp32 | 90.4 M | 361.5 MB | 30.1 ms | 33.3 ms | 31.4 ms |
+| BEATs INT8 | (residual fp32: 4.9 M) | 124.3 MB | 29.8 ms | 30.0 ms | cpu-only |
 | TF-C | 479,560 | 1.9 MB | 1.4 ms | 1.6 ms | 0.63 ms |
-| student | 192,643 | 0.78 MB | 0.79 ms | 0.50 ms | 0.27 ms |
+| student | 192,643 | 0.78 MB | 0.78 ms | 0.49 ms | 0.26 ms |
 
 MPS does not help BEATs (preprocessing-bound); it helps the small encoders only
 at batch. A Raspberry-class CPU deployment budget is comfortably met by
