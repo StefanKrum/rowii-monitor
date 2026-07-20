@@ -11,13 +11,19 @@ frozen-threshold fragility (0.776/0.522 cross-day) demands a robustness investig
 
 Package-6 closed the original roadmap, but its own evidence exposes the next question:
 frozen thresholds fail cross-day for two DISTINGUISHABLE reasons (measured 2026-07-18
-from the monitor artifacts): a GLOBAL shift on the cross-setup day (250526, all states'
-score medians 0.86–2.51× threshold — recording-chain signature; the day predates the
-final 15.06 setup) and a STATE-SPECIFIC drift on the same-setup pair (290626: states
-1/3 hold 0.09/0.03 ≈ α, only state 0 breaks at 0.73). Every mitigation so far is
-per-day recalibration. Meanwhile every adapted artifact (LoRA/FT/student/snapshot) was
-fit on ONE day (010726-tu_ph_tu) that contains NO pump operation, although final-setup
-pump runs exist (290626-pu ~360 min, 010726-pu ~84 min, 270626-1 ~312 min).
+from the monitor artifacts): a GLOBAL shift on the cross-CONFIG day (250526 — recorded
+**2026-06-25** per the raw filenames; the run label is an inherited misnomer — all
+states' score medians 0.86–2.51× threshold, a recording-chain signature) and a
+STATE-SPECIFIC drift on the same-config pair (290626: states 1/3 hold 0.09/0.03 ≈ α,
+state 0 breaks at 0.73 and state 2 at 0.39). PROVENANCE (spec-review finding, verified
+against Gantner headers): the config split is NOT the 15.06 sensor installation —
+250526 AND 270626 carry `MeasName: 2026-06-15` while 290626 AND 010726 both carry
+`MeasName: 2026-06-29`; the empirical "same-config pair" is the 29.06-config era.
+"cross-setup" reads "cross-config" throughout this spec; the README data-layout
+section's 15.06-as-final wording is corrected in this package. Meanwhile every
+adapted artifact (LoRA/FT/student/snapshot) was fit on ONE day (010726-tu_ph_tu)
+that contains NO pump operation, although same-config pump runs exist (290626-pu
+~360 min, 010726-pu ~84 min; 270626-pu_ph_pu_ph_pu_ph-1 ~312 min is OLD-config).
 
 ## 2. Scope
 
@@ -216,3 +222,106 @@ the 080726 day (real states incl. the changeover, real strike events) — first 
 a static mockup for Stefan's review, then (separate decision) an implementation.
 Purpose is dual: partner-facing demo AND Stefan's own understanding of the
 pipeline. Bruno's demo (localization focus) is the sibling, not the template.
+
+## 7. Amendment A3 (adversarial spec review, 2026-07-18 — all findings adopted)
+
+The review (1 BLOCKER, 4 HIGH, 6 MEDIUM, 3 LOW) verified its findings by probes
+against code, disk artifacts, and raw Gantner headers. Binding resolutions:
+
+1. **[BLOCKER] Pool artifacts are NEVER evaluated on pool-member runs.** All D6
+   evaluation runs come from held-out day groups via the D2 rotations (fit
+   {010726-*} → monitor 290626-*, fit {290626-*} → monitor 010726-*, plus the
+   cross-config probes). An optional within-pool demo requires excluding that
+   run's windows from references AND thresholds and labels every output
+   "within-pool (in-sample)". Rationale: recalibrate mode draws the new run's
+   calibration side, which CONTAINS pool reference windows (kNN self-scores ≈ 0
+   → deflated thresholds); frozen mode scores the reference windows themselves.
+2. **[HIGH] D7 rolling gets floors + fallback:** default M=60 min; per (state,
+   window): rolling threshold when the trailing same-state calibration count
+   ≥ 1/α−1, else FALL BACK to the fit-day frozen threshold, flagged per window
+   (`threshold_source ∈ {rolling, fit_day_fallback}`); per-state trailing-
+   coverage statistics are a MANDATORY output. Motivating measurement (review
+   probe on 290626-tu): at M=20 only 46.8% of scored windows reach the floor
+   (states 2/3: 0%); at M=60 still 53.8%.
+3. **[HIGH] Provenance corrected** (see the rewritten §1). 270626-1 carries the
+   OLD config: its pool CLI flag caveat now names BOTH missing GT and the config
+   mismatch; it is excluded from every "same-config" claim. README data-layout
+   correction is a package deliverable. All prior notes' "25.05." date errors
+   corrected in master-thesis (done 2026-07-18).
+4. **[HIGH] Pooled detector so pump owns a cluster:** new
+   `FittedDetector.fit_pooled(features_per_run, cfg, k)` — KMeans centers fit on
+   the POOLED nested-fit features of all pool runs; emissions from pooled
+   per-cluster stats (the existing `_init_means_covars` construction); sticky
+   transmat fixed; NO cross-run EM chain — decoding is per run (Viterbi within
+   each run only). k selected by GT-state-ARI over k ∈ {4, 5, 6} on the pool
+   days, reported. Mahalanobis on pooled (possibly multi-modal) references
+   carries an explicit caveat; kNN is the primary pooled scorer. H6 reworded:
+   "pump windows are scored against pump-containing references under a detector
+   whose label space includes pump", not "per-state coverage".
+5. **[HIGH] D3 boundary pinned:** the DETECTOR always consumes RAW features
+   (labels are norm-invariant by construction); session norm applies to the
+   SCORING space only. Stats are median/MAD with the house 1e-8 floor
+   (state-mix confound documented: 290626's first 20 min are 100% one state —
+   the N-sweep in A2.2 is the sensitivity probe). Snapshots storing norm stats
+   bump `SNAPSHOT_FORMAT_VERSION` to 2; v1 snapshots are REFUSED under
+   `--session-norm` with a clear message. P6 comparability is FAR-level only.
+6. **[MEDIUM] Compute owned in §4-replacement:** pool warming is REAL work
+   (290626-pu/010726-pu have NO audio-beats/audio caches; ~30–60 min + ~0.7 GB);
+   D6 swapped-checkpoint evaluation re-extracts per checkpoint per run (~1–2.5 h,
+   the package's dominant compute); TF-C pretraining pair ~1.5–2.5 h; total
+   ~5–9 h wall-clock, sequenced in §8.
+7. **[MEDIUM] `build_pool` sides:** `Literal["calibration", "fit", "conformal"]`
+   — pooled FROZEN thresholds calibrate on the pool's nested-CONFORMAL scores
+   (run_sweep/snapshot convention). WARNING pinned in the module docstring:
+   `_cross_day_per_state_sweep` uses the TOP split as fit/conformal — do NOT
+   copy its split semantics for pooled work.
+8. **[MEDIUM] Protocol renamed** "held-out-day-group evaluation" (LODO-style;
+   n=2 same-config rotations — the honest count). Pools explicitly include
+   010726-tu1-morning/010726-tu2 (GT + caches exist). `--protocol
+   cross-day-pooled` gets a parser guard: fit day-groups and the test day-group
+   must be disjoint (day-group = calendar day of the run's first file). The
+   missing single-day baseline for 290626-pu (one monitor run with the P6
+   snapshot) is added to §8 so H2 has a comparator on every test run.
+9. **[MEDIUM] D4 tooling made explicit:** `pretrain_tfc.py` gains
+   `--corpus pshp-pool` (windows via `iter_target_windows(run, cfg,
+   target_hz=8000)` per pool run — the P5 leakage rule for free) and
+   `--continue-from PATH` (loads the checkpoint state dict as init; sidecar +
+   checkpoint carry a `continued_from` lineage field). Pool windows are
+   MATERIALIZED ONCE to an npz (~1.2 GB) so the two pretrainings don't stream
+   ~40 GB of Gantner twice; `_CHECKPOINT_NAMES`/`_MANIFEST_DIRS` gain the new
+   corpus keys.
+10. **[MEDIUM] D5 corrected:** Paderborn downloads come from
+    `groups.uni-paderborn.de/kat/BearingDataCenter/` (NOT Zenodo — only MIMII
+    is Zenodo); K003–K006 extend the existing `_SHA256_TBD` + live-HEAD
+    procedure; `tfc_vib_v2.pt` gets an explicit output-name mechanism.
+11. **[MEDIUM] D6 APIs named:** new `fit_snapshot_from_parts(detector,
+    references, calibration_scores, thresholds, *, provenance...)` beside the
+    single-run `fit_snapshot` (unchanged); `adapt_beats`/`distill_beats` gain
+    `--runs` (plural); `--max-windows` is the TOTAL budget drawn ROUND-ROBIN
+    across runs (a sequential chain would train almost entirely on run 1);
+    per-run window counts recorded in the sidecars.
+12. **[LOW] §1 corrected** (state 2 breaks too — done in the rewrite).
+13. **[LOW] 250526-pu-morning joins the evaluation** as the cross-config PUMP
+    probe (GT + fusion cache exist; near-free).
+14. **[LOW] §8 execution/synthesis added below; run names written in full.**
+
+## 8. Execution & synthesis (order)
+
+1. Ingest illwerke-080726 (A2.3), warm pool caches (audio, audio-beats for
+   290626-pu/010726-pu/010726-tu1-morning/010726-tu2 + 080726 runs), transcribe
+   `docs/groundtruth/080726_events_{st,pu}.csv`, check 080726's `MeasName`
+   config era and record it in the README coverage section.
+2. Missing baselines: monitor 290626-pu + 250526-pu-morning with the P6
+   single-day snapshot (both modes).
+3. D1/D2: pooled references + held-out-day-group rotations (both modes,
+   α grid) vs single-day baselines.
+4. D3: session-norm ablation on the same rotations (N grid).
+5. D4: materialize pool windows → tfc_audio_pshp + scratch control → Step-1
+   ARI + rotations.
+6. D5: downloads → tfc_vib_v2 → vibration evidence side by side.
+7. D6: pool-adapted LoRA/student + `fit_snapshot_from_parts` pool snapshot →
+   held-out evaluations; D7 rolling ablation (M grid) on the monitor runs.
+8. A2.3 pillar-3 run on 080726 (events harness, α grid, headline
+   representations); A2.4 design audit; A2.5 demo mockup.
+9. README package-7 section + master-thesis note (universality axis per A2.1 in
+   every table) → final whole-branch review → PR #10 → merge.
