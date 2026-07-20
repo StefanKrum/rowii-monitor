@@ -325,3 +325,37 @@ against code, disk artifacts, and raw Gantner headers. Binding resolutions:
    representations); A2.4 design audit; A2.5 demo mockup.
 9. README package-7 section + master-thesis note (universality axis per A2.1 in
    every table) → final whole-branch review → PR #10 → merge.
+
+## 9. Amendment A4 (Stefan's directives, 2026-07-18 evening)
+
+1. **All operating states in training AND testing, explicitly.** The pool (D1)
+   must cover turbine, pump, phase-shifter, standstill and transitions on the
+   TRAINING side, and the evaluation matrix must include held-out runs of EVERY
+   mode (incl. the pump probes from A3.8/A3.13 and the 080726 sessions). A
+   per-pool/per-evaluation COVERAGE TABLE (windows per GT state) is a mandatory
+   output — a mode with zero coverage on either side must be visible, never
+   silent.
+2. **Load-level coverage within states (SCADA):** turbine/pump operation spans
+   load levels ("stark gepumpt" vs Teillast). Pools and evaluation report
+   coverage per GT state × LOAD BIN (the existing `gt_labels` load-bin
+   machinery, n_load_bins=3); the pool builder logs a warning when a
+   state×load-bin cell present in evaluation has zero training coverage. This
+   operationalizes "von allen Ausprägungen ein bisschen was abdecken" without
+   new labels.
+3. **Bruno-content firewall (thesis-integrity rule):** Bruno's/partners'
+   analyses, results, and numbers appear in the thesis ONLY as clearly
+   attributed external reference points, never as our findings; our
+   conclusions must be derivable from OUR pipeline's artifacts alone. The
+   080726 strike GROUND TRUTH (protocol facts: what was struck when) is
+   campaign DATA and is used with attribution; Bruno's detector/localization
+   RESULTS are his paper's content, cited for orientation only. The joint
+   synthesis lives in a separate co-authored paper, not the thesis. Every P7
+   output that touches 080726 carries this framing.
+4. **080726 is MeasName era C** (`2026-07-02 10:56:19` in both sessions'
+   headers — verified 2026-07-18, a THIRD era). Consequences: (a) the
+   pillar-3 run's primary mode is RECALIBRATE (calibrates on the day itself —
+   era-invariant by construction); (b) frozen-mode cross-era results onto
+   080726 are reported as cross-era, joining H3's session-norm question;
+   (c) what changed on 29.06/02.07 is an OPEN question for Bruno (meeting
+   note `research/notes/meeting_prep_2026-07-19_bruno.md`) — until answered,
+   "era" means "MeasName differs", not "parameters proven different".
