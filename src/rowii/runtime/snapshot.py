@@ -473,6 +473,138 @@ def fit_snapshot(
     return snapshot, full_labels
 
 
+def fit_snapshot_from_parts(
+    detector: FittedDetector,
+    references: dict[int, np.ndarray],
+    calibration_scores: dict[int, np.ndarray],
+    thresholds: dict[int, ConformalThreshold],
+    *,
+    scorer: str,
+    alpha: float,
+    min_ref: int,
+    calibration_frac: float,
+    seed: int,
+    variant: str,
+    fit_run: str,
+    feature_names: list[str],
+    checkpoints: dict[str, str],
+) -> MonitorSnapshot:
+    """Assemble a `MonitorSnapshot` from ALREADY-COMPUTED parts -- the pooled
+    counterpart to `fit_snapshot` (Step-2 package-7 spec `docs/superpowers/specs/
+    2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3).
+
+    `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
+    references, thresholds). Pooled artifacts derive those parts across runs
+    instead -- `rowii.anomaly.pools.build_pool` sides, `FittedDetector.fit_pooled`,
+    frozen thresholds from the pool's nested-CONFORMAL scores (A3.7), wired by
+    `scripts/run_step2.py`'s cross-day-pooled protocol -- so this constructor is
+    PURE assembly + validation: nothing is split, fit, scored, or calibrated here,
+    and the caller's arrays enter the snapshot exactly as given (the dicts are
+    shallow-copied so later caller-side mutation of the DICTS cannot alias the
+    snapshot; array contents are shared, matching `fit_snapshot`'s own behavior).
+
+    Args:
+        detector: A fitted detector (`FittedDetector.fit` or `fit_pooled`) -- the
+            detector half is extracted through the SAME `_hmm_arrays` path
+            `fit_snapshot` uses, so the component/id invariant is asserted here
+            too. (`fit_pooled` already sets the model's `n_features`, so extraction
+            works before any `apply` call.)
+        references: Label -> raw reference matrix (pooled fit-side rows per label).
+        calibration_scores: Label -> the scores the threshold was calibrated on
+            (for a pooled artifact: the pool's CONFORMAL-side scores, A3.7).
+        thresholds: Label -> the calibrated `ConformalThreshold`.
+        scorer: Runtime scorer name (whitelist `_RUNTIME_SCORERS`).
+        alpha: Nominal per-state false-alarm target the thresholds carry.
+        min_ref: Reference floor the caller applied (provenance/recalibration).
+        calibration_frac: Top-split fraction (the monitor reuses it, spec D2).
+        seed: Top-split seed (nested splits used `seed + 1`, per convention).
+        variant: Feature variant (geometry guard, with `feature_names`).
+        fit_run: Provenance name. A pooled artifact passes a `"pool:"`-prefixed
+            comma-separated run list (`"pool:290626-tu,010726-pu"`) -- a naming
+            convention, deliberately not validated, so single-run callers can pass
+            a bare run name.
+        feature_names: Feature column names -- every reference's width must match.
+        checkpoints: Config-field-name -> checkpoint path (provenance only).
+
+    Returns:
+        A `MonitorSnapshot` at the CURRENT format version -- `save_snapshot`/
+        `load_snapshot`/`to_detector`/`scorer_for_label` treat it exactly like a
+        `fit_snapshot` product.
+
+    Raises:
+        ValueError: if *scorer* is not a runtime scorer (checked FIRST, mirroring
+            `fit_snapshot`'s "a snapshot that could never be saved must never be
+            built"); if the three dicts' label sets differ (the on-disk format
+            reconstructs all three from ONE label list -- `save_snapshot` enforces
+            the same rule, re-checked at assembly so a corrupt snapshot is never
+            even built); if any reference is not a non-empty 2-D matrix of width
+            `len(feature_names)` (the geometry-guard fields would otherwise
+            promise a width the stored references cannot deliver).
+        RuntimeError: from `_hmm_arrays` if the detector's component/id invariant
+            is violated (see its docstring).
+    """
+    _runtime_scorer(scorer)  # whitelist gate before anything else (fit_snapshot rule)
+    if not (set(references) == set(calibration_scores) == set(thresholds)):
+        raise ValueError(
+            f"snapshot label sets disagree: references={sorted(references)}, "
+            f"calibration_scores={sorted(calibration_scores)}, "
+            f"thresholds={sorted(thresholds)} -- refusing to assemble a corrupt "
+            f"snapshot"
+        )
+    n_features = len(feature_names)
+    for label in sorted(references):
+        reference = references[label]
+        if reference.ndim != 2 or reference.shape[0] == 0:
+            raise ValueError(
+                f"label {label}'s reference must be a non-empty 2-D matrix, got "
+                f"shape {reference.shape}"
+            )
+        if reference.shape[1] != n_features:
+            raise ValueError(
+                f"label {label}'s reference is {reference.shape[1]} column(s) wide "
+                f"but feature_names has {n_features} name(s) -- geometry mismatch"
+            )
+    if not thresholds:
+        logger.warning(
+            "fit_snapshot_from_parts: assembling a snapshot with an EMPTY scoring "
+            "half (no label carries a reference/threshold) -- the monitor will "
+            "label states yet never alarm (same possibility fit_snapshot documents)"
+        )
+
+    smoother = detector.smoother
+    assert smoother._fitted_ids is not None  # every FittedDetector constructor fits it
+    fitted_ids = np.asarray(smoother._fitted_ids, dtype=np.int64)
+    startprob, transmat, means, covars_diag = _hmm_arrays(smoother, fitted_ids)
+
+    return MonitorSnapshot(
+        mean=np.asarray(detector.mean, dtype=np.float64),
+        std=np.asarray(detector.std, dtype=np.float64),
+        fitted_ids=fitted_ids,
+        hmm_startprob=startprob,
+        hmm_transmat=transmat,
+        hmm_means=means,
+        hmm_covars_diag=covars_diag,
+        min_dwell_s=detector.min_dwell_s,
+        k=detector.k,
+        self_transition=smoother.self_transition,
+        random_seed=smoother.random_seed,
+        references=dict(references),
+        calibration_scores=dict(calibration_scores),
+        thresholds=dict(thresholds),
+        scorer=scorer,
+        alpha=alpha,
+        min_ref=min_ref,
+        calibration_frac=calibration_frac,
+        seed=seed,
+        variant=variant,
+        feature_names=list(feature_names),
+        fit_run=fit_run,
+        checkpoints=dict(checkpoints),
+        created_at=datetime.now(UTC).isoformat(),
+        format_version=SNAPSHOT_FORMAT_VERSION,
+    )
+
+
 def to_detector(snapshot: MonitorSnapshot) -> FittedDetector:
     """Rebuild the `FittedDetector` from *snapshot* -- assignment only, NEVER a
     `fit`/EM call anywhere (the whole point of the fit/apply split: the fit day's
@@ -559,7 +691,12 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
     }
 
 
-def save_snapshot(path: Path, snapshot: MonitorSnapshot) -> None:
+def save_snapshot(
+    path: Path,
+    snapshot: MonitorSnapshot,
+    *,
+    provenance: dict[str, object] | None = None,
+) -> None:
     """Persist *snapshot* to *path* (npz, written through an open file handle so the
     name is used EXACTLY as given -- `np.savez`'s implicit `.npz`-appending never
     applies) plus a human-readable `<stem>.json` metadata sidecar.
@@ -567,6 +704,13 @@ def save_snapshot(path: Path, snapshot: MonitorSnapshot) -> None:
     Args:
         path: Target npz path (conventionally `*.npz`); parents are created.
         snapshot: The snapshot to persist.
+        provenance: Optional JSON-serializable provenance (package-7 spec D1/A3.11:
+            pooled artifacts carry per-run window counts and pool composition) --
+            stored under a `"provenance"` key in the npz `meta` member AND the
+            `.json` sidecar. ADDITIVE metadata only: `load_snapshot` never reads
+            it, `None` (the default) writes exactly the pre-provenance layout, and
+            `SNAPSHOT_FORMAT_VERSION` stays unchanged (provenance changes what a
+            human can read off the artifact, never how the monitor behaves).
 
     Raises:
         ValueError: if `snapshot.scorer` is not in the runtime whitelist (module
@@ -612,6 +756,8 @@ def save_snapshot(path: Path, snapshot: MonitorSnapshot) -> None:
             snapshot.calibration_scores[label], dtype=np.float64
         )
     meta = _meta_dict(snapshot)
+    if provenance is not None:
+        meta["provenance"] = provenance
     arrays["meta"] = np.array([json.dumps(meta)], dtype=str)
 
     path.parent.mkdir(parents=True, exist_ok=True)
