@@ -225,9 +225,15 @@ class FittedDetector:
         Raises:
             ValueError: if *clusterer* is not `"kmeans"`, *k* < 1, or
                 *pooled_features* is not 2-D.
-            RuntimeError: if KMeans returns labels other than exactly `0..k-1`
-                (impossible for sklearn KMeans, which never leaves a cluster
-                empty -- trust but verify, the `_hmm_arrays` style).
+            RuntimeError: if KMeans returns labels other than exactly `0..k-1`.
+                This CAN happen (T2-review probe, sklearn 1.9): when the pooled
+                data has fewer effectively-distinct clusters than *k* --
+                duplicate or near-constant feature rows (extended idle/steady
+                stretches), or a *k* above the natural cluster count -- KMeans
+                may leave label ids unassigned. Guarded loudly here because a
+                silent gap would violate the `_fitted_ids = arange(k)` identity
+                invariant the snapshot extraction relies on; the execution's
+                k-sweep treats this error as "k too large for this pool".
         """
         if clusterer != "kmeans":
             raise ValueError(

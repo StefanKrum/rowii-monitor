@@ -356,3 +356,13 @@ def test_k_below_one_raises() -> None:
     fx = _fixture()
     with pytest.raises(ValueError, match="k"):
         FittedDetector.fit_pooled(fx.pooled, _cfg(), k=0)
+
+
+def test_duplicate_rows_forcing_empty_cluster_raise_loud_runtime_error() -> None:
+    """T2-review MEDIUM: near-constant pooled data CAN leave KMeans label ids
+    unassigned (probed on sklearn 1.9 with duplicate rows) -- the guard must
+    fail loudly instead of silently violating the arange(k) id invariant that
+    the snapshot extraction relies on."""
+    pooled = np.tile(np.array([[1.0, 2.0]]), (25, 1))
+    with pytest.raises(RuntimeError, match="0..4"):
+        FittedDetector.fit_pooled(pooled, _cfg(), k=5)
