@@ -1,7 +1,9 @@
-"""TF-C pretraining CLI (package-4 spec D3, Task 3): trains the compact TF-C
-encoder pair (`rowii.tfc.model.TfcModel`) on either the MIMII pump audio
-corpus (`--corpus mimii` -> `tfc_audio.pt`) or the CWRU+Paderborn vibration
-corpora (`--corpus bearings` -> `tfc_vib.pt`), writing a Task-1-format
+"""TF-C pretraining CLI (package-4 spec D3, Task 3; extended by package-7
+spec D4/A3.9, Task 6): trains the compact TF-C encoder pair
+(`rowii.tfc.model.TfcModel`) on the MIMII pump audio corpus (`--corpus
+mimii` -> `tfc_audio.pt`), the CWRU+Paderborn vibration corpora (`--corpus
+bearings` -> `tfc_vib.pt`), or the PSHP plant's own pooled calibration-side
+audio (`--corpus pshp-pool` -> `tfc_audio_pshp.pt`), writing a Task-1-format
 checkpoint (`rowii.tfc.wrapper.load_tfc_model`'s docstring) into `--out`.
 
 Corpus routing (`_corpus_windows`, orchestrator resolution 1): `mimii` walks
@@ -14,6 +16,47 @@ struct layout, `rowii.tfc.corpora`'s own docstring) into ONE combined
 stream -- `--limit-clips` applies INDEPENDENTLY to each underlying corpus
 directory (a per-source file budget, not a combined one across CWRU and
 Paderborn; each `iter_windows_*_dir` call already owns that semantic).
+
+PSHP pool (`--corpus pshp-pool`, package-7 spec D4 as amended by A3.9):
+windows come per `--pool-runs` run from `rowii.adapt.target_windows.
+iter_target_windows(run, cfg, target_hz=8000)` -- EXCLUSIVELY the
+calibration side of each run's canonical top split (that helper's OWN
+pinned seed 7, deliberately NOT `--seed`: the split must stay the one every
+Step-2 sweep calibrates/scores against, or pretraining could swallow
+scoring-side windows), i.e. the package-5 leakage rule for free. The pool is
+MATERIALIZED ONCE to `<out>/pshp_pool_windows.npz` (members: `windows`
+float32 `(N, 8000)`, `run_names`, `per_run_counts` int64, `fingerprint` =
+sha256 over run names + per-run window counts + target_hz; loaded with
+`allow_pickle=False`) and REUSED whenever the stored fingerprint matches the
+requested pool (cache HIT logged; any mismatch or unreadable file
+re-materializes) -- so D4's continued/from-scratch pretraining PAIR streams
+the ~40 GB of Gantner audio once, not twice. Sequential per-run
+concatenation is deliberate (no round-robin): pretraining consumes ALL pool
+windows, so there is no budget-starvation concern (A3.11's round-robin
+rationale applies to capped adaptation draws, not here). Unlike the public
+corpora, pshp-pool has NO `download_corpora.py` manifest -- provenance lives
+in the repo's own data layout (`rowii.io.dataset.discover`), so the pool
+FINGERPRINT plays the checkpoint's `corpus_manifest_sha256` role.
+
+Continued pretraining (`--continue-from PATH`, any corpus): the model is
+initialized from that Task-1-format checkpoint's state dict instead of a
+fresh seed-derived init, with the architecture following the SOURCE
+checkpoint's own `cfg` (mirroring `load_tfc_model`'s reconstruction,
+including its strict load -- never `strict=False`). Lineage is recorded as
+`continued_from` (absolute path string, or None) in the checkpoint dict and
+sidecar, alongside `pool_runs` (None for public corpora). Every checkpoint
+now gets a `<same-stem>.json` sidecar (`adapt_beats.py`/`distill_beats.py`'s
+own convention); the pshp-pool sidecar's note restates the calibration-side
+leakage rule, the pool runs, and the A2.1 universality framing (a
+PSHP-adapted encoder is plant-specific; the frozen public-corpus checkpoint
+stays the universal reference baseline).
+
+`load_config`/`discover`/`iter_target_windows` are module-level imports that
+are only ever CALLED on the pshp-pool path -- module-level for the same
+reason `scripts/adapt_beats.py` documents (the `warm_cache.py` precedent):
+tests monkeypatch them (`monkeypatch.setattr(pretrain_tfc,
+"iter_target_windows", ...)`), which a function-local import would silently
+undo by re-resolving the real symbol on every call.
 
 Windows are never all held in memory before subsampling: `_reservoir_sample`
 is a genuine STREAMING reservoir sample (Algorithm R, seeded by
@@ -55,12 +98,15 @@ verified directly (2026-07-16, this task) that passing a CPU
 -- generating on CPU first and moving the result is the only pattern that is
 correct on every backend (CPU/MPS/CUDA) with one shared generator.
 
-Checkpoint: `{"cfg": dataclasses.asdict(TfcConfig()), "model": state_dict,
+Checkpoint: `{"cfg": dataclasses.asdict(<cfg>), "model": state_dict,
 "corpus_manifest_sha256": <sha256 of the corpus's MANIFEST.json(s), computed
-by `_corpus_manifest_sha256`, or "unknown" if none is present>, "epochs":
-<int>}` -- the exact dict format Task 1's `load_tfc_model`/`TfcFeaturizer`
-already expect and round-trip-test against. Every checkpoint this script
-writes uses `TfcConfig()`'s defaults (no CLI flag varies the architecture);
+by `_corpus_manifest_sha256`, "unknown" if none is present, or the pool
+fingerprint for pshp-pool>, "epochs": <int>, "continued_from": <str | None>,
+"pool_runs": <list[str] | None>}` -- a superset of the dict format Task 1's
+`load_tfc_model`/`TfcFeaturizer` already expect and round-trip-test against
+(the two lineage keys are additive; that loader reads only the keys it
+names). Fresh runs use `TfcConfig()`'s defaults (no CLI flag varies the
+architecture); `--continue-from` runs inherit the source checkpoint's `cfg`;
 device via `rowii.signals.beats.best_device()`.
 
 Real pretraining (multi-hour, real corpora) is orchestrator-led (Task 5,
@@ -73,9 +119,11 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import json
 import logging
 import sys
-from collections.abc import Iterator
+import zipfile
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -88,6 +136,9 @@ if TYPE_CHECKING:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from rowii.adapt.target_windows import iter_target_windows  # noqa: E402
+from rowii.config import Config, load_config  # noqa: E402
+from rowii.io.dataset import Run, discover  # noqa: E402
 from rowii.tfc.corpora import (  # noqa: E402
     iter_windows_mat_dir,
     iter_windows_paderborn_dir,
@@ -113,12 +164,61 @@ uniform in `[0, _ZERO_MASK_MAX_FRAC)`, then masks each sample independently
 with that probability -- see `_augment_time_view`'s docstring for the full
 semantics and why this bounds the EXPECTED, not a hard per-window, count."""
 
-_CHECKPOINT_NAMES: dict[str, str] = {"mimii": "tfc_audio.pt", "bearings": "tfc_vib.pt"}
+_CHECKPOINT_NAMES: dict[str, str] = {
+    "mimii": "tfc_audio.pt",
+    "bearings": "tfc_vib.pt",
+    "pshp-pool": "tfc_audio_pshp.pt",
+}
+"""Default checkpoint filename per corpus -- overridable per run via
+`--out-name` (package-7 Task 6: D4's from-scratch control writes
+`tfc_audio_pshp_scratch.pt`, D5's re-pretrain writes `tfc_vib_v2.pt`)."""
 
 _MANIFEST_DIRS: dict[str, tuple[str, ...]] = {
     "mimii": ("mimii",),
     "bearings": ("cwru", "paderborn"),
+    # pshp-pool has NO scripts/download_corpora.py manifest by design: PSHP
+    # data provenance lives in the repo's own data layout (rowii.io.dataset.
+    # discover), not a download manifest, and main() records the pool
+    # FINGERPRINT in the checkpoint's corpus_manifest_sha256 slot instead.
+    # The empty tuple keeps _corpus_manifest_sha256 a graceful "unknown"
+    # (never a KeyError) if anything ever routes pshp-pool through it.
+    "pshp-pool": (),
 }
+
+_POOL_TARGET_HZ = 8000
+"""TF-C's fixed input rate (`rowii.tfc.wrapper`'s own `_TFC_SAMPLE_RATE_HZ`
+-- restated rather than imported: a stable architectural literal, the same
+rationale `rowii.adapt.target_windows._PRIMARY_MIC_STREAM` gives for its own
+duplication): every pshp-pool window is drawn already resampled to 8 kHz."""
+
+_POOL_WINDOWS_FILENAME = "pshp_pool_windows.npz"
+"""Materialize-once cache for the pool's windows, living inside `--out` next
+to the checkpoints it feeds (spec A3.9: one ~1.2 GB npz instead of streaming
+~40 GB of Gantner audio once PER pretraining of D4's continued/scratch
+pair)."""
+
+_DEFAULT_POOL_RUNS = "010726-tu_ph_tu,290626-tu,290626-pu,010726-pu"
+"""The canonical final-setup pool (package-7 spec D1): TU+PH+PU coverage,
+calibration sides only; 250526-*/270626-* are excluded by design (cross-
+config probe / old-config runs, never pooled)."""
+
+_PSHP_POOL_NOTE_TEMPLATE = (
+    "PSHP-pool pretraining windows come EXCLUSIVELY from each pool run's calibration side "
+    "via rowii.adapt.target_windows.iter_target_windows (per-run top split at its pinned "
+    "seed 7 -- the package-5 leakage rule: no scoring-side window ever reaches "
+    "pretraining). Pool runs: {runs}. Universality framing (package-7 spec A2.1): a "
+    "PSHP-adapted encoder is PLANT-SPECIFIC -- it measures what plant-specific data buys; "
+    "the frozen public-corpus checkpoint remains the UNIVERSAL reference baseline in "
+    "every comparison."
+)
+"""Sidecar note for `--corpus pshp-pool` (spec A2.1 + the A4.3 firewall
+spirit: our artifacts state their own provenance and framing)."""
+
+_PUBLIC_CORPUS_NOTE = (
+    "public-corpus pretraining; data provenance = corpus_manifest_sha256 over "
+    "scripts/download_corpora.py's MANIFEST.json(s), 'unknown' when none is present."
+)
+"""Sidecar note for the public corpora (mimii/bearings)."""
 
 
 def _import_torch_or_exit() -> None:
@@ -164,6 +264,12 @@ def _corpus_windows(
             limit_clips=limit_clips,
         )
         yield from iter_windows_paderborn_dir(data_root / "paderborn", limit_clips=limit_clips)
+    elif corpus == "pshp-pool":
+        raise ValueError(
+            "pshp-pool windows are materialized once via _load_cached_pool_windows/"
+            "_materialize_pool_windows in main() (package-7 Task 6), never streamed "
+            "through this public-corpus router"
+        )
     else:
         raise ValueError(f"unknown --corpus: {corpus!r}")
 
@@ -236,7 +342,10 @@ def _corpus_manifest_sha256(corpus: str, data_root: Path) -> str:
         The combined hex sha256 digest, or `"unknown"` if NO manifest is
         present for *corpus* at all (e.g. a hand-assembled corpus directory
         with no `scripts/download_corpora.py` provenance) -- resolution 4's
-        documented fallback, never an error.
+        documented fallback, never an error. `pshp-pool` always lands here
+        (its `_MANIFEST_DIRS` entry is empty -- see that dict's own comment;
+        `main()` records the pool fingerprint instead of ever consulting
+        this function for it).
     """
     manifest_paths = sorted(data_root / d / "MANIFEST.json" for d in _MANIFEST_DIRS[corpus])
     existing = [p for p in manifest_paths if p.is_file()]
@@ -246,6 +355,178 @@ def _corpus_manifest_sha256(corpus: str, data_root: Path) -> str:
     for p in existing:
         hasher.update(p.read_bytes())
     return hasher.hexdigest()
+
+
+def _pool_fingerprint(
+    run_names: Sequence[str], per_run_counts: Sequence[int], target_hz: int
+) -> str:
+    """Identity of a materialized PSHP pool (spec A3.9): sha256 over the pool
+    run names, their per-run window counts, and the target sample rate --
+    serialized as canonical JSON (sorted keys, no whitespace) so the digest
+    is stable across processes. Everything that changes what
+    `_materialize_pool_windows` would produce changes this digest: a
+    different pool list, a run whose calibration side grew/shrank (e.g.
+    re-ingested data), or a different window rate. Deliberately NOT hashed:
+    `--seed`/`--max-windows` (they act AFTER materialization, on the training
+    subsample) and the split seed (pinned at 7 inside `iter_target_windows`,
+    module docstring)."""
+    payload = json.dumps(
+        {
+            "runs": list(run_names),
+            "counts": [int(count) for count in per_run_counts],
+            "target_hz": int(target_hz),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_cached_pool_windows(
+    npz_path: Path, pool_runs: list[str], target_hz: int
+) -> tuple[np.ndarray, np.ndarray, str] | None:
+    """Reuse a previously materialized pool npz (spec A3.9's materialize-ONCE
+    rule) if -- and only if -- it is the pool the caller asked for.
+
+    Validation is fully self-contained (no Gantner file is touched): the
+    stored fingerprint must equal `_pool_fingerprint` recomputed from the
+    REQUESTED run names + the npz's OWN per-run counts + *target_hz* (a
+    different `--pool-runs` list therefore always misses), the stored member
+    set/geometry/dtype must match the npz contract, and the counts must sum
+    to the window rows. Any unreadable or malformed file is a MISS (warned,
+    then re-materialized), never an error -- a half-written cache from an
+    interrupted run heals itself on the next invocation.
+
+    Returns:
+        `(windows, per_run_counts, fingerprint)` on a HIT (logged), else
+        `None`.
+    """
+    if not npz_path.is_file():
+        return None
+    try:
+        with np.load(npz_path, allow_pickle=False) as npz:
+            if set(npz.files) != {"windows", "run_names", "per_run_counts", "fingerprint"}:
+                logger.warning(
+                    "pretrain_tfc: pool windows cache %s has unexpected members %s -- "
+                    "re-materializing",
+                    npz_path, sorted(npz.files),
+                )
+                return None
+            windows = npz["windows"]
+            run_names = [str(name) for name in npz["run_names"].tolist()]
+            per_run_counts = npz["per_run_counts"].astype(np.int64)
+            stored_fingerprint = str(npz["fingerprint"])
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
+        logger.warning(
+            "pretrain_tfc: pool windows cache %s unreadable (%s) -- re-materializing",
+            npz_path, exc,
+        )
+        return None
+
+    expected_fingerprint = _pool_fingerprint(pool_runs, per_run_counts.tolist(), target_hz)
+    consistent = (
+        stored_fingerprint == expected_fingerprint
+        and run_names == pool_runs
+        and windows.ndim == 2
+        and windows.shape[1] == target_hz
+        and windows.dtype == np.float32
+        and per_run_counts.shape[0] == len(pool_runs)
+        and int(per_run_counts.sum()) == int(windows.shape[0])
+    )
+    if not consistent:
+        logger.info(
+            "pretrain_tfc: pool windows cache MISS for %s (cached runs %s vs requested %s) "
+            "-- re-materializing",
+            npz_path, run_names, pool_runs,
+        )
+        return None
+    logger.info(
+        "pretrain_tfc: pool windows cache HIT -- reusing %s (%d window(s), fingerprint %s)",
+        npz_path, int(windows.shape[0]), stored_fingerprint,
+    )
+    return windows, per_run_counts, stored_fingerprint
+
+
+def _materialize_pool_windows(
+    runs: list[Run], data_cfg: Config, npz_path: Path, target_hz: int
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Draw every pool run's calibration-side windows (module docstring's
+    leakage rule: `iter_target_windows` at ITS pinned split seed 7, resampled
+    to *target_hz*) by simple sequential per-run concatenation, and persist
+    them ONCE to *npz_path* for every later pretraining to reuse (spec
+    A3.9). A run contributing zero windows is a warning, never an error; an
+    entirely empty pool writes NO npz (a cached zero-window "HIT" would
+    poison every later run -- `main()`'s no-windows exit handles it) and
+    returns an empty array.
+
+    Returns:
+        `(windows, per_run_counts, fingerprint)`: `(N, target_hz)` float32
+        windows in pool order, `int64` per-run counts aligned with *runs*,
+        and the `_pool_fingerprint` of what was (or, for the empty pool,
+        would have been) written.
+    """
+    run_names = [run.name for run in runs]
+    logger.info(
+        "pretrain_tfc: materializing pool windows for %d run(s) (%s) -> %s",
+        len(runs), ", ".join(run_names), npz_path,
+    )
+    all_windows: list[np.ndarray] = []
+    counts: list[int] = []
+    for run in runs:
+        n_before = len(all_windows)
+        for window in iter_target_windows(run, data_cfg, target_hz=target_hz):
+            all_windows.append(np.asarray(window, dtype=np.float32))
+        n_run = len(all_windows) - n_before
+        counts.append(n_run)
+        if n_run == 0:
+            logger.warning(
+                "pretrain_tfc: pool run %s contributed ZERO calibration-side windows",
+                run.name,
+            )
+        else:
+            logger.info("pretrain_tfc: pool run %s -- %d window(s)", run.name, n_run)
+
+    per_run_counts = np.asarray(counts, dtype=np.int64)
+    fingerprint = _pool_fingerprint(run_names, counts, target_hz)
+    if not all_windows:
+        return np.empty((0, target_hz), dtype=np.float32), per_run_counts, fingerprint
+
+    windows = np.stack(all_windows)
+    npz_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        npz_path,
+        windows=windows,
+        run_names=np.asarray(run_names),
+        per_run_counts=per_run_counts,
+        fingerprint=np.asarray(fingerprint),
+    )
+    logger.info(
+        "pretrain_tfc: materialized %d pool window(s) (%.1f MB) -> %s (fingerprint %s)",
+        windows.shape[0], windows.nbytes / 1e6, npz_path, fingerprint,
+    )
+    return windows, per_run_counts, fingerprint
+
+
+def _load_continue_checkpoint(path: Path) -> tuple[TfcConfig, dict[str, torch.Tensor]]:
+    """Read the `--continue-from` source checkpoint (Task-1 dict format):
+    returns its architecture (`TfcConfig` rebuilt from the checkpoint's own
+    `cfg`, with `load_tfc_model`'s identical defensive `channels`-to-tuple
+    coercion) and its model state dict, for `_train` to load as the init.
+    Existence is checked by the caller (`main()`, a clean exit-2); a file
+    that exists but is not a TF-C checkpoint raises `SystemExit` with a
+    pointed message rather than a raw `KeyError` traceback."""
+    import torch
+
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(state, dict) or "cfg" not in state or "model" not in state:
+        raise SystemExit(
+            f"pretrain_tfc: --continue-from {path} is not a Task-1-format TF-C checkpoint "
+            "(expected a dict with 'cfg' and 'model' keys -- "
+            "rowii.tfc.wrapper.load_tfc_model's documented format)"
+        )
+    cfg_dict = dict(state["cfg"])
+    cfg_dict["channels"] = tuple(cfg_dict["channels"])
+    return TfcConfig(**cfg_dict), state["model"]
 
 
 def _augment_time_view(x: torch.Tensor, gen: torch.Generator) -> torch.Tensor:
@@ -304,6 +585,7 @@ def _train(
     batch_size: int,
     lr: float,
     seed: int,
+    init_state: dict[str, torch.Tensor] | None = None,
 ) -> tuple[TfcModel, list[float]]:
     """Train a `TfcModel` on *windows* (Task 1's `TfcModel`/`tfc_loss`/
     `freq_view`; orchestrator resolution 4): Adam, *epochs* full passes over
@@ -333,6 +615,12 @@ def _train(
         lr: Adam learning rate.
         seed: Seeds `torch.manual_seed` (weight init) AND the shared
             shuffle+augmentation generator.
+        init_state: If given (`--continue-from`, package-7 spec D4), a model
+            state dict loaded over the fresh seed-derived init BEFORE the
+            first training step, STRICTLY (any key/shape mismatch between
+            *cfg*'s architecture and the state dict is a hard error --
+            `load_tfc_model`'s own never-`strict=False` convention). `None`
+            keeps the fresh init (from-scratch pretraining).
 
     Returns:
         `(model, epoch_losses)`: *model* on `best_device()`, in `.eval()`
@@ -349,6 +637,10 @@ def _train(
     torch.manual_seed(seed)
     device = best_device()
     model = TfcModel(cfg).to(device)
+    if init_state is not None:
+        # --continue-from: overwrite the fresh init with the source
+        # checkpoint's weights (CPU tensors copy into the device parameters).
+        model.load_state_dict(init_state)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     x_all = torch.from_numpy(windows.astype(np.float32)).to(device)
@@ -385,10 +677,19 @@ def _train(
 
 
 def _save_checkpoint(
-    path: Path, cfg: TfcConfig, model: TfcModel, corpus_manifest_sha256: str, epochs: int
+    path: Path,
+    cfg: TfcConfig,
+    model: TfcModel,
+    corpus_manifest_sha256: str,
+    epochs: int,
+    *,
+    continued_from: str | None,
+    pool_runs: list[str] | None,
 ) -> None:
     """Write the Task-1-format checkpoint dict (module docstring) to *path*,
-    creating parent directories as needed."""
+    creating parent directories as needed. *continued_from*/*pool_runs* are
+    the package-7 lineage keys (spec A3.9) -- always present, `None` for a
+    fresh public-corpus run."""
     import torch
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +699,8 @@ def _save_checkpoint(
             "model": model.state_dict(),
             "corpus_manifest_sha256": corpus_manifest_sha256,
             "epochs": epochs,
+            "continued_from": continued_from,
+            "pool_runs": pool_runs,
         },
         path,
     )
@@ -407,20 +710,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Pre-train the compact TF-C encoder pair (rowii.tfc.model.TfcModel) on "
-            "MIMII pump audio (--corpus mimii -> tfc_audio.pt) or CWRU+Paderborn "
-            "bearing vibration (--corpus bearings -> tfc_vib.pt), writing a "
-            "Task-1-format checkpoint into --out (package-4 spec D3, Task 3)."
+            "MIMII pump audio (--corpus mimii -> tfc_audio.pt), CWRU+Paderborn "
+            "bearing vibration (--corpus bearings -> tfc_vib.pt), or the PSHP pool's "
+            "own calibration-side audio (--corpus pshp-pool -> tfc_audio_pshp.pt; "
+            "package-7 spec D4/A3.9), writing a Task-1-format checkpoint into --out "
+            "(package-4 spec D3, Task 3)."
         )
     )
     parser.add_argument(
-        "--corpus", required=True, choices=("mimii", "bearings"),
-        help="Corpus to pretrain on: mimii (audio, -> tfc_audio.pt) or bearings "
-             "(CWRU + Paderborn vibration, -> tfc_vib.pt).",
+        "--corpus", required=True, choices=("mimii", "bearings", "pshp-pool"),
+        help="Corpus to pretrain on: mimii (audio, -> tfc_audio.pt), bearings "
+             "(CWRU + Paderborn vibration, -> tfc_vib.pt), or pshp-pool (PSHP "
+             "calibration-side plant audio, -> tfc_audio_pshp.pt).",
     )
     parser.add_argument(
         "--data-root", type=Path, default=Path("data/public"),
-        help="Root directory holding the downloaded corpora (default: data/public, "
-             "scripts/download_corpora.py's own default --dest).",
+        help="Root directory holding the downloaded PUBLIC corpora (default: data/public, "
+             "scripts/download_corpora.py's own default --dest). Not used by pshp-pool, "
+             "which discovers plant data via rowii.config's own ROWII_DATA_ROOT.",
     )
     parser.add_argument("--epochs", type=int, default=40, help="Training epochs (default: 40).")
     parser.add_argument(
@@ -432,20 +739,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--seed", type=int, default=7,
         help="Seeds window subsampling, weight init, shuffling, and augmentation "
-             "(default: 7).",
+             "(default: 7). The pshp-pool calibration split itself stays pinned at "
+             "iter_target_windows' canonical seed 7 regardless (leakage rule).",
     )
     parser.add_argument(
         "--limit-clips", type=int, default=None, metavar="N",
-        help="Cap files opened per corpus source (dev subsampling; default: unlimited).",
+        help="Cap files opened per PUBLIC corpus source (dev subsampling; default: "
+             "unlimited). Not used by pshp-pool (no clip files -- materialized windows).",
     )
     parser.add_argument(
         "--max-windows", type=int, default=200_000,
-        help="Reservoir-sample cap on total training windows (default: 200000).",
+        help="Reservoir-sample cap on total training windows (default: 200000). For "
+             "pshp-pool it caps the TRAINING subsample only -- the materialized npz "
+             "always holds the full pool.",
     )
     parser.add_argument(
         "--out", type=Path, default=Path("models/pretrained/tfc/"),
         help="Output directory for the checkpoint (default: models/pretrained/tfc/); "
-             "filename is tfc_audio.pt (mimii) or tfc_vib.pt (bearings).",
+             "filename is tfc_audio.pt (mimii), tfc_vib.pt (bearings), or "
+             "tfc_audio_pshp.pt (pshp-pool) unless --out-name overrides it. pshp-pool "
+             "also materializes pshp_pool_windows.npz here.",
+    )
+    parser.add_argument(
+        "--pool-runs", default=_DEFAULT_POOL_RUNS, metavar="CSV",
+        help="Comma-separated PSHP run names for --corpus pshp-pool (default: the "
+             "canonical package-7 D1 pool, %(default)s). Ignored for public corpora.",
+    )
+    parser.add_argument(
+        "--continue-from", type=Path, default=None, metavar="PATH",
+        help="Existing TF-C checkpoint whose model state dict initializes training "
+             "(continued pretraining, package-7 spec D4; architecture follows THAT "
+             "checkpoint's cfg). Omitted -> fresh random init. Recorded as "
+             "continued_from in the checkpoint dict and sidecar.",
+    )
+    parser.add_argument(
+        "--out-name", default=None, metavar="NAME.pt",
+        help="Checkpoint filename override inside --out, for ANY corpus (default: the "
+             "corpus's canonical name). D4's from-scratch control uses "
+             "--out-name tfc_audio_pshp_scratch.pt; D5's vib re-pretrain tfc_vib_v2.pt.",
     )
     return parser
 
@@ -457,14 +788,79 @@ def main(argv: list[str] | None = None) -> int:
 
     _import_torch_or_exit()
 
+    # --continue-from is resolved BEFORE any corpus work: a typo'd path must
+    # fail in seconds, not after a full corpus walk/materialization.
+    cfg = TfcConfig()
+    init_state: dict[str, torch.Tensor] | None = None
+    continued_from: str | None = None
+    if args.continue_from is not None:
+        if not args.continue_from.is_file():
+            print(
+                f"pretrain_tfc: --continue-from checkpoint not found: {args.continue_from}",
+                file=sys.stderr,
+            )
+            return 2
+        cfg, init_state = _load_continue_checkpoint(args.continue_from)
+        continued_from = str(args.continue_from.resolve())
+        logger.info(
+            "pretrain_tfc: continuing from %s (architecture follows its cfg)", continued_from
+        )
+
+    windows_stream: Iterator[np.ndarray]
+    pool_runs: list[str] | None = None
+    pool_fingerprint: str | None = None
+    pool_window_counts: dict[str, int] | None = None
+    if args.corpus == "pshp-pool":
+        requested = [name.strip() for name in args.pool_runs.split(",") if name.strip()]
+        if not requested:
+            print("pretrain_tfc: --pool-runs is empty -- nothing to pool", file=sys.stderr)
+            return 2
+        npz_path = args.out / _POOL_WINDOWS_FILENAME
+        cached = _load_cached_pool_windows(npz_path, requested, _POOL_TARGET_HZ)
+        if cached is None:
+            data_cfg = load_config()
+            index = discover(data_cfg.data_root)
+            runs_by_name = {run.name: run for run in index.runs}
+            unknown = [name for name in requested if name not in runs_by_name]
+            if unknown:
+                available = ", ".join(sorted(runs_by_name)) or "(none discovered)"
+                print(
+                    f"pretrain_tfc: unknown --pool-runs run(s): {', '.join(unknown)}; "
+                    f"available runs: {available}",
+                    file=sys.stderr,
+                )
+                return 2
+            cached = _materialize_pool_windows(
+                [runs_by_name[name] for name in requested], data_cfg, npz_path, _POOL_TARGET_HZ
+            )
+        pool_windows, per_run_counts, pool_fingerprint = cached
+        pool_runs = requested
+        pool_window_counts = {
+            name: int(count)
+            for name, count in zip(requested, per_run_counts.tolist(), strict=True)
+        }
+        # The pool fingerprint plays the manifest role for pshp-pool (module
+        # docstring: provenance lives in the repo's own data layout, not a
+        # download manifest).
+        manifest_sha256 = pool_fingerprint
+        note = _PSHP_POOL_NOTE_TEMPLATE.format(runs=", ".join(requested))
+        windows_stream = iter(pool_windows)
+    else:
+        manifest_sha256 = _corpus_manifest_sha256(args.corpus, args.data_root)
+        note = _PUBLIC_CORPUS_NOTE
+        windows_stream = _corpus_windows(args.corpus, args.data_root, args.limit_clips)
+
     rng = np.random.default_rng(args.seed)
-    sample, n_seen = _reservoir_sample(
-        _corpus_windows(args.corpus, args.data_root, args.limit_clips), args.max_windows, rng,
-    )
+    sample, n_seen = _reservoir_sample(windows_stream, args.max_windows, rng)
     if sample.shape[0] == 0:
+        where = (
+            f"in pool runs {', '.join(pool_runs)}"
+            if pool_runs is not None
+            else f"under {args.data_root}"
+        )
         print(
-            f"pretrain_tfc: no windows found for --corpus {args.corpus} under "
-            f"{args.data_root} -- nothing to train on",
+            f"pretrain_tfc: no windows found for --corpus {args.corpus} {where} -- "
+            "nothing to train on",
             file=sys.stderr,
         )
         return 1
@@ -473,18 +869,43 @@ def main(argv: list[str] | None = None) -> int:
         args.corpus, n_seen, sample.shape[0], args.max_windows,
     )
 
-    cfg = TfcConfig()
     model, epoch_losses = _train(
-        sample, cfg, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed,
+        sample, cfg, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+        seed=args.seed, init_state=init_state,
     )
 
-    manifest_sha256 = _corpus_manifest_sha256(args.corpus, args.data_root)
-    checkpoint_path = args.out / _CHECKPOINT_NAMES[args.corpus]
-    _save_checkpoint(checkpoint_path, cfg, model, manifest_sha256, args.epochs)
+    checkpoint_name = args.out_name or _CHECKPOINT_NAMES[args.corpus]
+    checkpoint_path = args.out / checkpoint_name
+    _save_checkpoint(
+        checkpoint_path, cfg, model, manifest_sha256, args.epochs,
+        continued_from=continued_from, pool_runs=pool_runs,
+    )
+
+    sidecar: dict[str, object] = {
+        "corpus": args.corpus,
+        "checkpoint": checkpoint_name,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "seed": args.seed,
+        "max_windows": args.max_windows,
+        "n_windows_seen": n_seen,
+        "n_windows_trained": int(sample.shape[0]),
+        "final_loss": epoch_losses[-1] if epoch_losses else None,
+        "corpus_manifest_sha256": manifest_sha256,
+        "continued_from": continued_from,
+        "pool_runs": pool_runs,
+        "pool_window_counts": pool_window_counts,
+        "pool_fingerprint": pool_fingerprint,
+        "note": note,
+    }
+    sidecar_path = checkpoint_path.with_suffix(".json")
+    sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
 
     print(
         f"pretrain_tfc: saved {checkpoint_path} ({args.epochs} epoch(s) over "
-        f"{sample.shape[0]} window(s), final mean loss {epoch_losses[-1]:.6f})"
+        f"{sample.shape[0]} window(s), final mean loss {epoch_losses[-1]:.6f}); "
+        f"sidecar {sidecar_path}"
     )
     return 0
 
