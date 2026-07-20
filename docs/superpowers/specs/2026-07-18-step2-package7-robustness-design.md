@@ -140,3 +140,79 @@ baseline-comparison table schema), pretrain --continue-from (checkpoint lineage 
 sidecar), corpora additions (synthetic trees), multi-run target_windows (per-run
 split independence), rolling thresholds (window provenance, absorption caveat in
 notes). Gates: pytest -m "not data", ruff, mypy strict.
+
+## 6. Amendment A2 (2026-07-18, Stefan's directives + the illwerke-080726 delivery)
+
+### A2.1 — Universality is the frame, not plant-specific maximization
+
+Stefan (2026-07-18): the RQ targets scarce-data transfer to SIMILAR machines — the
+system must not be over-fitted to ROWII. Binding consequences:
+- Every improvement in this package is REPORTED along two axes: (a) performance on
+  ROWII, (b) what it needs from a NEW machine (hours of normal data, labels: none).
+  A method that wins on ROWII but requires plant-specific tuning is framed as such.
+- The frozen-BEATs + conformal path stays the UNIVERSAL baseline in every table
+  (it needs only ~20 min of calibration audio on a new machine); adapted/pooled
+  variants are measured AGAINST it as "what plant-specific data buys".
+- D4/D6 adaptation experiments get an explicit transfer readout where possible
+  (e.g., pool-adapted encoder evaluated on the held-out cross-setup day = a
+  proxy for "different but similar machine").
+
+### A2.2 — Parameter comparisons are part of the deliverable
+
+Robustness knobs are SWEPT, not point-estimated, and reported as comparison tables
+(the research narrative "so funktioniert es am besten, weil ..."):
+- alpha ∈ {0.01, 0.05, 0.10} on the headline protocols (calibration-size floors
+  reported alongside: 1/alpha − 1).
+- session-norm minutes N ∈ {5, 20, 60} (D3).
+- rolling window M ∈ {30, 60, 120} minutes (D7), with per-state conformal-floor
+  feasibility reported per M.
+- pool composition ablation (D2): single-day vs 2-day pool vs full pool.
+
+### A2.3 — illwerke-080726: the induced-event day joins the evaluation (TOP priority)
+
+New delivery (verified by Bruno's crosscheck + skeptical audit, docs in
+`~/Downloads/illwerke-080726-analysis/`): 2026-07-08, machine 1, Schonhammer
+strikes at 24 logged positions + 2 guide-vane sweeps, in TWO sessions — standstill
+(`Kalibrierung_ST`, 12:15–12:31 UTC) and PUMP operation at −279 MW
+(`Kunstliche_Anomalie`, 14:43–15:01 UTC inside a 13:46–17:10 recording that is
+otherwise strike-free pumping, incl. a real pump→phase-shifter changeover
+~15:04–15:06 and one unlogged 17:15 transient), full-day SCADA. Same GANTNER
+format/streams as every other day.
+
+Binding integration (replaces D2's synthetic-demo status of the events harness):
+1. **Ingest** as `illwerke-080726/20260708 Messung/{PU_STRIKES, ST_STRIKES,
+   Betriebsdaten}` → runs `080726-pu_strikes` / `080726-st_strikes`; warm caches.
+2. **events.csv from the VERIFIED minute table** (crosscheck-notes-v1.md): one
+   event per logged strike minute (POS/VANE rows, UTC), committed under
+   `docs/groundtruth/080726_events_{st,pu}.csv` with provenance header; the
+   changeover window recorded as a separate `kind=machine-transient` entry.
+3. **First REAL pillar-3 run:** monitor (pool snapshot, recalibrate mode,
+   calibration drawn from strike-free segments) → `eval_events.py` → per-event
+   TPR, first-alarm latency, FAR outside events — at the A2.2 alpha grid, for the
+   headline representations. Honesty framing fixed in advance: induced impulsive
+   events are a DETECTABILITY validation (Bruno's note: "Not a fault"), machine 1
+   only, airborne + structure-borne classes reported separately where the mapping
+   allows; window-level dilution (ms-scale strikes in 1-s windows) is an expected
+   effect and reported, not hidden. Bruno's transient detector (band-MAD) is cited
+   as the specialist reference point; ours is the generalist — complementary, not
+   competing.
+4. **080726 strike-free pumping hours** additionally join the D1 pool question as
+   an ablation arm (they are machine-1 final-setup normals; ~3 h).
+
+### A2.4 — Design-vs-implementation audit (new deliverable)
+
+Stefan: "unsicher, wie sehr unser Design erfüllt ist, ob wir abweichen". A
+systematic audit document: design chapter / methodology blueprint claims vs what
+the code does, item by item (fulfilled / deviates-with-rationale / open), with
+file references — delivered as `research/notes/` audit note + a thesis-ready
+deviation table. Every KNOWN deviation already documented in specs (e.g. proxy
+objective, ph_power_eps_mw) is collected, not re-litigated.
+
+### A2.5 — Pipeline demo mockup (separate deliverable, not gated on D1–D7)
+
+A visual mockup of the live-pipeline demo (state timeline + per-state anomaly
+score trace + alarm markers + candidate report with timestamps), designed around
+the 080726 day (real states incl. the changeover, real strike events) — first as
+a static mockup for Stefan's review, then (separate decision) an implementation.
+Purpose is dual: partner-facing demo AND Stefan's own understanding of the
+pipeline. Bruno's demo (localization focus) is the sibling, not the template.
