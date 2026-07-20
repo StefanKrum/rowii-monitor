@@ -54,9 +54,14 @@ measurement day (`illwerke-<dayid>/`), each itself a full day tree:
 
 ### SCADA coverage and permanent gaps (final — no historian re-export will be provided)
 
-The final sensor setup has been installed since **2026-06-15** (see
-`Sensor_Anordnung_15062026.xlsx`; the Gantner stream configurations carry
-`MeasName: 2026-06-15`). Delivered coverage per window:
+The sensor HARDWARE has been installed since **2026-06-15** (see
+`Sensor_Anordnung_15062026.xlsx`) — but the Gantner stream CONFIGURATION was
+re-saved on **2026-06-29**: the 250526 (recorded 2026-06-25; the run label is an
+inherited misnomer) and 270626 deliveries carry `MeasName: 2026-06-15`, while
+290626 and 010726 carry `MeasName: 2026-06-29`. Cross-day comparisons therefore
+distinguish the two CONFIG eras, not the installation date (package-7 spec §1;
+the 250526 frozen-threshold blow-up is the cross-config case). Delivered
+coverage per window:
 
 All times below are true UTC (derived from filename hints; corrected 2026-07-15
 after the DAQ clock quirk fix — see the next subsection):
