@@ -20,6 +20,11 @@ beats-design.md` §D2 for the third protocol below):
   under their own PREDICTED state against day A's per-state reference/threshold for
   that state -- package 2's answer to whether per-state conditioning restores the FAR
   control `cross-day`'s pooling loses (see the dedicated section below).
+- **cross-day-pooled** (package-7 Task 3, spec `docs/superpowers/specs/2026-07-18-
+  step2-package7-robustness-design.md` D2 as amended by A3): held-out-day-group
+  evaluation -- references/detector/frozen thresholds from a POOL of explicitly named
+  fit runs (`--fit-runs`), evaluated on ONE held-out test run (`--test-run`) under
+  BOTH threshold modes in one invocation (see the dedicated section below).
 
 Every combo's outputs land under `results/step2/...` (see `_within_day_out_dir`/
 `_cross_day_out_dir`/`_cross_day_per_state_out_dir`), plus two shared, append-only
@@ -109,6 +114,56 @@ existing pooled sweep (`_cross_day_sweep`) -- the existing `--protocol cross-day
 output IS that grid cell, unchanged, and doubles as the published pooled comparator
 this protocol's per-state numbers are checked against.
 
+## Cross-day-pooled: held-out-day-group evaluation (package-7 spec D2 + A3.1/A3.7/A3.8)
+
+`--protocol cross-day-pooled --fit-runs <csv> --test-run <name> [--k N] [--alpha F]
+[--save-snapshot PATH]` is package 7's "day as a dataset point" protocol, renamed
+"held-out-day-group evaluation" by amendment A3.8 (LODO-style): the artifact under
+test is fit on a POOL of days and evaluated on a day it has never seen.
+
+- **One pooled detector, one label space** (A3.4): `FittedDetector.fit_pooled` on the
+  pooled nested-FIT features of every `--fit-runs` run (`rowii.anomaly.pools.
+  build_pool(side="fit")`; `--k` clusters, default `_POOLED_DEFAULT_K`), then applied
+  per run -- fit runs AND test run alike -- via `_apply_detector_labels` (per-run
+  Viterbi, no cross-run EM chain). The cross-day label-alignment problem the two
+  pair protocols above each dissolve in their own way is dissolved here by having
+  only ONE model whose id space every run shares.
+- **Pool sides, not top splits** (A3.7): pooled references come from the pool's
+  nested-FIT side, pooled FROZEN thresholds calibrate on the pool's nested-CONFORMAL
+  side -- `run_sweep`'s exact nested-split convention per run, deliberately NOT
+  `_cross_day_per_state_sweep`'s top-split-as-fit shortcut (see `rowii.anomaly.pools`'
+  module-docstring WARNING for why that shortcut is wrong for pooled work).
+- **Both threshold modes in one invocation**: `far_table_frozen.csv` (pool-conformal
+  thresholds, A3.7) and `far_table_recalibrate.csv` (thresholds recalibrated per
+  state on the TEST run's own top-split calibration side -- `scripts/monitor.py`'s
+  recalibrate recipe) share one scored window set: the test run's top-split SCORING
+  side only. Every FAR number therefore names its mode by which file it lives in
+  (spec §4 honesty rule).
+- **A3.1 (pool-member evaluation BAN)**: the test run must not appear in
+  `--fit-runs` (`parser.error`), and -- A3.8 -- the fit day-GROUPS and the test
+  day-group must be disjoint, where a day group is the calendar day parsed from the
+  run's FIRST burst file's name (`_run_day_group`; catches sibling runs of one day
+  like `010726-tu1`/`010726-tu2`, which same-`day_root` checks alone would also
+  catch but a differently-rooted re-ingest of the same day would not).
+- **Coverage tables (A4.1/A4.2)**: `coverage_train.csv` (pool calibration side) and
+  `coverage_eval.csv` (test scoring side) count windows per detected-state label via
+  `rowii.anomaly.pools.coverage_table`; when Betriebsdaten exist for the runs, GT
+  `"state|load_bin"` composite tables (`coverage_train_gt.csv`/`coverage_eval_gt.
+  csv`) are added, else skipped with a log line. `coverage_warnings` findings land
+  in `notes.md` -- a mode evaluated but trained nowhere is never silent.
+- **Optional pooled snapshot**: `--save-snapshot PATH` assembles the pooled
+  `MonitorSnapshot` via `rowii.runtime.snapshot.fit_snapshot_from_parts` (frozen
+  pool-conformal thresholds, `fit_run="pool:<csv>"`) and saves it with per-run pool
+  provenance in the meta/sidecar.
+- **Failures are loud** (unlike the pair-matrix protocols' log-and-skip): this
+  protocol names every run explicitly and produces exactly ONE combo, so any
+  pool-level failure (a member that cannot prepare, k too large for the pool, a
+  degenerate test split) exits 2 with the cause -- "log and skip" would always mean
+  "silently wrote nothing", and a silently shrunken pool would corrupt provenance.
+- Deliberately NO `summary.csv`/candidate-register rows in this package's Task 3:
+  rotation aggregation happens at execution time (plan Tasks 9/10) over the written
+  far tables; the append-only artifacts keep their existing three-protocol schema.
+
 ## Output layout
 
 - within-day: `results/step2/within-day/<run>/<variant>-<labels>/<conditioning>-<scorer>/`
@@ -148,6 +203,16 @@ this protocol's per-state numbers are checked against.
   are both constants for this protocol). When day B has SCADA coverage,
   `far_by_true_state.csv` (columns: `true_state, n_scored, n_alarms, realized_far`) is
   written alongside the usual three files in the same combo dir (`_far_by_true_state`).
+- cross-day-pooled (package-7 Task 3, layout pinned by the plan):
+  `results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- keyed by the
+  HELD-OUT run (the pool is named inside `notes.md` and the snapshot provenance, not
+  the path; a rotation writes one directory per test run). No scorer segment: the
+  protocol runs exactly ONE scorer per invocation (`--scorer all` is rejected), so
+  the `-pooled` leaf mirrors cross-day's fixed-conditioning folding without a scorer
+  axis to fold in. Files: `far_table_frozen.csv`, `far_table_recalibrate.csv`
+  (existing far-table schema, aggregate row included), `coverage_train.csv`,
+  `coverage_eval.csv` (+ `coverage_{train,eval}_gt.csv` when SCADA exists),
+  `notes.md`.
 - `results/step2/summary.csv` (append-only, one row per combo actually written this
   invocation): `run, protocol, variant, labels, conditioning, scorer, alpha,
   per_label_count, pooled_realized_far, mean_per_state_far, n_low_confidence, notes`.
@@ -200,6 +265,7 @@ import itertools
 import logging
 import math
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -227,6 +293,12 @@ from rowii.anomaly.fusion import (  # noqa: E402
     fisher_statistic,
     split_branch_columns,
     tippett_statistic,
+)
+from rowii.anomaly.pools import (  # noqa: E402
+    PoolResult,
+    build_pool,
+    coverage_table,
+    coverage_warnings,
 )
 from rowii.anomaly.recon import ConvAeScorer, LstmAeScorer, MlpAeScorer  # noqa: E402
 from rowii.anomaly.references import build_references, split_by_segments  # noqa: E402
@@ -272,6 +344,7 @@ from rowii.pipeline import (  # noqa: E402
     prepare_run,
     stream_columns,
 )
+from rowii.runtime.snapshot import fit_snapshot_from_parts, save_snapshot  # noqa: E402
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
 from rowii.state.detect import FittedDetector  # noqa: E402
@@ -287,7 +360,9 @@ ScorerName = Literal[
     "knn", "mahalanobis", "ocsvm", "iforest", "lof", "mlpae", "lstmae", "convae"
 ]
 
-_PROTOCOL_CHOICES: tuple[str, ...] = ("within-day", "cross-day", "cross-day-per-state")
+_PROTOCOL_CHOICES: tuple[str, ...] = (
+    "within-day", "cross-day", "cross-day-per-state", "cross-day-pooled",
+)
 _VARIANT_CHOICES: tuple[str, ...] = (
     "audio", "vibration", "fusion", "audio-beats", "fusion-beats",
     "audio-tfc", "vibration-tfc", "audio-student", "logmel",
@@ -338,7 +413,9 @@ def build_parser() -> argparse.ArgumentParser:
              "'cross-day-per-state': same day pairs, but day A's detector is "
              "TRANSFERRED to day B (FittedDetector.apply) and scoring is conditioned "
              "on each window's predicted state (detected-labels only, package-2 spec "
-             "D2).",
+             "D2). 'cross-day-pooled': held-out-day-group evaluation (package-7 spec "
+             "D2/A3) -- pooled references/detector/frozen thresholds from --fit-runs, "
+             "both threshold modes evaluated on the held-out --test-run.",
     )
     parser.add_argument(
         "--run", default="all",
@@ -425,6 +502,45 @@ def build_parser() -> argparse.ArgumentParser:
             "sibling directory once per (run, --labels, --states). Requires "
             "--protocol within-day, --labels detected, --variant fusion, and "
             "ROWII_XATTN_CHECKPOINT pointing at a scripts/train_xattn.py checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--fit-runs", default=None,
+        help=(
+            "cross-day-pooled only: comma-separated FIT-run names, in pool order "
+            "(row order matters for the pooled KMeans -- FittedDetector.fit_pooled's "
+            "row-order note). Every listed run contributes its leakage-safe pool "
+            "sides (rowii.anomaly.pools); the held-out --test-run must NOT be listed "
+            "(spec A3.1) and must come from a different calendar day than every fit "
+            "run (spec A3.8)."
+        ),
+    )
+    parser.add_argument(
+        "--test-run", default=None,
+        help=(
+            "cross-day-pooled only: the ONE held-out test run -- labeled by the "
+            "pooled detector, thresholds applied in both modes, alarms evaluated on "
+            "its own top-split scoring side only."
+        ),
+    )
+    parser.add_argument(
+        "--k", type=int, default=None,
+        help=(
+            "cross-day-pooled only: pooled-detector cluster count for "
+            "FittedDetector.fit_pooled (default: 5). Spec A3.4 selects the reported "
+            "k by a GT-state-ARI sweep over {4, 5, 6} at execution time; a k too "
+            "large for the pool exits 2 with a clear message."
+        ),
+    )
+    parser.add_argument(
+        "--save-snapshot", type=Path, default=None,
+        help=(
+            "cross-day-pooled only: also assemble the pooled MonitorSnapshot "
+            "(rowii.runtime.snapshot.fit_snapshot_from_parts -- pooled references, "
+            "FROZEN pool-conformal thresholds per spec A3.7, "
+            "fit_run='pool:<fit-runs>') and save it to this path with per-run pool "
+            "provenance in the meta/sidecar. Requires a runtime scorer "
+            "(knn/mahalanobis)."
         ),
     )
     return parser
@@ -3027,6 +3143,530 @@ def _run_cross_day_per_state(
 
 
 # ---------------------------------------------------------------------------
+# cross-day-pooled orchestration (package-7 Task 3, spec D2 + A3.1/A3.7/A3.8 --
+# see the module docstring's dedicated section)
+# ---------------------------------------------------------------------------
+
+_POOLED_DEFAULT_K = 5
+"""`--k`'s default pooled cluster count (plan Task 3). Spec A3.4 picks the REPORTED
+k by a GT-state-ARI sweep over {4, 5, 6} at execution time -- this default only
+covers an invocation that does not say."""
+
+_BURST_NAME_DATE_RE = re.compile(r"_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}_\d{6}\.dat$")
+"""The date portion of the burst filename pattern `<stream>_YYYY-MM-DD_HH-MM-SS_
+ffffff.dat` -- a deliberately NARROWED duplicate of `rowii.io.dataset._BURST_RE`
+(private; scripts do not import module internals, the same rule as
+`_unknown_run_names`' script-sibling duplication) that keeps exactly the date group
+the A3.8 day-group guard needs."""
+
+
+def _run_day_group(run: Run) -> str:
+    """The A3.8 day group of *run*: the calendar day (`"YYYY-MM-DD"`) parsed from
+    its FIRST burst file's NAME -- first across ALL streams by filename timestamp
+    (`BurstFile.start_utc_hint`, the same ordering discovery itself sorts by). The
+    filename's LOCAL date is used as-is (not the UTC-converted hint): the spec's
+    day groups are the recording days as the plant filesystem names them, and
+    every guard comparison uses the same convention on both sides.
+
+    Raises:
+        ValueError: if *run* has no burst files at all, or its first file's name
+            does not carry the `_YYYY-MM-DD_HH-MM-SS_ffffff.dat` timestamp --
+            impossible for a `rowii.io.dataset.discover` product (discovery only
+            admits files matching the full burst pattern), so either means a
+            hand-built `Run` violating the discovery contract.
+    """
+    bursts = [burst for stream_files in run.files.values() for burst in stream_files]
+    if not bursts:
+        raise ValueError(
+            f"run {run.name!r} has no burst files -- cannot derive its day group"
+        )
+    first = min(bursts, key=lambda burst: burst.start_utc_hint)
+    match = _BURST_NAME_DATE_RE.search(first.path.name)
+    if match is None:
+        raise ValueError(
+            f"run {run.name!r}: first burst file {first.path.name!r} does not carry "
+            f"the expected _YYYY-MM-DD_HH-MM-SS_ffffff.dat timestamp"
+        )
+    return match.group(1)
+
+
+def _cross_day_pooled_out_dir(results_root: Path, test_run: str, variant: str) -> Path:
+    """`results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- the plan's
+    literal layout (module docstring's "Output layout" section has the full
+    rationale: keyed by the HELD-OUT run, no scorer segment)."""
+    return results_root / "step2" / "cross-day-pooled" / test_run / f"{variant}-pooled"
+
+
+def _pool_row_labels(pool: PoolResult, labels_per_run: dict[str, np.ndarray]) -> np.ndarray:
+    """Per stacked pool row, the pooled-detector label of its SOURCE window --
+    `labels_per_run[member][window]` via the pool's own `run_index`/`window_index`
+    alignment (bitwise row-mapping property pinned by `tests/test_pools.py`). Pool
+    rows are valid windows by construction, so no `_INVALID_LABEL` can appear."""
+    out = np.empty(pool.features.shape[0], dtype=np.int64)
+    for member_idx, member in enumerate(pool.members):
+        mask = pool.run_index == member_idx
+        out[mask] = labels_per_run[member.run_name][pool.window_index[mask]]
+    return out
+
+
+def _pooled_mode_row(
+    label: int,
+    sweep_cfg: SweepConfig,
+    threshold: ConformalThreshold,
+    label_scoring: np.ndarray,
+    scoring_scores: np.ndarray | None,
+) -> FarRow:
+    """One threshold mode's row for a label that HAS a calibrated threshold:
+    `far_row_empty_scoring` when the test run's scoring side holds no window of
+    this label (*scoring_scores* is `None` exactly then), else `far_row_scored`
+    with `alarm = score > threshold` -- the shared alarm rule of every Step-2
+    path."""
+    if scoring_scores is None:
+        return far_row_empty_scoring(label, sweep_cfg, threshold)
+    alarms = scoring_scores > threshold.threshold
+    return far_row_scored(
+        label, sweep_cfg, threshold, int(label_scoring.shape[0]), int(alarms.sum())
+    )
+
+
+def _cross_day_pooled_tables(
+    pool_fit_features: np.ndarray,
+    pool_fit_labels: np.ndarray,
+    pool_conformal_features: np.ndarray,
+    pool_conformal_labels: np.ndarray,
+    prepared_test: PreparedRun,
+    labels_test: np.ndarray,
+    cal_windows: np.ndarray,
+    scoring_windows: np.ndarray,
+    sweep_cfg: SweepConfig,
+    scorer_name: str,
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[int, np.ndarray],
+    dict[int, np.ndarray],
+    dict[int, ConformalThreshold],
+]:
+    """Both threshold modes' FAR tables from ONE pooled-reference pass, plus the
+    pooled snapshot parts.
+
+    Per label of the pooled-detector id space (ONE label space across every run --
+    the property `_cross_day_per_state_sweep`'s transfer establishes for a pair,
+    established here for the whole pool by the single pooled detector):
+
+    - **reference**: the label's pooled nested-FIT-side rows; below
+      `sweep_cfg.min_ref` -> `far_row_excluded` in BOTH tables (the same floor
+      `build_references` applies for `run_sweep`).
+    - **frozen threshold (A3.7)**: `calibrate` on the label's pooled
+      nested-CONFORMAL-side scores -- never the top split.
+    - **recalibrate threshold**: `calibrate` on the label's TEST-run
+      calibration-side scores (`scripts/monitor.py`'s recalibrate recipe --
+      references stay the POOL's, thresholds only).
+    - zero conformal/calibration windows for one mode -> that mode's row is
+      `far_row_no_conformal_data`; the other mode is unaffected.
+    - **alarms**: the test run's top-split SCORING side only, scored ONCE per
+      label and compared against each mode's own threshold.
+
+    The returned `references`/`calibration_scores`/`thresholds` dicts are the
+    `fit_snapshot_from_parts` inputs: a label enters ALL THREE iff it has a
+    reference AND pooled conformal data (`fit_snapshot`'s own drop rule -- the
+    snapshot's thresholds are the FROZEN pool-conformal ones, spec A3.7), so their
+    key sets are equal by construction.
+
+    Both far tables end with the `run_sweep`-style aggregate `"pooled"` row
+    (`far_row_aggregate` over that table's own per-label rows).
+    """
+    all_labels = sorted(
+        {int(v) for v in np.unique(pool_fit_labels)}
+        | {int(v) for v in np.unique(pool_conformal_labels)}
+        | {int(v) for v in np.unique(labels_test[scoring_windows])}
+    )
+
+    frozen_rows: list[FarRow] = []
+    recal_rows: list[FarRow] = []
+    references: dict[int, np.ndarray] = {}
+    calibration_scores: dict[int, np.ndarray] = {}
+    thresholds: dict[int, ConformalThreshold] = {}
+
+    for label in all_labels:
+        reference = pool_fit_features[pool_fit_labels == label]
+        if reference.shape[0] < sweep_cfg.min_ref:
+            frozen_rows.append(far_row_excluded(label, sweep_cfg))
+            recal_rows.append(far_row_excluded(label, sweep_cfg))
+            continue
+        scorer = _make_scorer(scorer_name).fit(reference)
+
+        label_scoring = scoring_windows[labels_test[scoring_windows] == label]
+        scoring_scores = (
+            scorer.score(prepared_test.features[label_scoring])
+            if label_scoring.shape[0]
+            else None
+        )
+
+        pool_conformal_rows = pool_conformal_features[pool_conformal_labels == label]
+        if pool_conformal_rows.shape[0] == 0:
+            frozen_rows.append(far_row_no_conformal_data(label, sweep_cfg))
+        else:
+            conformal_scores = scorer.score(pool_conformal_rows)
+            frozen_threshold = calibrate(conformal_scores, sweep_cfg.alpha)
+            references[label] = reference
+            calibration_scores[label] = conformal_scores
+            thresholds[label] = frozen_threshold
+            frozen_rows.append(
+                _pooled_mode_row(label, sweep_cfg, frozen_threshold, label_scoring, scoring_scores)
+            )
+
+        label_cal = cal_windows[labels_test[cal_windows] == label]
+        if label_cal.shape[0] == 0:
+            recal_rows.append(far_row_no_conformal_data(label, sweep_cfg))
+        else:
+            recal_threshold = calibrate(
+                scorer.score(prepared_test.features[label_cal]), sweep_cfg.alpha
+            )
+            recal_rows.append(
+                _pooled_mode_row(label, sweep_cfg, recal_threshold, label_scoring, scoring_scores)
+            )
+
+    frozen_rows.append(far_row_aggregate(frozen_rows, sweep_cfg))
+    recal_rows.append(far_row_aggregate(recal_rows, sweep_cfg))
+    far_frozen = pd.DataFrame([asdict(r) for r in frozen_rows], columns=_FAR_TABLE_COLUMNS)
+    far_recal = pd.DataFrame([asdict(r) for r in recal_rows], columns=_FAR_TABLE_COLUMNS)
+    return far_frozen, far_recal, references, calibration_scores, thresholds
+
+
+def _gt_composite_labels(scada: pd.DataFrame, cfg: Config) -> np.ndarray:
+    """Per-window GT `"state|load_bin"` composite labels (spec A4.2 -- load-level
+    coverage WITHIN states without new labels), e.g. `"turbine|2"`; off-state
+    windows carry the `gt_labels` sentinel bin (`"standstill|-1"`)."""
+    gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
+    composite: np.ndarray = (
+        gt["state"].astype(str) + "|" + gt["load_bin"].astype(str)
+    ).to_numpy()
+    return composite
+
+
+def _cross_day_pooled_notes(
+    fit_run_names: list[str],
+    test_run_name: str,
+    variant: str,
+    scorer_name: str,
+    alpha: float,
+    k: int,
+    side_provenance: dict[str, dict[str, dict[str, int]]],
+    coverage_warning_lines: list[str],
+) -> str:
+    """`notes.md` body: pool composition/provenance, threshold-mode semantics,
+    coverage warnings (A4.1/A4.2 -- `"(none)"` sentinel when empty), the A4.5
+    estimator-vs-final framing, and the honesty notes every pooled output must
+    carry (spec §4). Pure string assembly -- the warning-plumbing seam the tests
+    exercise directly, since detected-label warnings cannot fire on a pool whose
+    own detector defines the label space."""
+    lines = [
+        "# cross-day-pooled (held-out-day-group evaluation) -- notes",
+        "",
+        f"- fit pool: {', '.join(fit_run_names)} (pool order = `--fit-runs` order)",
+        f"- held-out test run: {test_run_name}",
+        f"- variant: {variant} | scorer: {scorer_name} | alpha: {alpha} | pooled k: {k}",
+        "",
+        "## Pool composition (per-run window counts)",
+        "",
+        "| run | calibration | fit | conformal |",
+        "|---|---|---|---|",
+    ]
+    for run_name in fit_run_names:
+        counts = [
+            side_provenance.get(side, {}).get(run_name, {}).get("n_windows", 0)
+            for side in ("calibration", "fit", "conformal")
+        ]
+        lines.append(f"| {run_name} | {counts[0]} | {counts[1]} | {counts[2]} |")
+    lines += [
+        "",
+        "## Threshold modes",
+        "",
+        "- **frozen** (`far_table_frozen.csv`): per-state thresholds calibrated on the",
+        "  POOL's nested-CONFORMAL side (spec A3.7) -- what a deployed pool artifact",
+        "  would carry onto a new day unchanged.",
+        "- **recalibrate** (`far_table_recalibrate.csv`): per-state thresholds",
+        "  recalibrated on the TEST run's own calibration side (the monitor's",
+        "  recalibrate recipe); references stay the pool's.",
+        "- Both modes score the SAME window set: the test run's top-split SCORING",
+        "  side only. Every FAR number names its mode by the file it lives in.",
+        "",
+        "## Coverage warnings (A4.1/A4.2)",
+        "",
+    ]
+    if coverage_warning_lines:
+        lines += [f"- {warning}" for warning in coverage_warning_lines]
+    else:
+        lines.append("- (none)")
+    lines += [
+        "",
+        "## Honesty notes",
+        "",
+        f"- Pool-member evaluation BAN (spec A3.1): the test run ({test_run_name}) is",
+        "  NOT a pool member, and its day group is disjoint from every fit run's",
+        "  (A3.8 parser guard) -- pooled artifacts are never evaluated on data they",
+        "  were fit or calibrated on.",
+        "- Estimator vs final system (spec A4.5): held-out-day-group rotations are",
+        "  the honest ESTIMATOR -- train on some days, test on a day the system has",
+        "  never seen, rotated so every day serves both roles (never both at once).",
+        "  The FINAL deployed artifact pools EVERY available day's calibration side;",
+        "  the rotations are how we know what that final system is worth, never a",
+        "  restriction on what it may consume.",
+        "- kNN is the primary pooled scorer; Mahalanobis on pooled (possibly",
+        "  multi-modal) references carries an explicit caveat (spec A3.4): a single",
+        "  Gaussian fit can straddle modes.",
+        "- No fault-detection claims: FAR tables measure false-alarm behavior on",
+        "  normal operation only (campaign pending; candidates framing unchanged).",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _run_cross_day_pooled(
+    fit_runs: list[Run],
+    test_run: Run,
+    variant: str,
+    cfg: Config,
+    index: RecordingIndex,
+    scorer_name: str,
+    alpha: float,
+    top_k: int,
+    *,
+    k: int,
+    use_cache: bool,
+    save_snapshot_path: Path | None,
+) -> int:
+    """The full cross-day-pooled pipeline for ONE (pool, test run) rotation --
+    module docstring's dedicated section. Returns a process exit code: 0 on
+    success, 2 for any pool-level failure (loud-failure rationale there: exactly
+    one combo, explicitly named runs, so log-and-skip would always mean "silently
+    wrote nothing" and a silently shrunken pool would corrupt provenance).
+    """
+    if _is_beats_variant(variant):
+        _import_beats_or_exit()
+    if _is_tfc_variant(variant):
+        _import_tfc_or_exit(cfg, variant)
+    if _is_student_variant(variant):
+        _import_student_or_exit(cfg)
+
+    fit_run_names = [run.name for run in fit_runs]
+    prepared_all: dict[str, PreparedRun] = {}
+    for run in (*fit_runs, test_run):
+        try:
+            prepared_all[run.name] = prepare_run(run, variant, cfg, use_cache=use_cache)
+        except RuntimeError as exc:
+            print(
+                f"run_step2: prepare_run failed for run {run.name!r} ({exc}) -- "
+                f"cross-day-pooled names every run explicitly, so a member that "
+                f"cannot prepare is a hard error, not a skip",
+                file=sys.stderr,
+            )
+            return 2
+    prepared_fit = {name: prepared_all[name] for name in fit_run_names}
+    prepared_test = prepared_all[test_run.name]
+
+    fit_dim = next(iter(prepared_fit.values())).features.shape[1]
+    if prepared_test.features.shape[1] != fit_dim:
+        print(
+            f"run_step2: test run {test_run.name!r} has {prepared_test.features.shape[1]} "
+            f"feature column(s) but the fit pool has {fit_dim} -- incompatible "
+            f"feature dims",
+            file=sys.stderr,
+        )
+        return 2
+
+    # `scorer_name` is a plain `str` (same deliberate ignore as
+    # `_cross_day_per_state_sweep`'s own SweepConfig construction).
+    sweep_cfg = SweepConfig(alpha=alpha, top_k=top_k, scorer=scorer_name)  # type: ignore[arg-type]
+    pool_calibration = build_pool(prepared_fit, "calibration", sweep_cfg)
+    pool_fit = build_pool(prepared_fit, "fit", sweep_cfg)
+    pool_conformal = build_pool(prepared_fit, "conformal", sweep_cfg)
+    if pool_fit.features.shape[0] == 0:
+        print(
+            "run_step2: the pooled FIT side is empty (every fit run's splits were "
+            "degenerate -- see the build_pool warnings above) -- nothing to fit on",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        detector = FittedDetector.fit_pooled(pool_fit.features, cfg, k=k)
+    except (RuntimeError, ValueError) as exc:
+        # fit_pooled's RuntimeError (unassigned cluster ids) and sklearn's
+        # n_samples < n_clusters ValueError are both "k too large for this pool"
+        # from the CLI's point of view (T2 interface note).
+        print(
+            f"run_step2: k too large for this pool: fit_pooled(k={k}) on "
+            f"{pool_fit.features.shape[0]} pooled fit window(s) failed ({exc}) -- "
+            f"pick a smaller --k (spec A3.4's execution sweep uses k in {{4, 5, 6}})",
+            file=sys.stderr,
+        )
+        return 2
+
+    labels_per_run = {
+        name: _apply_detector_labels(prepared, detector)
+        for name, prepared in prepared_all.items()
+    }
+    labels_test = labels_per_run[test_run.name]
+
+    try:
+        top = split_by_segments(
+            prepared_test.segment_ids,
+            prepared_test.valid_mask,
+            sweep_cfg.calibration_frac,
+            sweep_cfg.seed,
+        )
+    except ValueError as exc:
+        print(
+            f"run_step2: test run {test_run.name!r} cannot form its top "
+            f"calibration/scoring split ({exc})",
+            file=sys.stderr,
+        )
+        return 2
+    cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
+
+    far_frozen, far_recal, references, calibration_scores, thresholds = (
+        _cross_day_pooled_tables(
+            pool_fit.features,
+            _pool_row_labels(pool_fit, labels_per_run),
+            pool_conformal.features,
+            _pool_row_labels(pool_conformal, labels_per_run),
+            prepared_test,
+            labels_test,
+            cal_windows,
+            scoring_windows,
+            sweep_cfg,
+            scorer_name,
+        )
+    )
+
+    out_dir = _cross_day_pooled_out_dir(cfg.results_root, test_run.name, variant)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for filename, table in (
+        ("far_table_frozen.csv", far_frozen),
+        ("far_table_recalibrate.csv", far_recal),
+    ):
+        coerced = table.copy()
+        coerced["label"] = coerced["label"].astype(str)  # _write_sweep_outputs convention
+        coerced.to_csv(out_dir / filename, index=False)
+
+    # Coverage tables (A4.1/A4.2): train = the pool's whole calibration side (fit u
+    # conformal -- everything the pooled artifact consumed), eval = the test run's
+    # scored windows; detected-state labels first, GT composite overlay when SCADA
+    # exists.
+    windows_train = {member.run_name: member.windows for member in pool_calibration.members}
+    train_table = coverage_table(
+        prepared_fit, windows_train, {name: labels_per_run[name] for name in prepared_fit}
+    )
+    eval_table = coverage_table(
+        {test_run.name: prepared_test},
+        {test_run.name: scoring_windows},
+        {test_run.name: labels_test},
+    )
+    warning_lines = coverage_warnings(train_table, eval_table)
+    train_table.to_csv(out_dir / "coverage_train.csv", index=False)
+    eval_table.to_csv(out_dir / "coverage_eval.csv", index=False)
+
+    scada_by_run: dict[str, pd.DataFrame | None] = {
+        run.name: _load_run_scada(prepared_all[run.name], run, index)
+        for run in (*fit_runs, test_run)
+    }
+    gt_train: pd.DataFrame | None = None
+    gt_eval: pd.DataFrame | None = None
+    missing_fit_scada = [name for name in fit_run_names if scada_by_run[name] is None]
+    if missing_fit_scada:
+        logger.info(
+            "run_step2: skipping the GT state x load-bin TRAIN coverage table -- fit "
+            "run(s) %s have no Betriebsdaten coverage",
+            ", ".join(missing_fit_scada),
+        )
+    else:
+        gt_labels_train: dict[str, np.ndarray] = {}
+        for name in fit_run_names:
+            scada_fit = scada_by_run[name]
+            assert scada_fit is not None  # guarded by missing_fit_scada above
+            gt_labels_train[name] = _gt_composite_labels(scada_fit, cfg)
+        gt_train = coverage_table(prepared_fit, windows_train, gt_labels_train)
+        gt_train.to_csv(out_dir / "coverage_train_gt.csv", index=False)
+    scada_test = scada_by_run[test_run.name]
+    if scada_test is None:
+        logger.info(
+            "run_step2: skipping the GT state x load-bin EVAL coverage table -- test "
+            "run %s has no Betriebsdaten coverage",
+            test_run.name,
+        )
+    else:
+        gt_eval = coverage_table(
+            {test_run.name: prepared_test},
+            {test_run.name: scoring_windows},
+            {test_run.name: _gt_composite_labels(scada_test, cfg)},
+        )
+        gt_eval.to_csv(out_dir / "coverage_eval_gt.csv", index=False)
+    if gt_train is not None and gt_eval is not None:
+        warning_lines.extend(coverage_warnings(gt_train, gt_eval))
+
+    side_provenance = {
+        "calibration": pool_calibration.provenance,
+        "fit": pool_fit.provenance,
+        "conformal": pool_conformal.provenance,
+    }
+    (out_dir / "notes.md").write_text(
+        _cross_day_pooled_notes(
+            fit_run_names, test_run.name, variant, scorer_name, alpha, k,
+            side_provenance, warning_lines,
+        )
+    )
+
+    if save_snapshot_path is not None:
+        # Same checkpoint-provenance construction as `fit_snapshot` (duplicated:
+        # extracting a helper would touch that function's body, which this task
+        # must leave behaviorally untouched).
+        checkpoints = {
+            name: str(path)
+            for name, path in (
+                ("beats_checkpoint", cfg.beats_checkpoint),
+                ("tfc_audio_checkpoint", cfg.tfc_audio_checkpoint),
+                ("tfc_vib_checkpoint", cfg.tfc_vib_checkpoint),
+                ("student_checkpoint", cfg.student_checkpoint),
+                ("beats_int8_checkpoint", cfg.beats_int8_checkpoint),
+                ("xattn_checkpoint", cfg.xattn_checkpoint),
+            )
+            if path is not None
+        }
+        snapshot = fit_snapshot_from_parts(
+            detector,
+            references,
+            calibration_scores,
+            thresholds,
+            scorer=scorer_name,
+            alpha=alpha,
+            min_ref=sweep_cfg.min_ref,
+            calibration_frac=sweep_cfg.calibration_frac,
+            seed=sweep_cfg.seed,
+            variant=variant,
+            fit_run="pool:" + ",".join(fit_run_names),
+            feature_names=list(next(iter(prepared_fit.values())).feature_names),
+            checkpoints=checkpoints,
+        )
+        provenance: dict[str, object] = {
+            "protocol": "cross-day-pooled",
+            "fit_runs": fit_run_names,
+            "held_out_test_run": test_run.name,
+            "k": k,
+            "pool_members": side_provenance,
+        }
+        save_snapshot(save_snapshot_path, snapshot, provenance=provenance)
+        print(f"run_step2: saved pooled snapshot to {save_snapshot_path}")
+
+    print(
+        f"run_step2: wrote cross-day-pooled (held-out-day-group) tables for test run "
+        f"{test_run.name!r} (fit pool: {', '.join(fit_run_names)}) to {out_dir}"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -3044,6 +3684,68 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--run got an empty run-name list")
     if args.protocol == "cross-day-per-state" and args.labels == "gt":
         parser.error("--protocol cross-day-per-state is detected-labels only (spec D2)")
+    fit_run_names = (
+        [name.strip() for name in args.fit_runs.split(",") if name.strip()]
+        if args.fit_runs is not None
+        else None
+    )
+    if args.protocol == "cross-day-pooled":
+        if args.fit_runs is None or args.test_run is None:
+            parser.error(
+                "--protocol cross-day-pooled requires both --fit-runs and --test-run "
+                "(held-out-day-group evaluation, package-7 spec D2/A3.8)"
+            )
+        assert fit_run_names is not None
+        if not fit_run_names:
+            parser.error("--fit-runs got an empty run-name list")
+        if len(set(fit_run_names)) != len(fit_run_names):
+            parser.error(
+                "--fit-runs contains duplicate run name(s) -- a run pools its sides "
+                "once"
+            )
+        if run_names is not None:
+            parser.error(
+                "--protocol cross-day-pooled takes --fit-runs/--test-run, not --run "
+                "(the fit/test roles must be explicit -- spec A3.1)"
+            )
+        if args.test_run in fit_run_names:
+            parser.error(
+                f"--test-run {args.test_run!r} is listed in --fit-runs: pool "
+                f"artifacts are NEVER evaluated on pool-member runs (spec A3.1 -- "
+                f"recalibrate mode would draw calibration windows the pool already "
+                f"contains, frozen mode would score the reference windows themselves)"
+            )
+        if args.labels == "gt":
+            parser.error(
+                "--protocol cross-day-pooled is detected-labels only (the pooled "
+                "detector defines the ONE shared label space; GT appears only in "
+                "the coverage overlay)"
+            )
+        if args.scorer == "all":
+            parser.error(
+                "--protocol cross-day-pooled runs exactly one scorer per invocation "
+                "(its output layout has no scorer axis) -- pick one"
+            )
+        if args.k is not None and args.k < 1:
+            parser.error(f"--k must be >= 1, got {args.k}")
+        if args.save_snapshot is not None and args.scorer not in ("knn", "mahalanobis"):
+            parser.error(
+                f"--save-snapshot requires a runtime scorer (knn or mahalanobis -- "
+                f"the snapshot whitelist, rowii.runtime.snapshot), got --scorer "
+                f"{args.scorer!r}"
+            )
+    else:
+        for flag, value in (
+            ("--fit-runs", args.fit_runs),
+            ("--test-run", args.test_run),
+            ("--k", args.k),
+            ("--save-snapshot", args.save_snapshot),
+        ):
+            if value is not None:
+                parser.error(
+                    f"{flag} requires --protocol cross-day-pooled -- got --protocol "
+                    f"{args.protocol!r}"
+                )
     if (
         args.protocol in ("cross-day", "cross-day-per-state")
         and run_names is not None
@@ -3129,6 +3831,56 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+
+    if args.protocol == "cross-day-pooled":
+        assert fit_run_names is not None and args.test_run is not None  # guarded above
+        unknown = _unknown_run_names([*fit_run_names, args.test_run], index)
+        if unknown:
+            # Same warm_cache-precedent hard error as the --run branch above.
+            available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+            print(
+                f"run_step2: unknown run name(s): {', '.join(unknown)}; "
+                f"available runs: {available}",
+                file=sys.stderr,
+            )
+            return 2
+        runs_by_name = {run.name: run for run in index.runs}
+        fit_runs = [runs_by_name[name] for name in fit_run_names]
+        test_run_obj = runs_by_name[args.test_run]
+        # A3.8 day-group disjointness: day group = calendar day of the run's first
+        # burst file's name (_run_day_group -- catches the sibling-runs-of-one-day
+        # case, e.g. 010726-tu1 vs 010726-tu2).
+        test_day = _run_day_group(test_run_obj)
+        overlapping = sorted(
+            {run.name for run in fit_runs if _run_day_group(run) == test_day}
+        )
+        if overlapping:
+            parser.error(
+                f"--protocol cross-day-pooled requires disjoint day groups "
+                f"(held-out-day-group evaluation, spec A3.8): test run "
+                f"{args.test_run!r} shares calendar day group {test_day} with fit "
+                f"run(s) {', '.join(overlapping)}"
+            )
+        if args.conditioning not in ("all", "per-state"):
+            logger.info(
+                "run_step2: --conditioning=%r is ignored for --protocol "
+                "cross-day-pooled (always per-state -- the pooled detector defines "
+                "the label space, module docstring)",
+                args.conditioning,
+            )
+        return _run_cross_day_pooled(
+            fit_runs,
+            test_run_obj,
+            args.variant,
+            cfg,
+            index,
+            args.scorer,
+            args.alpha,
+            args.top_k,
+            k=args.k if args.k is not None else _POOLED_DEFAULT_K,
+            use_cache=not args.no_cache,
+            save_snapshot_path=args.save_snapshot,
+        )
 
     use_cache = not args.no_cache
     scorers = _resolve_scorers(args.scorer)

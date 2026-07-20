@@ -38,12 +38,14 @@ from rowii.runtime.snapshot import (
     SNAPSHOT_FORMAT_VERSION,
     MonitorSnapshot,
     fit_snapshot,
+    fit_snapshot_from_parts,
     load_snapshot,
     save_snapshot,
     scorer_for_label,
     to_detector,
 )
 from rowii.signals.windows import WindowGrid
+from rowii.state.detect import FittedDetector
 
 _N_SEGMENTS = 10
 """Round-trip fixture segment count -- see module docstring for why not 8."""
@@ -519,3 +521,165 @@ def test_truncated_archive_raises_snapshot_level_value_error(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="corrupt or truncated"):
         load_snapshot(path)
+
+
+# ---------------------------------------------------------------------------
+# 11. fit_snapshot_from_parts (package-7 Task 3, spec A3.11) + save_snapshot
+#     provenance kwarg -- the pooled-artifact assembly path
+# ---------------------------------------------------------------------------
+
+
+def _detector_and_parts() -> tuple[
+    PreparedRun,
+    FittedDetector,
+    dict[int, np.ndarray],
+    dict[int, np.ndarray],
+    dict[int, ConformalThreshold],
+]:
+    """A fitted detector plus hand-derived scoring parts -- what a pooled caller
+    (`scripts/run_step2.py`'s cross-day-pooled protocol) hands to
+    `fit_snapshot_from_parts` after deriving references/scores/thresholds itself."""
+    prepared = _two_state_prepared()
+    detector, det = FittedDetector.fit(prepared.features, prepared.grid, _cfg().detect)
+    labels = det.frame_labels
+    references: dict[int, np.ndarray] = {}
+    calibration_scores: dict[int, np.ndarray] = {}
+    thresholds: dict[int, ConformalThreshold] = {}
+    for label in sorted(int(v) for v in np.unique(labels)):
+        idx = np.flatnonzero(labels == label)
+        reference = prepared.features[idx[:40]]
+        scores = KnnScorer(k=1, metric="cosine").fit(reference).score(
+            prepared.features[idx[40:80]]
+        )
+        references[label] = reference
+        calibration_scores[label] = scores
+        thresholds[label] = calibrate(scores, 0.05)
+    return prepared, detector, references, calibration_scores, thresholds
+
+
+def _from_parts(
+    detector: FittedDetector,
+    references: dict[int, np.ndarray],
+    calibration_scores: dict[int, np.ndarray],
+    thresholds: dict[int, ConformalThreshold],
+    **overrides: object,
+) -> MonitorSnapshot:
+    kwargs: dict = {
+        "scorer": "knn",
+        "alpha": 0.05,
+        "min_ref": 20,
+        "calibration_frac": 0.5,
+        "seed": 7,
+        "variant": "fusion",
+        "fit_run": "pool:day-a,day-b",
+        "feature_names": ["f0", "f1"],
+        "checkpoints": {},
+    }
+    kwargs.update(overrides)
+    return fit_snapshot_from_parts(
+        detector, references, calibration_scores, thresholds, **kwargs
+    )
+
+
+def test_from_parts_round_trip_apply_and_scorer_parity(tmp_path: Path) -> None:
+    prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    snapshot = _from_parts(detector, references, cal_scores, thresholds)
+
+    assert snapshot.fit_run == "pool:day-a,day-b"
+    assert snapshot.format_version == SNAPSHOT_FORMAT_VERSION
+    assert set(snapshot.thresholds) == set(references)
+
+    path = tmp_path / "parts.npz"
+    save_snapshot(path, snapshot)
+    loaded = load_snapshot(path)
+
+    # Detector parity: the round-tripped from-parts snapshot labels exactly like
+    # the live detector it was assembled from.
+    np.testing.assert_array_equal(
+        to_detector(loaded).apply(prepared.features, prepared.grid).frame_labels,
+        detector.apply(prepared.features, prepared.grid).frame_labels,
+    )
+    # Scorer parity: per-label runtime scorers refit from the stored references
+    # score bitwise like scorers fit directly on the parts.
+    for label, reference in references.items():
+        np.testing.assert_array_equal(
+            scorer_for_label(loaded, label).score(prepared.features),
+            KnnScorer(k=1, metric="cosine").fit(reference).score(prepared.features),
+        )
+        assert loaded.thresholds[label] == thresholds[label]
+        np.testing.assert_array_equal(
+            loaded.calibration_scores[label], cal_scores[label]
+        )
+
+
+def test_from_parts_key_set_mismatch_raises() -> None:
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    some_label = next(iter(cal_scores))
+    broken = {k: v for k, v in cal_scores.items() if k != some_label}
+    with pytest.raises(ValueError, match="label sets disagree"):
+        _from_parts(detector, references, broken, thresholds)
+
+    broken_thresholds = {k: v for k, v in thresholds.items() if k != some_label}
+    with pytest.raises(ValueError, match="label sets disagree"):
+        _from_parts(detector, references, cal_scores, broken_thresholds)
+
+
+def test_from_parts_scorer_whitelist() -> None:
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    with pytest.raises(ValueError) as exc_info:
+        _from_parts(detector, references, cal_scores, thresholds, scorer="ocsvm")
+    message = str(exc_info.value)
+    assert "ocsvm" in message
+    assert "knn" in message and "mahalanobis" in message
+
+
+def test_from_parts_reference_geometry_refusals() -> None:
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    some_label = next(iter(references))
+
+    empty = {**references, some_label: np.empty((0, 2))}
+    with pytest.raises(ValueError, match="non-empty"):
+        _from_parts(detector, empty, cal_scores, thresholds)
+
+    one_d = {**references, some_label: np.ones(5)}
+    with pytest.raises(ValueError, match="2-D"):
+        _from_parts(detector, one_d, cal_scores, thresholds)
+
+    wide = {**references, some_label: np.ones((5, 3))}
+    with pytest.raises(ValueError, match="feature_names"):
+        _from_parts(detector, wide, cal_scores, thresholds)
+
+
+def test_save_snapshot_provenance_round_trip(tmp_path: Path) -> None:
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    provenance = {
+        "protocol": "cross-day-pooled",
+        "fit_runs": ["day-a", "day-b"],
+        "pool_members": {"day-a": {"n_windows": 30}, "day-b": {"n_windows": 25}},
+    }
+
+    path = tmp_path / "prov.npz"
+    save_snapshot(path, snapshot, provenance=provenance)
+
+    with np.load(path, allow_pickle=False) as data:
+        meta = json.loads(str(data["meta"][0]))
+    assert meta["provenance"] == provenance
+    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 1  # additive metadata
+    sidecar = json.loads(path.with_suffix(".json").read_text())
+    assert sidecar["provenance"] == provenance
+
+    # Provenance never affects loading -- the scoring/detector halves round-trip
+    # exactly as without it.
+    loaded = load_snapshot(path)
+    assert loaded.thresholds == snapshot.thresholds
+    assert loaded.fit_run == snapshot.fit_run
+
+    # Absent provenance (the default) -> byte-level baseline unchanged: no
+    # "provenance" key anywhere.
+    bare_path = tmp_path / "bare.npz"
+    save_snapshot(bare_path, snapshot)
+    with np.load(bare_path, allow_pickle=False) as data:
+        bare_meta = json.loads(str(data["meta"][0]))
+    assert "provenance" not in bare_meta
+    assert "provenance" not in json.loads(bare_path.with_suffix(".json").read_text())
