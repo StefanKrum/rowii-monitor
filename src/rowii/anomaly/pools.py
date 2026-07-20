@@ -293,7 +293,12 @@ def coverage_table(
         # trick `references.build_references` uses for its label keys.
         for label, count in zip(values.tolist(), counts.tolist(), strict=True):
             rows.append({"run": run_name, "label": label, "n_windows": int(count)})
-    return pd.DataFrame(rows, columns=_COVERAGE_COLUMNS)
+    # Pin n_windows to int64 even when *rows* is empty: pandas infers `object`
+    # from an empty list, and an empty-selection table is a MAINLINE output of
+    # this module (A4.1 exists to make zero-coverage visible) whose dtype
+    # degradation would propagate through pd.concat into every aggregated
+    # coverage table downstream (T1-review finding).
+    return pd.DataFrame(rows, columns=_COVERAGE_COLUMNS).astype({"n_windows": "int64"})
 
 
 def _label_totals(table: pd.DataFrame) -> dict[int | str, int]:
