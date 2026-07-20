@@ -1,0 +1,23 @@
+# Ground truth: induced Schonhammer strikes, ROWII machine 1, 2026-07-08 — STANDSTILL session (Kalibrierung_ST).
+# Provenance: minute-level protocol independently verified against the raw data by the campaign's
+# crosscheck (illwerke-080726-analysis/crosscheck-notes-v1.md, 2026-07-13): every logged minute
+# contains strikes, gap minutes are silent. Times are UTC; each event spans its logged minute.
+# Strike classes: plate = aluminium-plate strike (airborne source) at a microphone position;
+# vane = guide-vane-cover strike sweep (structure-borne); landmark = strike at plant landmark
+# (A = 13. TG next to Kugelschieber, B = 11. TG, C = EG; source-class per campaign docs).
+# Seconds-level per-strike timestamps: pending from the campaign's strikes_ST.json (requested).
+# NOTE: intervals are events for eval_events.py (inclusive start, exclusive end).
+start_utc,end_utc,kind
+2026-07-08T12:15:00+00:00,2026-07-08T12:16:00+00:00,landmark-C_EG
+2026-07-08T12:17:00+00:00,2026-07-08T12:18:00+00:00,plate-gen_0
+2026-07-08T12:18:00+00:00,2026-07-08T12:19:00+00:00,plate-gen_90
+2026-07-08T12:19:00+00:00,2026-07-08T12:20:00+00:00,plate-gen_180
+2026-07-08T12:20:00+00:00,2026-07-08T12:21:00+00:00,plate-gen_270
+2026-07-08T12:21:00+00:00,2026-07-08T12:22:00+00:00,plate-tur_bottom
+2026-07-08T12:22:00+00:00,2026-07-08T12:23:00+00:00,landmark-B_11TG
+2026-07-08T12:23:00+00:00,2026-07-08T12:24:00+00:00,landmark-A_kugelschieber
+2026-07-08T12:24:00+00:00,2026-07-08T12:27:00+00:00,vane-sweep
+2026-07-08T12:28:00+00:00,2026-07-08T12:29:00+00:00,plate-tur_0
+2026-07-08T12:29:00+00:00,2026-07-08T12:30:00+00:00,plate-tur_90
+2026-07-08T12:30:00+00:00,2026-07-08T12:31:00+00:00,plate-tur_180
+2026-07-08T12:31:00+00:00,2026-07-08T12:32:00+00:00,plate-tur_270
