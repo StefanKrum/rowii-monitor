@@ -359,3 +359,28 @@ against code, disk artifacts, and raw Gantner headers. Binding resolutions:
    (c) what changed on 29.06/02.07 is an OPEN question for Bruno (meeting
    note `research/notes/meeting_prep_2026-07-19_bruno.md`) — until answered,
    "era" means "MeasName differs", not "parameters proven different".
+
+### A4.5 — Clarification: the FINAL system trains on ALL days; rotations are the honest ESTIMATOR (Stefan, 2026-07-18)
+
+Two different objects, one sentence each:
+- **The measurement** (rotations): train on some days, test on a held-out day —
+  repeated so EVERY day gets used for training AND gets tested, just never both
+  in the same measurement. This is group-k-fold with day groups; the average
+  over rotations IS the number for "beste Leistung über alle Tage hinweg" —
+  performance on a day the system has not seen.
+- **The final deployed artifact**: AFTER the rotations establish the honest
+  number, the shipped snapshot pools EVERY available day's calibration side
+  (all modes, all load bins) — exactly Stefan's "alles nehmen" intuition. The
+  rotations are how we know what that final system is worth; they are not a
+  restriction on what it may consume.
+
+Feasibility (mode × day matrix, GT days): TU on 25.06/29.06/01.07; PU on
+25.06/29.06/01.07/08.07; PH on 29.06 (~37-min hold)/01.07 (+ 27.06 fragments,
+old config, no GT); standstill inside every day's off-spans + the 08.07 ST
+session. BOTH same-era rotation days (29.06, 01.07) carry TU+PU+PH — the
+held-out-day protocol is feasible with multi-mode coverage on both sides;
+PH is the thinnest slice and the A4.1 coverage tables make that visible.
+If Bruno confirms the MeasName changes are restarts without parameter changes,
+the "era" axis collapses into plain cross-day rows (the 25.06 empirical shift
+remains measured fact and keeps its own explanation question); nothing in the
+protocol depends on the answer.
