@@ -456,3 +456,26 @@ def test_module_docstring_pins_a3_7_warning() -> None:
     assert "_cross_day_per_state_sweep" in doc
     assert "TOP split" in doc
     assert "run_sweep" in doc
+
+
+def test_coverage_table_empty_selection_keeps_int64_dtype() -> None:
+    """T1-review MEDIUM: an EMPTY selection is a mainline A4.1 output; pandas
+    would infer `object` for n_windows from an empty row list, and pd.concat
+    would then degrade every aggregated coverage table downstream."""
+    empty = coverage_table({}, {}, {})
+    assert list(empty.columns) == ["run", "label", "n_windows"]
+    assert empty["n_windows"].dtype == np.int64
+
+    prepared = {
+        "run-a": _prepared_run(
+            features=np.arange(12, dtype=np.float64).reshape(6, 2),
+            segment_ids=np.array([0, 0, 0, 1, 1, 1]),
+        )
+    }
+    real = coverage_table(
+        prepared,
+        {"run-a": np.array([0, 1, 2])},
+        {"run-a": np.array([0, 0, 1, 1, 1, 0])},
+    )
+    combined = pd.concat([empty, real], ignore_index=True)
+    assert combined["n_windows"].dtype == np.int64
