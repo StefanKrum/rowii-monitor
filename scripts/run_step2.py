@@ -141,10 +141,11 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   (spec §4 honesty rule).
 - **A3.1 (pool-member evaluation BAN)**: the test run must not appear in
   `--fit-runs` (`parser.error`), and -- A3.8 -- the fit day-GROUPS and the test
-  day-group must be disjoint, where a day group is the calendar day parsed from the
-  run's FIRST burst file's name (`_run_day_group`; catches sibling runs of one day
-  like `010726-tu1`/`010726-tu2`, which same-`day_root` checks alone would also
-  catch but a differently-rooted re-ingest of the same day would not).
+  day-group must be disjoint, where a day group is the DATE SET parsed from the
+  run's burst-file names (`_run_day_groups`; catches sibling runs of one day
+  like `010726-tu1`/`010726-tu2` AND midnight-crossing tails, which
+  same-`day_root` checks alone would also catch but a differently-rooted
+  re-ingest of the same day would not).
 - **Coverage tables (A4.1/A4.2)**: `coverage_train.csv` (pool calibration side) and
   `coverage_eval.csv` (test scoring side) count windows per detected-state label via
   `rowii.anomaly.pools.coverage_table`; when Betriebsdaten exist for the runs, GT
@@ -3160,17 +3161,24 @@ ffffff.dat` -- a deliberately NARROWED duplicate of `rowii.io.dataset._BURST_RE`
 the A3.8 day-group guard needs."""
 
 
-def _run_day_group(run: Run) -> str:
-    """The A3.8 day group of *run*: the calendar day (`"YYYY-MM-DD"`) parsed from
-    its FIRST burst file's NAME -- first across ALL streams by filename timestamp
-    (`BurstFile.start_utc_hint`, the same ordering discovery itself sorts by). The
-    filename's LOCAL date is used as-is (not the UTC-converted hint): the spec's
-    day groups are the recording days as the plant filesystem names them, and
-    every guard comparison uses the same convention on both sides.
+def _run_day_groups(run: Run) -> set[str]:
+    """The A3.8 day groups of *run*: the SET of calendar days (`"YYYY-MM-DD"`)
+    parsed from EVERY burst file's NAME across all streams. The filename's LOCAL
+    date is used as-is (not the UTC-converted hint): the spec's day groups are
+    the recording days as the plant filesystem names them, and every guard
+    comparison uses the same convention on both sides.
+
+    A SET, not the first file's date (T3-review MEDIUM): a recording that
+    continues past local midnight without a >15-min gap stays ONE discovered
+    run, so a first-file-only day group would report just the start date while
+    most windows physically sit on the next calendar day -- silently bypassing
+    the disjointness guard. No shipped run spans two dates today, but
+    010726-tu_ph_tu's last file starts at 23:57 local -- three minutes from
+    making this real. Multi-date runs are additionally logged, for visibility.
 
     Raises:
-        ValueError: if *run* has no burst files at all, or its first file's name
-            does not carry the `_YYYY-MM-DD_HH-MM-SS_ffffff.dat` timestamp --
+        ValueError: if *run* has no burst files at all, or any file's name does
+            not carry the `_YYYY-MM-DD_HH-MM-SS_ffffff.dat` timestamp --
             impossible for a `rowii.io.dataset.discover` product (discovery only
             admits files matching the full burst pattern), so either means a
             hand-built `Run` violating the discovery contract.
@@ -3180,14 +3188,22 @@ def _run_day_group(run: Run) -> str:
         raise ValueError(
             f"run {run.name!r} has no burst files -- cannot derive its day group"
         )
-    first = min(bursts, key=lambda burst: burst.start_utc_hint)
-    match = _BURST_NAME_DATE_RE.search(first.path.name)
-    if match is None:
-        raise ValueError(
-            f"run {run.name!r}: first burst file {first.path.name!r} does not carry "
-            f"the expected _YYYY-MM-DD_HH-MM-SS_ffffff.dat timestamp"
+    days: set[str] = set()
+    for burst in bursts:
+        match = _BURST_NAME_DATE_RE.search(burst.path.name)
+        if match is None:
+            raise ValueError(
+                f"run {run.name!r}: burst file {burst.path.name!r} does not carry "
+                f"the expected _YYYY-MM-DD_HH-MM-SS_ffffff.dat timestamp"
+            )
+        days.add(match.group(1))
+    if len(days) > 1:
+        logger.info(
+            "run_step2: run %s spans %d calendar days (%s) -- its A3.8 day group "
+            "is the full set",
+            run.name, len(days), ", ".join(sorted(days)),
         )
-    return match.group(1)
+    return days
 
 
 def _cross_day_pooled_out_dir(results_root: Path, test_run: str, variant: str) -> Path:
@@ -3847,19 +3863,25 @@ def main(argv: list[str] | None = None) -> int:
         runs_by_name = {run.name: run for run in index.runs}
         fit_runs = [runs_by_name[name] for name in fit_run_names]
         test_run_obj = runs_by_name[args.test_run]
-        # A3.8 day-group disjointness: day group = calendar day of the run's first
-        # burst file's name (_run_day_group -- catches the sibling-runs-of-one-day
-        # case, e.g. 010726-tu1 vs 010726-tu2).
-        test_day = _run_day_group(test_run_obj)
+        # A3.8 day-group disjointness: day groups = the SET of calendar days each
+        # run's burst-file names touch (_run_day_groups -- catches both the
+        # sibling-runs-of-one-day case, e.g. 010726-tu1 vs 010726-tu2, AND a
+        # midnight-crossing run whose tail shares a date with another run's day).
+        test_days = _run_day_groups(test_run_obj)
         overlapping = sorted(
-            {run.name for run in fit_runs if _run_day_group(run) == test_day}
+            {
+                run.name
+                for run in fit_runs
+                if _run_day_groups(run) & test_days
+            }
         )
         if overlapping:
             parser.error(
                 f"--protocol cross-day-pooled requires disjoint day groups "
                 f"(held-out-day-group evaluation, spec A3.8): test run "
-                f"{args.test_run!r} shares calendar day group {test_day} with fit "
-                f"run(s) {', '.join(overlapping)}"
+                f"{args.test_run!r} shares calendar day(s) "
+                f"{', '.join(sorted(test_days))} with fit run(s) "
+                f"{', '.join(overlapping)}"
             )
         if args.conditioning not in ("all", "per-state"):
             logger.info(

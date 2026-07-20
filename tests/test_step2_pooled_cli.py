@@ -658,3 +658,145 @@ def test_gt_labels_and_scorer_all_rejected(tmp_path, monkeypatch, capsys) -> Non
         run_step2.main([*_BASE_ARGS, "--scorer", "all"])
     assert exc_info.value.code == 2
     assert "one scorer" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T3-review hardening: midnight-crossing day groups + untested guard branches
+# ---------------------------------------------------------------------------
+
+
+def _fake_run_two_dates(name: str, date_a: str, date_b: str) -> Run:
+    """A discovery-shaped run whose burst files span TWO calendar dates -- the
+    midnight-crossing case the T3 review proved bypassed a first-file-only day
+    group (real near-miss: 010726-tu_ph_tu's last file starts 23:57 local)."""
+    return Run(
+        name=name,
+        files={
+            "RAWGeneratorMic__0": [
+                BurstFile(
+                    path=Path(
+                        f"/fake/{name}/RAWGeneratorMic__0_{date_a}_23-58-00_000000.dat"
+                    ),
+                    stream="RAWGeneratorMic__0",
+                    start_utc_hint=datetime.fromisoformat(f"{date_a}T23:58:00+00:00"),
+                ),
+                BurstFile(
+                    path=Path(
+                        f"/fake/{name}/RAWGeneratorMic__0_{date_b}_00-10-00_000000.dat"
+                    ),
+                    stream="RAWGeneratorMic__0",
+                    start_utc_hint=datetime.fromisoformat(f"{date_b}T00:10:00+00:00"),
+                ),
+            ]
+        },
+        day_root=Path(f"/fake/{name}"),
+    )
+
+
+def test_midnight_crossing_fit_run_shares_test_day_rejected(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The overnight run's TAIL date collides with the test run's day -- the
+    date-SET guard must refuse (a first-file-only group would have passed)."""
+    overnight = _fake_run_two_dates("fit-night", "2026-07-01", "2026-07-02")
+    fit_b = _fake_run("fit-b", "2026-06-29")
+    test_c = _fake_run("test-c", "2026-07-02")
+    _install_fakes(
+        monkeypatch, tmp_path, _pooled_prepared(),
+        _fake_index([overnight, fit_b, test_c]),
+    )
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "cross-day-pooled", "--fit-runs", "fit-night,fit-b",
+                "--test-run", "test-c", "--variant", "fusion",
+            ]
+        )
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "fit-night" in err
+    assert "2026-07-02" in err
+
+
+def test_duplicate_fit_runs_exit_2(tmp_path, monkeypatch, capsys) -> None:
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-a",
+                "--test-run", "test-c", "--variant", "fusion",
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "duplicate" in capsys.readouterr().err
+
+
+def test_fit_pooled_runtime_error_exits_2_not_traceback(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """T3-review mutation probe: narrowing the except clause to ValueError let
+    fit_pooled's own RuntimeError (near-constant pool, unassigned cluster ids)
+    escape as a traceback. Pin the RuntimeError branch through the CLI."""
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    from rowii.state.detect import FittedDetector
+
+    def _raise_runtime(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("pooled KMeans did not assign every cluster id 0..4")
+
+    monkeypatch.setattr(FittedDetector, "fit_pooled", classmethod(
+        lambda cls, *a, **k: _raise_runtime()
+    ))
+
+    exit_code = run_step2.main(
+        [
+            "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-b",
+            "--test-run", "test-c", "--variant", "fusion", "--k", "5",
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "k too large" in err
+    assert "0..4" in err
+
+
+def test_save_snapshot_with_non_runtime_scorer_exits_2(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-b",
+                "--test-run", "test-c", "--variant", "fusion",
+                "--scorer", "ocsvm", "--save-snapshot", str(tmp_path / "s.npz"),
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "runtime" in capsys.readouterr().err.lower()
+
+
+def test_k_below_one_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-b",
+                "--test-run", "test-c", "--variant", "fusion", "--k", "0",
+            ]
+        )
+    assert exc_info.value.code == 2
