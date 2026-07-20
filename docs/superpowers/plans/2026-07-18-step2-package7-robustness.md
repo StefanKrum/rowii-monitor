@@ -129,3 +129,19 @@
 ## Self-review (at write time)
 
 Spec coverage: D1→T1, A3.4→T2, D2/A3.1/A3.7/A3.8→T3, D3/A3.5→T4, D7/A3.2→T5, D4/A3.9→T6, D5/A3.10→T7, D6/A3.11→T8, §8→T9-T11, A2.1/A2.2 grids→T9/T10 params, A2.3→T10 pillar-3, A2.4/A2.5→T11, A4.1/A4.2→T1 coverage + T3 wiring, A4.3→T10/T11 framing, A4.5 estimator-vs-final→T3 protocol + T11 narrative. Interfaces type-consistent (PoolResult in T1 consumed by T2/T3/T6/T8 as written; SessionStats only in T4; threshold_source only in T5). No placeholders.
+
+## Plan amendment (2026-07-21, Stefan): representation axis pinned for execution
+
+Stefan: "ich muss in der Thesis ja alle vergleichen". The comparison axis is
+explicit, not implied:
+- **T9 rotations** run per representation over at least {fusion, audio-beats,
+  audio-tfc} (all off warm caches; audio-student added where the pool-student
+  checkpoint from T10 exists at execution time).
+- **T10 pillar-3 (080726)** runs the event evaluation per representation over
+  {handcrafted audio, fusion, audio-beats, audio-tfc, audio-student} × α grid —
+  the same five-way comparison shape as the P6 scarcity curve, now at event
+  level on real induced events.
+- The final "best system" recommendation in T11's synthesis is REQUIRED to be
+  stated as the outcome of these comparisons ("so funktioniert es am besten,
+  weil …"), never as an assumption; frozen BEATs is the universal BASELINE row
+  in every table (A2.1), not a pre-decided winner.
