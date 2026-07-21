@@ -505,3 +505,170 @@ def test_negative_max_windows_raises_value_error(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="max_windows"):
         iter_target_windows(run, cfg, max_windows=-1)
+
+
+# ---------------------------------------------------------------------------
+# 8. iter_target_windows_multi: round-robin pooling across runs (Step-2
+#    package-7 Task 8, spec D6 as amended by A3.11: `docs/superpowers/specs/
+#    2026-07-18-step2-package7-robustness-design.md`). The per-run iterators
+#    are monkeypatched to known finite sequences (the SAME
+#    `target_windows.iter_target_windows` monkeypatch seam the split tests
+#    above use), so every assertion below pins the ROTATION itself --
+#    interleaving order, exhausted-run dropout, the TOTAL budget -- against
+#    hand-written ground truth, independent of any real gantner tree.
+# ---------------------------------------------------------------------------
+
+
+def _fake_run(tmp_path: Path, name: str) -> Run:
+    """A files-free `Run` -- the monkeypatched per-run iterator below never
+    touches files, only `run.name`."""
+    return Run(name=name, files={}, day_root=tmp_path)
+
+
+def _window_of(value: float) -> np.ndarray:
+    """A distinguishable fake window: constant *value*, so `w[0]` identifies
+    exactly which (run, position) a yielded array came from."""
+    return np.full(3, value, dtype=np.float32)
+
+
+_MULTI_SEQUENCES: dict[str, list[float]] = {
+    # Unequal lengths on purpose (the A3.11 test shape): run-b exhausts after
+    # its first window, run-c after its second -- the pinned rotation is then
+    # a, b, c, a, c, a.
+    "run-a": [10.0, 11.0, 12.0],
+    "run-b": [20.0],
+    "run-c": [30.0, 31.0],
+}
+
+
+def _install_fake_per_run_iterators(monkeypatch) -> list[dict[str, object]]:
+    """Monkeypatches `target_windows.iter_target_windows` with a fake serving
+    `_MULTI_SEQUENCES[run.name]`, recording each call's kwargs at CALL time
+    (a plain function returning an iterator, NOT a generator function -- so
+    the call log also proves whether a run's iterator was constructed at
+    all, e.g. for the zero-budget test)."""
+    calls: list[dict[str, object]] = []
+
+    def fake(run, cfg, *, target_hz=16_000, seed=7, max_windows=None, return_indices=False):
+        calls.append(
+            {"run": run.name, "target_hz": target_hz, "seed": seed, "max_windows": max_windows}
+        )
+        return iter([_window_of(v) for v in _MULTI_SEQUENCES[run.name]])
+
+    monkeypatch.setattr(target_windows, "iter_target_windows", fake)
+    return calls
+
+
+def _three_fake_runs(tmp_path: Path) -> list[Run]:
+    return [_fake_run(tmp_path, name) for name in ("run-a", "run-b", "run-c")]
+
+
+def test_multi_round_robin_order_with_exhausted_run_dropout(tmp_path, monkeypatch) -> None:
+    runs = _three_fake_runs(tmp_path)
+    _install_fake_per_run_iterators(monkeypatch)
+
+    out = list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=100, target_hz=16_000
+        )
+    )
+
+    assert [float(w[0]) for w in out] == [10.0, 20.0, 30.0, 11.0, 31.0, 12.0], (
+        "rotation must interleave a, b, c, a, c, a: one window per run per pass, an "
+        "exhausted run dropping out of the rotation (A3.11)"
+    )
+    assert all(isinstance(w, np.ndarray) for w in out), (
+        "base contract yields bare arrays, matching iter_target_windows' own"
+    )
+
+
+def test_multi_return_run_names_yields_run_window_pairs(tmp_path, monkeypatch) -> None:
+    runs = _three_fake_runs(tmp_path)
+    _install_fake_per_run_iterators(monkeypatch)
+
+    pairs = list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=100, target_hz=16_000, return_run_names=True
+        )
+    )
+
+    assert [name for name, _w in pairs] == [
+        "run-a", "run-b", "run-c", "run-a", "run-c", "run-a"
+    ]
+    assert [float(w[0]) for _name, w in pairs] == [10.0, 20.0, 30.0, 11.0, 31.0, 12.0]
+
+
+def test_multi_total_budget_is_total_not_per_run(tmp_path, monkeypatch) -> None:
+    runs = _three_fake_runs(tmp_path)
+    _install_fake_per_run_iterators(monkeypatch)
+
+    out = list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=4, target_hz=16_000
+        )
+    )
+
+    assert [float(w[0]) for w in out] == [10.0, 20.0, 30.0, 11.0], (
+        "max_windows is the TOTAL across runs (A3.11): exactly 4 windows, cut "
+        "mid-rotation, never 4 per run"
+    )
+
+
+def test_multi_forwards_target_hz_seed_and_budget_cap_to_each_run(tmp_path, monkeypatch) -> None:
+    runs = _three_fake_runs(tmp_path)
+    calls = _install_fake_per_run_iterators(monkeypatch)
+
+    list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=5, target_hz=8_000, seed=42
+        )
+    )
+
+    assert calls == [
+        {"run": "run-a", "target_hz": 8_000, "seed": 42, "max_windows": 5},
+        {"run": "run-b", "target_hz": 8_000, "seed": 42, "max_windows": 5},
+        {"run": "run-c", "target_hz": 8_000, "seed": 42, "max_windows": 5},
+    ], (
+        "each run's iterator is constructed exactly once, in runs order, with the "
+        "caller's target_hz, the shared split seed, and the TOTAL budget as its own "
+        "per-run cap (no single run can contribute more than the total)"
+    )
+
+
+def test_multi_default_split_seed_is_7(tmp_path, monkeypatch) -> None:
+    runs = _three_fake_runs(tmp_path)
+    calls = _install_fake_per_run_iterators(monkeypatch)
+
+    list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=2, target_hz=16_000
+        )
+    )
+
+    assert calls and all(c["seed"] == 7 for c in calls), (
+        "omitting seed must forward the canonical split seed 7 to every per-run "
+        "iterator (the same default iter_target_windows itself pins)"
+    )
+
+
+def test_multi_zero_budget_yields_nothing_and_constructs_no_iterator(
+    tmp_path, monkeypatch
+) -> None:
+    runs = _three_fake_runs(tmp_path)
+    calls = _install_fake_per_run_iterators(monkeypatch)
+
+    out = list(
+        target_windows.iter_target_windows_multi(
+            runs, _cfg(tmp_path), max_windows=0, target_hz=16_000
+        )
+    )
+
+    assert out == []
+    assert calls == [], "a zero budget must not even construct a per-run iterator"
+
+
+def test_multi_negative_budget_raises_value_error(tmp_path) -> None:
+    with pytest.raises(ValueError, match="max_windows"):
+        target_windows.iter_target_windows_multi(
+            [], _cfg(tmp_path), max_windows=-1, target_hz=16_000
+        )

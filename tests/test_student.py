@@ -782,3 +782,261 @@ class TestDistillBeatsMainEndToEnd:
         assert "--lr" in out
         assert "--seed" in out
         assert "--out" in out
+
+
+# ---------------------------------------------------------------------------
+# 5f. --runs: multi-run stacking (Step-2 package-7 Task 8, spec D6 as amended
+#     by A3.11): per run, BOTH caches load (cache-only) and alignment-check
+#     exactly as in single-run mode, the per-run top split selects
+#     calibration-side rows, and the selected student inputs + teacher
+#     primary-mic slices are STACKED across runs into ONE training set. The
+#     tests below capture `_train_student`'s inputs to pin the stacked
+#     matrices bitwise -- including the 1-run-list parity case against the
+#     unchanged single-run path.
+# ---------------------------------------------------------------------------
+
+_GEN_TUR_BEATS_NAMES: list[str] = (
+    [f"RAWGeneratorMic__0::beats_{i}" for i in range(768)]
+    + [f"RAWTurbineMic__1::beats_{i}" for i in range(768)]
+)
+
+
+def _write_run_with_cache_pair(
+    tmp_path: Path,
+    cfg: Config,
+    name: str,
+    *,
+    n: int,
+    seed: int,
+    tur_shift_s: float = 0.0,
+):
+    """One run + BOTH synthetic caches (audio-beats teacher with gen+tur
+    stream-prefixed names, logmel student input) -- the multi-run tests'
+    per-run building block, mirroring TestDistillBeatsMainEndToEnd's own
+    fixture construction.
+
+    *tur_shift_s* > 0 starts the TURBINE mic's burst file that many seconds
+    after the generator mic's, which misaligns the two variants' grids at
+    the SOURCE: `rowii.pipeline._load_cached_prepared_run` overrides a
+    cached `grid_t0_ns` with the freshly recomputed true-UTC t0 on every
+    hit (the DAQ epoch-2000 compatibility path), so a t0 shift written only
+    into the cache npz would be erased at load time -- the audio-beats grid
+    (both-mic intersection, `build_run_grid`) then genuinely starts
+    *tur_shift_s* later than the logmel grid (primary mic alone).
+    """
+    from datetime import timedelta
+
+    burst_dir = tmp_path / f"burst-{name}"
+    if tur_shift_s == 0.0:
+        run = _tiny_audio_run(burst_dir, name=name)
+    else:
+        burst_dir.mkdir(parents=True, exist_ok=True)
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        files = {
+            "RAWGeneratorMic__0": [
+                _cache_burst(
+                    burst_dir / "gen_mic.dat", "RAWGeneratorMic__0", 2.0 + tur_shift_s,
+                    t0_ns=0, start_utc_hint=t0,
+                )
+            ],
+            "RAWTurbineMic__1": [
+                _cache_burst(
+                    burst_dir / "tur_mic.dat", "RAWTurbineMic__1", 2.0,
+                    t0_ns=round(tur_shift_s * 1e9),
+                    start_utc_hint=t0 + timedelta(seconds=tur_shift_s),
+                )
+            ],
+        }
+        run = Run(name=name, files=files, day_root=burst_dir)
+    rng = np.random.default_rng(seed)
+    segment_ids = np.repeat([0, 1], n // 2).astype(np.int64)
+    _write_synthetic_cache(
+        cfg, run, "audio-beats",
+        features=rng.normal(size=(n, 1536)),
+        valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+        feature_names=list(_GEN_TUR_BEATS_NAMES),
+    )
+    _write_synthetic_cache(
+        cfg, run, "logmel",
+        features=rng.normal(size=(n, 49 * 64)),
+        valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+    )
+    return run
+
+
+class _TrainStubModel:
+    """Minimal stand-in for the trained `_StudentNet` in tests that capture
+    `_train_student`'s inputs: only `state_dict()` is touched afterwards
+    (`_save_checkpoint`'s torch.save)."""
+
+    def state_dict(self):
+        return {}
+
+
+def _capture_train_student(monkeypatch) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Monkeypatches `distill_beats._train_student` to record each call's
+    `(student_inputs, teacher_targets)` (copied) and skip real training."""
+    captured: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def fake_train(student_inputs, teacher_targets, cfg, *, epochs, batch_size, lr, seed):
+        captured.append((student_inputs.copy(), teacher_targets.copy()))
+        return _TrainStubModel(), [0.123]
+
+    monkeypatch.setattr(distill_beats, "_train_student", fake_train)
+    return captured
+
+
+def _multi_run_env(monkeypatch, tmp_path: Path, cfg: Config, runs: list[Run]) -> None:
+    """The established e2e env recipe (TestDistillBeatsMainEndToEnd), shared
+    by the multi-run tests: monkeypatched discover + env vars, with
+    ROWII_BEATS_CHECKPOINT explicitly emptied so main()'s own load_config()
+    computes the SAME cache fingerprint `_write_synthetic_cache` used."""
+    monkeypatch.setattr(distill_beats, "discover", lambda data_root: _fake_index(runs))
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(cfg.results_root))
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", "")
+
+
+def test_distill_run_and_runs_are_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.build_parser().parse_args(["--run", "x", "--runs", "a,b"])
+    assert exc_info.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_distill_one_of_run_or_runs_is_required(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.build_parser().parse_args([])
+    assert exc_info.value.code == 2
+    assert "--runs" in capsys.readouterr().err
+
+
+def test_distill_help_documents_runs_flag(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.main(["--help"])
+    assert exc_info.value.code == 0
+    # "--runs NAMES" is the option's own usage form -- the bare string
+    # "--runs" already appears in --run's warm_cache.py hint, so it would
+    # not distinguish a parser that actually has the flag.
+    assert "--runs NAMES" in capsys.readouterr().out
+
+
+def test_distill_runs_with_duplicate_names_is_a_parser_error(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.main(["--runs", "run-a,run-a"])
+    assert exc_info.value.code == 2
+    assert "duplicate" in capsys.readouterr().err.lower()
+
+
+def test_multi_run_single_item_list_matches_single_run_bitwise(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    cfg = _distill_cfg(tmp_path / "results")
+    run = _write_run_with_cache_pair(tmp_path, cfg, "parity-run", n=12, seed=11)
+    _multi_run_env(monkeypatch, tmp_path, cfg, [run])
+    captured = _capture_train_student(monkeypatch)
+
+    rc_single = distill_beats.main(
+        ["--run", run.name, "--epochs", "1", "--out", str(tmp_path / "out-single")]
+    )
+    rc_multi = distill_beats.main(
+        ["--runs", run.name, "--epochs", "1", "--out", str(tmp_path / "out-multi")]
+    )
+
+    assert rc_single == 0 and rc_multi == 0
+    assert len(captured) == 2
+    (single_x, single_y), (multi_x, multi_y) = captured
+    assert single_x.dtype == multi_x.dtype and single_y.dtype == multi_y.dtype
+    np.testing.assert_array_equal(single_x, multi_x, err_msg=(
+        "--runs with a 1-run list must hand _train_student the BITWISE-same student "
+        "inputs as the single-run path"
+    ))
+    np.testing.assert_array_equal(single_y, multi_y, err_msg=(
+        "--runs with a 1-run list must hand _train_student the BITWISE-same teacher "
+        "targets as the single-run path"
+    ))
+
+    single_sidecar = json.loads(
+        (tmp_path / "out-single" / f"student_{run.name}.json").read_text()
+    )
+    multi_sidecar = json.loads(
+        (tmp_path / "out-multi" / f"student_{run.name}.json").read_text()
+    )
+    assert single_sidecar["run"] == run.name
+    assert "runs" not in single_sidecar, "single-run sidecar stays exactly as before"
+    assert multi_sidecar["runs"] == [run.name]
+    assert multi_sidecar["calibration_windows_per_run"] == {
+        run.name: single_sidecar["n_calibration_windows"]
+    }
+    assert (
+        multi_sidecar["n_calibration_windows"] == single_sidecar["n_calibration_windows"]
+    )
+
+
+def test_multi_run_stacks_calibration_rows_across_runs_in_runs_order(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    cfg = _distill_cfg(tmp_path / "results")
+    run1 = _write_run_with_cache_pair(tmp_path, cfg, "stack-run-1", n=12, seed=21)
+    run2 = _write_run_with_cache_pair(tmp_path, cfg, "stack-run-2", n=8, seed=22)
+    _multi_run_env(monkeypatch, tmp_path, cfg, [run1, run2])
+    captured = _capture_train_student(monkeypatch)
+
+    out_dir = tmp_path / "out"
+    rc = distill_beats.main(
+        ["--runs", f"{run1.name},{run2.name}", "--epochs", "1", "--out", str(out_dir)]
+    )
+    assert rc == 0
+
+    expected_x_blocks: list[np.ndarray] = []
+    expected_y_blocks: list[np.ndarray] = []
+    expected_counts: dict[str, int] = {}
+    for run in (run1, run2):
+        teacher = distill_beats._load_cache_or_exit(run, "audio-beats", cfg)
+        student_input = distill_beats._load_cache_or_exit(run, "logmel", cfg)
+        calib = distill_beats._select_calibration_windows(student_input, teacher, seed=7)
+        assert calib.size > 0, "fixture sanity: every run must contribute rows"
+        expected_x_blocks.append(student_input.features[calib])
+        # Primary-mic slice hand-pinned from the fixture's feature-name order
+        # (generator mic first): columns 0..767 -- independent ground truth,
+        # not routed through _teacher_target_columns.
+        expected_y_blocks.append(teacher.features[calib][:, :768])
+        expected_counts[run.name] = int(calib.size)
+
+    assert len(captured) == 1, "multi-run mode trains ONE student on the stacked pool"
+    got_x, got_y = captured[0]
+    np.testing.assert_array_equal(got_x, np.vstack(expected_x_blocks))
+    np.testing.assert_array_equal(got_y, np.vstack(expected_y_blocks))
+
+    checkpoint_path = out_dir / f"student_{run1.name}+{run2.name}.pt"
+    assert checkpoint_path.is_file(), "multi-run checkpoint name joins run names with '+'"
+    sidecar = json.loads(checkpoint_path.with_suffix(".json").read_text())
+    assert sidecar["runs"] == [run1.name, run2.name]
+    assert sidecar["calibration_windows_per_run"] == expected_counts
+    assert sidecar["n_calibration_windows"] == sum(expected_counts.values())
+
+
+def test_multi_run_misaligned_second_run_exits_2_before_training(
+    tmp_path, monkeypatch, capsys
+):
+    pytest.importorskip("torch")
+    cfg = _distill_cfg(tmp_path / "results")
+    run1 = _write_run_with_cache_pair(tmp_path, cfg, "align-run-1", n=8, seed=31)
+    # run2's turbine mic starts 1 s after its generator mic, so the freshly
+    # recomputed audio-beats grid (both-mic intersection) starts one FULL
+    # window after the logmel grid (primary mic alone) -- exactly the
+    # >= one-window misalignment _check_cache_alignment refuses (see
+    # _write_run_with_cache_pair's docstring for why the misalignment must
+    # live in the burst files, not the cache npz).
+    run2 = _write_run_with_cache_pair(
+        tmp_path, cfg, "align-run-2", n=8, seed=32, tur_shift_s=1.0
+    )
+    _multi_run_env(monkeypatch, tmp_path, cfg, [run1, run2])
+    captured = _capture_train_student(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.main(
+            ["--runs", f"{run1.name},{run2.name}", "--out", str(tmp_path / "out")]
+        )
+
+    assert exc_info.value.code == 2
+    assert "misaligned by >= one window" in capsys.readouterr().err
+    assert captured == [], "the per-run alignment guard must fire BEFORE any training"

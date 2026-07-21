@@ -16,10 +16,22 @@ through to a live `prepare_run` for non-beats/tfc variants; this one never
 does, for either side, since the whole distillation story is "zero
 extraction").
 
-Usage: `distill_beats.py --run <name> --epochs 30 --batch-size 256 --lr 1e-3
---seed 7 --out models/adapted/` -> `models/adapted/student_<run>.pt` + a
-sidecar `<same-stem>.json`. Both caches for *run* must already be warm
-(`scripts/warm_cache.py --runs <name> --variants audio-beats logmel`).
+Usage: `distill_beats.py (--run <name> | --runs <a,b,c>) --epochs 30
+--batch-size 256 --lr 1e-3 --seed 7 --out models/adapted/` ->
+`models/adapted/student_<run>.pt` (multi-run: run names joined with `+`,
+e.g. `student_<a>+<b>.pt`) + a sidecar `<same-stem>.json`. Both caches for
+every named run must already be warm (`scripts/warm_cache.py --runs <name>
+--variants audio-beats logmel`).
+
+Multi-run pooling (Step-2 package-7 Task 8, spec D6 as amended by A3.11:
+`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md`):
+`--runs a,b,c` (mutually exclusive with `--run`) applies the single-run
+recipe PER RUN -- both caches loaded cache-only, `_check_cache_alignment`,
+`_select_calibration_windows` on that run's own top split -- then STACKS the
+selected calibration-side rows across runs (student inputs and teacher
+primary-mic slices alike, in `--runs` order) and trains ONE student on the
+pooled matrix. The sidecar records the runs list and per-run calibration-
+window counts (A3.11); the single-run `--run` path is untouched.
 
 ## Cache loading + grid alignment
 
@@ -132,6 +144,16 @@ _LEAKAGE_NOTE = (
     "this checkpoint was produced and evaluated on)."
 )
 
+_MULTI_RUN_NOTE = (
+    " Multi-run pool (P7 spec D6/A3.11): the same top-split rule is applied PER RUN "
+    "(each run's own segment_ids/valid_mask, shared seed) and the selected "
+    "calibration-side rows are stacked across the runs listed in this sidecar -- no "
+    "run's scoring-side windows are ever trained on, so held-out evaluation on any "
+    "run's scoring side (and, per A3.1, on non-pool runs) stays uncontaminated."
+)
+"""Appended to `_LEAKAGE_NOTE` in `--runs` mode only -- the single-run sidecar
+note stays byte-identical."""
+
 
 def _import_torch_or_exit() -> None:
     """Distillation training is inherently a torch operation (mirrors `scripts/
@@ -141,6 +163,31 @@ def _import_torch_or_exit() -> None:
         import torch  # noqa: F401
     except ImportError as exc:
         raise SystemExit(f"distill_beats needs torch ({exc}); {_TORCH_HINT}") from exc
+
+
+def _parse_runs_or_error(parser: argparse.ArgumentParser, raw: str) -> list[str]:
+    """`--runs "a,b,c"` -> `["a", "b", "c"]`, with parse-level validation via
+    *parser*`.error` (exit 2, argparse's own convention; P7 spec D6/A3.11):
+    whitespace around names is stripped; an empty list (nothing but commas/
+    blanks) and duplicate names are both rejected -- a duplicated run would
+    stack its calibration rows TWICE into the pooled training matrix,
+    silently double-weighting that run's distribution in the student's MSE
+    objective. Duplicated from `scripts/adapt_beats.py`'s own helper of the
+    same name rather than imported (the plan's Global Constraint, set by
+    `scripts/warm_cache.py`'s precedent: one script must not depend on a
+    sibling script's internals).
+    """
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    if not names:
+        parser.error("--runs must name at least one run (comma-separated run names)")
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        parser.error(
+            f"--runs contains duplicate run name(s): {', '.join(duplicates)} -- each run "
+            "may appear once (a duplicate would stack its calibration rows twice into "
+            "the pooled training matrix)"
+        )
+    return names
 
 
 def _resolve_run_or_exit(run_name: str, cfg: Config) -> Run:
@@ -160,6 +207,27 @@ def _resolve_run_or_exit(run_name: str, cfg: Config) -> Run:
             f"(available: {sorted(by_name)})"
         )
     return run
+
+
+def _resolve_runs_or_exit(run_names: list[str], cfg: Config) -> list[Run]:
+    """Multi-run counterpart of `_resolve_run_or_exit` (P7 spec D6/A3.11):
+    ONE `discover` walk resolves every name (per-name `_resolve_run_or_exit`
+    calls would re-walk the data tree once per pool member), preserving
+    *run_names*' order -- the stacking order downstream.
+
+    Raises:
+        SystemExit: any name was not discovered under `cfg.data_root` (names
+            every unknown name and every discovered run).
+    """
+    index = discover(cfg.data_root)
+    by_name = {r.name: r for r in index.runs}
+    unknown = [name for name in run_names if name not in by_name]
+    if unknown:
+        raise SystemExit(
+            f"distill_beats: run(s) {', '.join(map(repr, unknown))} not discovered under "
+            f"{cfg.data_root} (available: {sorted(by_name)})"
+        )
+    return [by_name[name] for name in run_names]
 
 
 def _load_cache_or_exit(run: Run, variant: str, cfg: Config) -> PreparedRun:
@@ -448,10 +516,21 @@ def build_parser() -> argparse.ArgumentParser:
             "+ a sidecar <run>.json."
         )
     )
-    parser.add_argument(
-        "--run", required=True, metavar="NAME",
+    run_group = parser.add_mutually_exclusive_group(required=True)
+    run_group.add_argument(
+        "--run", metavar="NAME",
         help="Run name to distill from -- needs BOTH audio-beats and logmel warm "
              "caches (scripts/warm_cache.py --runs <name> --variants audio-beats logmel).",
+    )
+    run_group.add_argument(
+        "--runs", metavar="NAMES",
+        help="Comma-separated run names for MULTI-run distillation (P7 spec D6/A3.11): "
+             "per run, both caches are loaded (cache-only) and alignment-checked, the "
+             "per-run top split selects calibration-side rows, and the selected student "
+             "inputs + teacher primary-mic targets are STACKED across runs into one "
+             "training set; the checkpoint name joins the run names with '+' and the "
+             "sidecar records per-run calibration-window counts. Mutually exclusive "
+             "with --run.",
     )
     parser.add_argument(
         "--epochs", type=int, default=30, help="Training epochs (default: 30).",
@@ -480,51 +559,121 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Parse-level --runs validation (empty/duplicates) runs BEFORE the torch
+    # import guard: a malformed flag value is a usage error regardless of the
+    # environment's torch install (mirrors scripts/adapt_beats.py).
+    run_names: list[str] = []
+    if args.runs is not None:
+        run_names = _parse_runs_or_error(parser, args.runs)
+
     _import_torch_or_exit()
 
     cfg = load_config()
-    run = _resolve_run_or_exit(args.run, cfg)
 
-    t0 = time.monotonic()
-    teacher = _load_cache_or_exit(run, _TEACHER_VARIANT, cfg)
-    student_input = _load_cache_or_exit(run, _STUDENT_INPUT_VARIANT, cfg)
-
-    _check_cache_alignment(run.name, teacher, student_input)
-
-    calibration_windows = _select_calibration_windows(student_input, teacher, seed=args.seed)
-    if calibration_windows.size == 0:
-        print(
-            f"distill_beats: no calibration-side window(s) for run {run.name!r} -- "
-            "nothing to distill on",
-            file=sys.stderr,
-        )
-        return 1
-
+    # Pure constructions, shared by both paths (StudentConfig carries no state
+    # beyond its defaults; the primary stream is a variant-level constant).
     student_cfg = StudentConfig()
     primary_stream = _streams_for_variant(_STUDENT_INPUT_VARIANT)[0]
-    teacher_cols = _teacher_target_columns(
-        teacher, primary_stream, expected_dim=student_cfg.out_dim
-    )
-    student_inputs = student_input.features[calibration_windows]
-    teacher_targets = teacher.features[calibration_windows][:, teacher_cols]
-    logger.info(
-        "distill_beats: %d calibration-side window(s) for run %s (of %d/%d valid); "
-        "teacher target = %d-column %s slice of the audio-beats cache",
-        student_inputs.shape[0], run.name,
-        int(student_input.valid_mask.sum()), int(teacher.valid_mask.sum()),
-        int(teacher_cols.size), primary_stream,
-    )
+
+    t0: float
+    calibration_windows_per_run: dict[str, int] | None = None
+    if args.runs is not None:
+        # Multi-run pool (P7 spec D6/A3.11 -- module docstring): the
+        # single-run recipe applied PER RUN (cache-only loads, alignment
+        # guard, per-run top split), the selected calibration-side rows
+        # stacked across runs in --runs order, ONE student trained on the
+        # pooled matrix.
+        pool_runs = _resolve_runs_or_exit(run_names, cfg)
+        t0 = time.monotonic()
+        student_blocks: list[np.ndarray] = []
+        teacher_blocks: list[np.ndarray] = []
+        calibration_windows_per_run = {}
+        for run in pool_runs:
+            teacher = _load_cache_or_exit(run, _TEACHER_VARIANT, cfg)
+            student_input = _load_cache_or_exit(run, _STUDENT_INPUT_VARIANT, cfg)
+            _check_cache_alignment(run.name, teacher, student_input)
+            calibration_windows = _select_calibration_windows(
+                student_input, teacher, seed=args.seed
+            )
+            teacher_cols = _teacher_target_columns(
+                teacher, primary_stream, expected_dim=student_cfg.out_dim
+            )
+            student_blocks.append(student_input.features[calibration_windows])
+            teacher_blocks.append(teacher.features[calibration_windows][:, teacher_cols])
+            # Zero-contribution runs stay visible in the counts (A4.1's
+            # coverage-visibility principle: never silently absent).
+            calibration_windows_per_run[run.name] = int(calibration_windows.size)
+        student_inputs = np.vstack(student_blocks)
+        teacher_targets = np.vstack(teacher_blocks)
+        if student_inputs.shape[0] == 0:
+            print(
+                f"distill_beats: no calibration-side window(s) across runs "
+                f"{', '.join(run_names)} -- nothing to distill on",
+                file=sys.stderr,
+            )
+            return 1
+        label = "+".join(run_names)
+        logger.info(
+            "distill_beats: %d calibration-side window(s) stacked across %d run(s) "
+            "(per-run counts: %s); teacher target = %s slice of the audio-beats cache",
+            student_inputs.shape[0], len(pool_runs), calibration_windows_per_run,
+            primary_stream,
+        )
+    else:
+        run = _resolve_run_or_exit(args.run, cfg)
+        t0 = time.monotonic()
+        teacher = _load_cache_or_exit(run, _TEACHER_VARIANT, cfg)
+        student_input = _load_cache_or_exit(run, _STUDENT_INPUT_VARIANT, cfg)
+
+        _check_cache_alignment(run.name, teacher, student_input)
+
+        calibration_windows = _select_calibration_windows(student_input, teacher, seed=args.seed)
+        if calibration_windows.size == 0:
+            print(
+                f"distill_beats: no calibration-side window(s) for run {run.name!r} -- "
+                "nothing to distill on",
+                file=sys.stderr,
+            )
+            return 1
+
+        teacher_cols = _teacher_target_columns(
+            teacher, primary_stream, expected_dim=student_cfg.out_dim
+        )
+        student_inputs = student_input.features[calibration_windows]
+        teacher_targets = teacher.features[calibration_windows][:, teacher_cols]
+        label = run.name
+        logger.info(
+            "distill_beats: %d calibration-side window(s) for run %s (of %d/%d valid); "
+            "teacher target = %d-column %s slice of the audio-beats cache",
+            student_inputs.shape[0], run.name,
+            int(student_input.valid_mask.sum()), int(teacher.valid_mask.sum()),
+            int(teacher_cols.size), primary_stream,
+        )
+
     model, epoch_losses = _train_student(
         student_inputs, teacher_targets, student_cfg,
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed,
     )
 
-    checkpoint_path = args.out / f"student_{run.name}.pt"
-    _save_checkpoint(checkpoint_path, student_cfg, model, _TEACHER_VARIANT, run.name, args.epochs)
+    checkpoint_path = args.out / f"student_{label}.pt"
+    _save_checkpoint(checkpoint_path, student_cfg, model, _TEACHER_VARIANT, label, args.epochs)
     elapsed_s = time.monotonic() - t0
 
-    sidecar = {
-        "run": run.name,
+    # Provenance block: the single-run sidecar keeps its exact historical
+    # shape ("run", unchanged note); a multi-run sidecar instead carries the
+    # runs list, the A3.11-required per-run calibration-window counts, and
+    # the pool-suffixed leakage note.
+    if calibration_windows_per_run is None:
+        provenance: dict[str, object] = {"run": label}
+        note = _LEAKAGE_NOTE
+    else:
+        provenance = {
+            "runs": run_names,
+            "calibration_windows_per_run": calibration_windows_per_run,
+        }
+        note = _LEAKAGE_NOTE + _MULTI_RUN_NOTE
+    sidecar: dict[str, object] = {
+        **provenance,
         "teacher_variant": _TEACHER_VARIANT,
         "teacher_stream": primary_stream,
         "student_input_variant": _STUDENT_INPUT_VARIANT,
@@ -535,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_calibration_windows": int(student_inputs.shape[0]),
         "final_loss": epoch_losses[-1],
         "elapsed_s": elapsed_s,
-        "note": _LEAKAGE_NOTE,
+        "note": note,
     }
     sidecar_path = checkpoint_path.with_suffix(".json")
     sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
