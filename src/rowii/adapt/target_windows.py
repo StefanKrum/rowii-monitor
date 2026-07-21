@@ -433,6 +433,7 @@ def _iter_windows_multi(
         for run in runs
     ]
     n_yielded = 0
+    yielded_per_run: dict[str, int] = {name: 0 for name, _ in rotation}
     while rotation:
         survivors: list[tuple[str, Iterator[np.ndarray]]] = []
         for name, windows in rotation:
@@ -440,10 +441,19 @@ def _iter_windows_multi(
             if window is None:
                 # Exhausted -- this run drops out of the rotation for good
                 # (never re-probed: iter_target_windows yields each
-                # calibration-side window exactly once).
+                # calibration-side window exactly once). A run that never
+                # contributed ANY window is warned about here (T8-review
+                # MEDIUM: sidecar-only visibility is not a runtime signal),
+                # matching the A4.1 nothing-drops-silently posture.
+                if yielded_per_run[name] == 0:
+                    logger.warning(
+                        "iter_target_windows_multi: pool run %s contributed ZERO "
+                        "calibration-side windows", name,
+                    )
                 continue
             survivors.append((name, windows))
             yield name, window
+            yielded_per_run[name] += 1
             n_yielded += 1
             if n_yielded >= max_windows:
                 return

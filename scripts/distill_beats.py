@@ -129,10 +129,27 @@ _CALIBRATION_FRAC = 0.5
 calibration/scoring split fraction every Step-2 sweep uses (module docstring's
 leakage-rule section)."""
 
-_LEAKAGE_NOTE = (
+def _leakage_note(seed: int) -> str:
+    """The sidecar leakage note, SEED-CONDITIONAL (T8-review HIGH: the previous
+    static string claimed 'the SAME top-level split every Step-2 within-day
+    sweep uses' unconditionally -- true at seed=7, FALSE at any other seed,
+    yet persisted verbatim into provenance). At the canonical seed the claim
+    stands; at any other seed an explicit does-NOT-match caveat is appended."""
+    note = _LEAKAGE_NOTE_BASE.format(seed=seed)
+    if seed != 7:
+        note += (
+            f" CAVEAT: seed={seed} != 7 -- this split does NOT match the canonical "
+            "seed-7 split the Step-2 evaluations use; the leakage guarantee holds "
+            f"only against seed-{seed} evaluations."
+        )
+    return note
+
+
+_LEAKAGE_NOTE_BASE = (
     "distillation trains on calibration-side windows only (rowii.anomaly.references."
     "split_by_segments on the logmel student-input cache's own segment_ids/valid_mask, "
-    "AND-ed with the audio-beats teacher cache's own valid_mask, calibration_frac=0.5) "
+    "AND-ed with the audio-beats teacher cache's own valid_mask, calibration_frac=0.5, "
+    "seed={seed}) "
     "-- the SAME top-level split every Step-2 within-day sweep draws its own "
     "calibration/scoring windows from for this run. Any Step-1/Step-2 result computed "
     "from this checkpoint's audio-student variant must restate that the student was "
@@ -543,8 +560,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seed", type=int, default=7,
-        help="Seeds weight init, the calibration/scoring split, and shuffling "
-             "(default: 7).",
+        help="Seeds weight init, shuffling, AND the per-run calibration/scoring "
+             "SPLIT (default: 7 -- the canonical seed every Step-2 sweep uses). A "
+             "non-7 seed voids the leakage guarantee vs the seed-7 evaluations "
+             "(the sidecar note then carries an explicit caveat); pretrain_tfc "
+             "pins its split at 7, this CLI keeps the shipped P5 contract and "
+             "WARNS instead.",
     )
     parser.add_argument(
         "--out", type=Path, default=Path("models/adapted/"),
@@ -558,6 +579,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.seed != 7:
+        logger.warning(
+            "distill_beats: --seed %d != 7 changes the per-run calibration/scoring "
+            "SPLIT -- the checkpoint's leakage guarantee holds only against a "
+            "seed-%d evaluation, NOT the canonical seed-7 Step-2 sweeps; the "
+            "sidecar note carries this caveat (T8-review seed-tension resolution)",
+            args.seed, args.seed,
+        )
 
     # Parse-level --runs validation (empty/duplicates) runs BEFORE the torch
     # import guard: a malformed flag value is a usage error regardless of the
@@ -603,6 +633,11 @@ def main(argv: list[str] | None = None) -> int:
             # Zero-contribution runs stay visible in the counts (A4.1's
             # coverage-visibility principle: never silently absent).
             calibration_windows_per_run[run.name] = int(calibration_windows.size)
+        if calibration_windows.size == 0:
+            logger.warning(
+                "distill_beats: pool run %s contributed ZERO calibration-side "
+                "windows", run.name,
+            )
         student_inputs = np.vstack(student_blocks)
         teacher_targets = np.vstack(teacher_blocks)
         if student_inputs.shape[0] == 0:
@@ -665,13 +700,13 @@ def main(argv: list[str] | None = None) -> int:
     # the pool-suffixed leakage note.
     if calibration_windows_per_run is None:
         provenance: dict[str, object] = {"run": label}
-        note = _LEAKAGE_NOTE
+        note = _leakage_note(args.seed)
     else:
         provenance = {
             "runs": run_names,
             "calibration_windows_per_run": calibration_windows_per_run,
         }
-        note = _LEAKAGE_NOTE + _MULTI_RUN_NOTE
+        note = _leakage_note(args.seed) + _MULTI_RUN_NOTE
     sidecar: dict[str, object] = {
         **provenance,
         "teacher_variant": _TEACHER_VARIANT,
