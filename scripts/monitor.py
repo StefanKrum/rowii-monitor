@@ -148,6 +148,11 @@ _DEFAULT_ROLLING_MINUTES = 60.0
 """`--thresholds rolling`'s default trailing-window length M in minutes -- A3.2's
 binding default (its motivating probe on 290626-tu: at M=20 only 46.8% of scored
 windows reach the conformal floor, states 2/3 at 0%; at M=60 still 53.8%)."""
+_MAX_ROLLING_MINUTES = 5_256_000.0
+"""Upper guard for `--rolling-minutes` (~10 years): far beyond any real use, and
+values above ~1.5e8 minutes overflow the int64 nanosecond arithmetic in
+`_trailing_bounds` (T5-review finding 4 -- a raw OverflowError instead of the
+CLI's clean exit-2 contract)."""
 
 _DEFAULT_NORM_MINUTES = 20.0
 """`--session-norm` fallback prefix length for the MONITORED run's own stats when
@@ -537,6 +542,25 @@ def _recalibrate_verdicts(
     )
 
 
+
+def _trailing_bounds(
+    cal_t: np.ndarray, scr_t: np.ndarray, m_ns: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per scored-window start time `t`, the [lo, hi) index range of SORTED
+    calibration start times inside the half-open trailing interval
+    `[t - m_ns, t)` -- INCLUSIVE at the lower edge, EXCLUSIVE at the upper.
+
+    Factored out (T5-review finding 1) because the upper-edge exclusivity is
+    structurally unreachable through the CLI (calibration and scoring windows
+    are segment-disjoint, so `cal_t == scr_t` never occurs in real runs) --
+    only a direct unit test on synthetic arrays can pin it, and a future
+    relaxation of that disjointness elsewhere must not silently flip this
+    boundary.
+    """
+    lo = np.searchsorted(cal_t, scr_t - m_ns, side="left")
+    hi = np.searchsorted(cal_t, scr_t, side="left")
+    return lo, hi
+
 def _rolling_floor(alpha: float) -> int:
     """Smallest trailing calibration count at which `calibrate(..., alpha)` yields a
     REAL (finite, non-low-confidence) threshold -- mathematically `ceil(1/alpha) - 1`
@@ -627,8 +651,7 @@ def _rolling_verdicts(
 
             cal_t = prepared.grid.t0_ns + label_cal.astype(np.int64) * prepared.grid.window_ns
             scr_t = prepared.grid.t0_ns + label_scr.astype(np.int64) * prepared.grid.window_ns
-            lo = np.searchsorted(cal_t, scr_t - m_ns, side="left")
-            hi = np.searchsorted(cal_t, scr_t, side="left")
+            lo, hi = _trailing_bounds(cal_t, scr_t, m_ns)
             rolling_mask = (hi - lo) >= floor
 
             fallback_idx = label_scr[~rolling_mask]
@@ -1035,10 +1058,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if args.rolling_minutes is not None and not (
-        math.isfinite(args.rolling_minutes) and args.rolling_minutes > 0.0
+        math.isfinite(args.rolling_minutes)
+        and 0.0 < args.rolling_minutes <= _MAX_ROLLING_MINUTES
     ):
         print(
-            f"monitor: --rolling-minutes must be a positive number of minutes, got "
+            f"monitor: --rolling-minutes must be a positive number of minutes "
+            f"<= {_MAX_ROLLING_MINUTES:g} (about a decade -- larger values overflow "
+            f"the int64 ns arithmetic, T5-review finding), got "
             f"{args.rolling_minutes!r}",
             file=sys.stderr,
         )
@@ -1069,9 +1095,11 @@ def main(argv: list[str] | None = None) -> int:
             "monitor: snapshot %s stores session-normalization stats (fitted under "
             "--session-norm) but --session-norm is OFF -- its stored FROZEN "
             "thresholds/calibration scores live in the session-normalized space and "
-            "would be compared against RAW-space scores; recalibrate mode is "
-            "unaffected (thresholds recomputed on this run's raw scores against the "
-            "raw references)",
+            "would be compared against RAW-space scores; this affects frozen mode "
+            "AND rolling mode's fit_day_fallback branch (which reuses exactly those "
+            "stored thresholds/scores); recalibrate mode and rolling's rolling "
+            "branch are unaffected (thresholds recomputed on this run's raw scores "
+            "against the raw references)",
             args.snapshot,
         )
 
