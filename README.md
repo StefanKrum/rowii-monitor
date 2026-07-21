@@ -1288,10 +1288,13 @@ references + per-day (or rolling) threshold recalibration, not frozen artifacts.
 | audio-beats (frozen BEATs) | 0.233 | 0.068 |
 | audio-tfc (MIMII TF-C) | 0.305 | 0.217 |
 | audio (handcrafted) | 0.481 | 0.197 |
-| audio-student (pooled distill) | 0.360 | 0.154 |
+| audio-student (pooled distill)* | 0.360 | 0.154 |
 
 Fusion wins cross-day FAR control decisively; frozen BEATs is second. (290626-pu
 replicates the fusion-first ordering at 0.301|0.031 vs audio-beats 0.686|0.038.)
+*The audio-student row is NOT held-out for the student itself: its distillation
+pool contains 290626-tu's calibration side (checkpoint sidecar), so read it as
+context only — the student's valid held-out evidence is pillar 3 below.
 
 ### D3 — session normalization: falsified as a frozen-transfer fix
 
@@ -1350,61 +1353,84 @@ approximates full recalibration without a second pass; M=60 is the default.
 ### Pillar 3 — induced hammer strikes (080726, era C): the headline
 
 Corrected ground truth, ±5 s tolerance, event-level TPR | realized window-FAR;
-pool-B1 snapshots, recalibrate mode. PU session = 13 strikes DURING PUMPING
-(−279 MW); ST session = 13 strikes at standstill. All snapshots are fit on era-B
-days only -> every number below is [cross-cfg] AND zero-shot on the strike day.
+pool-B1 snapshots, recalibrate mode WITH event-free calibration
+(`--exclude-calibration-events`, spec A2.3.3): the ground-truth intervals
+(±5 s) are banned from the calibration side and scored instead, so thresholds
+are calibrated on strike-free windows and every event is evaluable. (The first
+pass omitted this; strike minutes landing in calibration segments were consumed
+— structurally undetectable — and contaminated the ST thresholds. The
+whole-branch review caught it; the numbers below are the corrected evaluation.)
+PU session = 13 strikes DURING PUMPING (−279 MW); ST session = 13 strikes at
+standstill. All snapshots are fit on era-B days only -> every number below is
+[cross-cfg] AND zero-shot on the strike day.
 
-**PU (pumping), TPR at alpha 0.01 / 0.05 / 0.10:**
+**PU (pumping), TPR at alpha 0.01 / 0.05 / 0.10 (window-FAR@0.05):**
 
 | representation | 0.01 | 0.05 | 0.10 | FAR@0.05 |
 |---|---|---|---|---|
-| audio (handcrafted) | 0.62 | **0.77** | **0.77** | 0.061 |
-| audio-beats (frozen BEATs) | **0.69** | 0.69 | 0.69 | 0.050 |
-| audio-student (pooled distill) | 0.62 | 0.69 | 0.77 | 0.069 |
-| fusion | 0.31 | 0.69 | 0.69 | **0.047** |
-| audio-tfc | 0.08 | 0.23 | 0.46 | 0.081 |
+| audio (handcrafted) | **0.85** | **0.92** | **1.00** | 0.063 |
+| audio-beats (frozen BEATs) | **0.85** | 0.85 | 0.92 | 0.049 |
+| audio-student (pooled distill) | 0.77 | **0.92** | **1.00** | 0.068 |
+| fusion | 0.54 | **0.92** | **1.00** | **0.046** |
+| audio-tfc | 0.08 | 0.23 | 0.69 | 0.076 |
 
-**ST (standstill):** every representation saturates at TPR 0.385 (5/13) from
-alpha 0.05; audio-beats reaches it already at alpha 0.01 with window-FAR
-**0.0000** — alarms fire ONLY at strikes. The detected five are the four
-turbine-floor plate strikes + the guide-vane sweep; the generator-floor plates
-and the distant landmarks (EG, 11TG, Kugelschieber) stay under threshold at
-standstill. In the PU session 11/13 detect (typical latency 1.4–2.4 s); the
-misses are the first two strike minutes and the distant EG landmark.
+**ST (standstill), TPR at alpha 0.01 / 0.05 / 0.10 (window-FAR@0.01):**
+
+| representation | 0.01 | 0.05 | 0.10 | FAR@0.01 |
+|---|---|---|---|---|
+| audio-beats (frozen BEATs) | **1.00** | 1.00 | 1.00 | 0.003 |
+| audio-student (pooled distill) | **1.00** | 1.00 | 1.00 | 0.003 |
+| audio-tfc | 0.92 | 1.00 | 1.00 | **0.000** |
+| fusion | 0.92 | 1.00 | 1.00 | 0.022 |
+| audio (handcrafted) | 0.38 | 1.00 | 1.00 | 0.003 |
+
+At standstill EVERY representation detects all 13 strikes from alpha 0.05 —
+including the distant landmarks (EG, 11TG, Kugelschieber) — and frozen BEATs +
+the student do it already at alpha 0.01 with window-FAR 0.003. During pumping,
+three representations reach 13/13 at alpha 0.10; audio-beats detects 11/13 at
+the strictest alpha 0.01 with window-FAR 0.008. Typical latencies 0.3–4 s
+(minute-level ground truth; seconds pending).
 
 Readings: (1) frozen BEATs — zero plant-specific training — is the best
-low-alpha operating point (PU 0.69 TPR at 0.008 window-FAR; ST perfect
-precision), the strongest universality datum in the package; (2) the 0.8 MB
-distilled student tracks its 361 MB teacher within one event on every cell —
-the compact deployment path costs almost nothing on real anomalies;
-(3) audio-tfc, the best STATE-structure transfer, is the WORST transient
-detector — representation choice is task-dependent; (4) fusion's vibration
-channels add nothing for airborne strikes (consistent with the plate source
-class); (5) detection latencies of 1–3 s at controlled FAR are compatible with
-the monitoring use case.
+strict-alpha operating point in BOTH sessions (PU 11/13 at 0.008 FAR, ST 13/13
+at 0.003 FAR), the strongest universality datum in the package; (2) the 0.8 MB
+distilled student matches or beats its 361 MB teacher in every cell but
+strict-alpha PU — the compact deployment path costs almost nothing on real
+anomalies; (3) audio-tfc, the best STATE-structure transfer, is the weakest
+pumping-transient detector — representation choice is task-dependent (though
+even it reaches 13/13 at standstill from alpha 0.05); (4) fusion's vibration
+channels add nothing over audio-only for these (airborne-dominated) strikes;
+(5) evaluation methodology is itself a result: without event-free calibration
+the SAME artifacts read as TPR ceilings of 0.38 (ST) / 0.77 (PU) — induced-
+event days MUST ban event windows from calibration or they understate the
+detector and contaminate its thresholds.
 
 ### The best-system statement (comparison-derived, A2.1/A4.5)
 
 Per-state kNN + split conformal on FROZEN representations, pooled multi-day
-references, per-day or rolling (M=60) recalibration. Representation by target:
-fusion for cross-day FAR control (0.03–0.10 across all six rotations),
-audio-beats or handcrafted audio for event detection (and audio-student when
-size matters). Every plant-tuning attempt in this package — TF-C-PSHP continued
-pretraining, session normalization, multi-day LoRA/student pools — failed to
-beat its frozen/universal counterpart on held-out days: with scarce data, the
-universal-encoder + calibration-layer architecture IS the best system we can
-justify, which is the thesis' universality claim made empirical. The final
-deployed artifact pools ALL available days (A4.5); the rotation numbers above
-are its honest generalization estimate.
+references, per-day or rolling (M=60) recalibration with event-aware
+calibration exclusion on induced-event days. Representation by target: fusion
+for cross-day FAR control (0.03–0.10 across all six rotations), frozen BEATs
+for strict-alpha event detection (11/13 pumping + 13/13 standstill at
+alpha 0.01), handcrafted audio or the 0.8 MB student for maximum event recall
+at alpha >= 0.05. Every plant-tuning attempt in this package — TF-C-PSHP
+continued pretraining, session normalization, multi-day LoRA/student pools —
+failed to beat its frozen/universal counterpart on held-out days: with scarce
+data, the universal-encoder + calibration-layer architecture IS the best system
+we can justify, which is the thesis' universality claim made empirical. The
+final deployed artifact pools ALL available days (A4.5); the rotation numbers
+above are its honest generalization estimate.
 
 Honesty: no real machine faults exist in any recording — induced strikes are
 surrogate transients (verified minute-level ground truth, seconds pending);
-ST/PU detection ceilings reflect sensor placement and plant noise, not
+detection numbers reflect these sensors and this plant's noise, not
 exhaustively tuned detectors; the audio-student rotation on 290626-tu is
 pool-tainted for the STUDENT (its distillation pool contains that day's
 calibration side) and is excluded from held-out claims — its pillar-3 numbers
-(080726, never seen) are the valid ones. Execution surfaced and fixed three
+(080726, never seen) are the valid ones. Execution surfaced and fixed FOUR
 deployment-reality defects now under test: ground-truth CSV comment parsing,
 channel-availability drift between fit and monitored days (monitor now projects
-onto the snapshot's feature contract), and DAQ stream-set grid skew between
-audio-beats and logmel caches (distill now pairs by integer window shift).
+onto the snapshot's feature contract), DAQ stream-set grid skew between
+audio-beats and logmel caches (distill now pairs by integer window shift), and
+event-contaminated calibration on induced-event days (monitor now supports
+`--exclude-calibration-events`; found by the final whole-branch review).
