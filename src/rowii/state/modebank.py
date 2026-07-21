@@ -72,7 +72,10 @@ class GmmModeScorer:
         self.n_components = n_components
         self.random_seed = random_seed
         self._model = GaussianMixture(
-            n_components=n_components, covariance_type="diag", random_state=random_seed
+            n_components=n_components,
+            covariance_type="diag",
+            random_state=random_seed,
+            reg_covar=1e-6,  # sklearn's own default, pinned explicitly for provenance
         )
 
     def fit(self, reference: np.ndarray) -> GmmModeScorer:
@@ -144,6 +147,14 @@ class ModeBank:
     """Mode name -> its fit-window count, for every GT mode present in the fit
     pool that did NOT survive to become a bank member (below `min_ref`, or zero
     calibration windows)."""
+    low_confidence_modes: tuple[str, ...]
+    """Sorted names of surviving members (present in `modes`) whose
+    `thresholds[mode].low_confidence` is True -- too few calibration scores for
+    `alpha` (`rowii.anomaly.conformal.calibrate`), so `threshold` is `+inf` and
+    the member can NEVER contribute a rejection to `assign`'s whole-bank
+    `no_mode_fits` AND-conjunction (review finding, T2: this used to be silent --
+    see `fit`'s WARNING log and `assign`'s docstring caveat). Empty when every
+    surviving member calibrated with enough data."""
     feature_names: list[str]
     """Column names of the feature matrices this bank was fit on, in order --
     `assign`'s width check is against `len(feature_names)`."""
@@ -218,15 +229,27 @@ class ModeBank:
             no mode clears both floors).
 
         Raises:
-            ValueError: if *family* is not one of `_FAMILIES`; if
-                *fit_features*/*calib_features* is not 2-D, its column count
-                does not match `len(feature_names)`, or its row count does not
-                match its paired labels array (loud geometry -- a caller
-                assembling the pool/GT arrays independently is the most likely
-                source of a silent misalignment otherwise).
+            ValueError: if *family* is not one of `_FAMILIES`; if *family* is
+                `"knn"` and *min_ref* < *k* (every mode clearing the fit-side
+                reference floor must have enough rows for `KnnScorer`'s own
+                `k`-vs-reference-size check to never fire -- caught up front
+                here with both values named, instead of surfacing later as a
+                `KnnScorer.fit` error for whichever mode happens to sit closest
+                to the floor); if *fit_features*/*calib_features* is not 2-D,
+                its column count does not match `len(feature_names)`, or its
+                row count does not match its paired labels array (loud
+                geometry -- a caller assembling the pool/GT arrays
+                independently is the most likely source of a silent
+                misalignment otherwise).
         """
         if family not in _FAMILIES:
             raise ValueError(f"family must be one of {_FAMILIES}, got {family!r}")
+        if family == "knn" and min_ref < k:
+            raise ValueError(
+                f"family='knn' requires min_ref >= k (a mode clearing the fit-side "
+                f"reference floor must have enough rows for its own kNN scorer), got "
+                f"min_ref={min_ref} and k={k}"
+            )
         if fit_features.ndim != 2 or calib_features.ndim != 2:
             raise ValueError(
                 f"fit_features/calib_features must be 2-D, got shapes "
@@ -323,6 +346,28 @@ class ModeBank:
                 min_ref,
             )
 
+        low_confidence_modes = tuple(
+            sorted(mode for mode, t in thresholds.items() if t.low_confidence)
+        )
+        if low_confidence_modes:
+            # review finding, T2: `rejected &= scores[:, j] > threshold` in `assign`
+            # means a member whose threshold is +inf (low_confidence) can NEVER
+            # contribute a rejection -- it silently makes the whole-bank
+            # no_mode_fits signal under-fire for every window instead of raising
+            # or abstaining. Surfacing the affected modes here (WARNING + field)
+            # is the fix in scope; the conjunction itself is unchanged (see
+            # `assign`'s docstring).
+            logger.warning(
+                "modebank: %d surviving mode(s) %s calibrated with low_confidence=True "
+                "(fewer calibration windows than alpha=%s needs) -- threshold is +inf "
+                "for each, so these members can NEVER contribute a rejection and "
+                "whole-bank no_mode_fits under-fires while they survive (see "
+                "ModeBank.low_confidence_modes)",
+                len(low_confidence_modes),
+                low_confidence_modes,
+                alpha,
+            )
+
         return cls(
             family=family,
             modes=sorted(members),
@@ -332,6 +377,7 @@ class ModeBank:
             thresholds=thresholds,
             calibration_scores=cal_scores,
             dropped_modes=dropped,
+            low_confidence_modes=low_confidence_modes,
             feature_names=list(feature_names),
             alpha=alpha,
             min_ref=min_ref,
@@ -348,6 +394,19 @@ class ModeBank:
         member's OWN conformal threshold (`self.thresholds[mode].threshold`) --
         rejected as an outlier by all of them simultaneously, not merely by its
         closest match.
+
+        Caveat (review finding, T2): a member listed in `self.low_confidence_modes`
+        has `self.thresholds[mode].threshold == +inf` (too few calibration scores
+        for `alpha`, see `rowii.anomaly.conformal.calibrate`), so `scores[:, j] >
+        threshold` is `False` for every finite score -- that member can NEVER
+        contribute a rejection to the AND-conjunction above. `no_mode_fits`
+        therefore UNDER-fires (misses windows a fully-calibrated bank would have
+        flagged) for as long as ANY surviving member is low-confidence, silently
+        turning "not enough data to judge this mode" into an apparent "some mode
+        fits". This is the deliberately conservative veto semantics -- abstain
+        rather than alarm on too little calibration data -- not a bug to route
+        around here; any downstream reporting of `no_mode_fits` MUST also surface
+        `self.low_confidence_modes` alongside it.
 
         Args:
             features: `(W, F)` finite feature matrix, `F == len(feature_names)`.
