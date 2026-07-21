@@ -357,24 +357,65 @@ def _corpus_manifest_sha256(corpus: str, data_root: Path) -> str:
     return hasher.hexdigest()
 
 
+_POOL_SIGNATURE_STREAM = "RAWGeneratorMic__0"
+"""The stream whose burst files determine the pool windows (`iter_target_windows`
+reads the primary mic) -- the file-signature side of the pool fingerprint stats
+exactly these files."""
+
+
+def _pool_file_signatures(runs: Sequence[Run]) -> list[list[tuple[str, int, int]]]:
+    """Per run (in *runs* order): `(basename, size_bytes, mtime_ns)` for every
+    `_POOL_SIGNATURE_STREAM` burst file, sorted by basename -- `stat()` only,
+    no audio is read. A run without mic files signs as an empty list (it also
+    yields zero windows). A file that exists in discovery but cannot be
+    stat'ed is a loud SystemExit (the corpus moved under us -- refusing beats
+    silently mis-fingerprinting)."""
+    signatures: list[list[tuple[str, int, int]]] = []
+    for run in runs:
+        entries: list[tuple[str, int, int]] = []
+        for burst in sorted(
+            run.files.get(_POOL_SIGNATURE_STREAM, ()), key=lambda b: b.path.name
+        ):
+            try:
+                stat = burst.path.stat()
+            except OSError as exc:
+                print(
+                    f"pretrain_tfc: cannot stat pool source file {burst.path} "
+                    f"({exc}) -- refusing to fingerprint a moving corpus",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2) from exc
+            entries.append((burst.path.name, int(stat.st_size), int(stat.st_mtime_ns)))
+        signatures.append(entries)
+    return signatures
+
+
 def _pool_fingerprint(
-    run_names: Sequence[str], per_run_counts: Sequence[int], target_hz: int
+    run_names: Sequence[str],
+    target_hz: int,
+    file_signatures: Sequence[Sequence[tuple[str, int, int]]],
 ) -> str:
-    """Identity of a materialized PSHP pool (spec A3.9): sha256 over the pool
-    run names, their per-run window counts, and the target sample rate --
-    serialized as canonical JSON (sorted keys, no whitespace) so the digest
-    is stable across processes. Everything that changes what
-    `_materialize_pool_windows` would produce changes this digest: a
-    different pool list, a run whose calibration side grew/shrank (e.g.
-    re-ingested data), or a different window rate. Deliberately NOT hashed:
-    `--seed`/`--max-windows` (they act AFTER materialization, on the training
-    subsample) and the split seed (pinned at 7 inside `iter_target_windows`,
-    module docstring)."""
+    """Identity of a materialized PSHP pool (spec A3.9, HARDENED per the T6
+    review): sha256 over the pool run names, the target sample rate, and the
+    per-run `(basename, size, mtime_ns)` signatures of the mic-stream burst
+    files -- serialized as canonical JSON so the digest is stable across
+    processes. The file signatures are the load-bearing part: a fingerprint of
+    names + window COUNTS alone was proven blind to a same-structure re-ingest
+    with different CONTENT (the exact bug class `scripts/scarcity_detection.py`'s
+    manifest already guards with size+mtime -- the P6-review precedent this now
+    mirrors). Computable BEFORE materialization (stat only), so the cache-HIT
+    check validates freshness against the live corpus on every invocation.
+    Deliberately NOT hashed: `--seed`/`--max-windows` (they act AFTER
+    materialization, on the training subsample) and the split seed (pinned at 7
+    inside `iter_target_windows`, module docstring)."""
     payload = json.dumps(
         {
             "runs": list(run_names),
-            "counts": [int(count) for count in per_run_counts],
             "target_hz": int(target_hz),
+            "files": [
+                [[name, size, mtime] for name, size, mtime in run_signature]
+                for run_signature in file_signatures
+            ],
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -383,17 +424,18 @@ def _pool_fingerprint(
 
 
 def _load_cached_pool_windows(
-    npz_path: Path, pool_runs: list[str], target_hz: int
+    npz_path: Path, pool_runs: list[str], expected_fingerprint: str
 ) -> tuple[np.ndarray, np.ndarray, str] | None:
     """Reuse a previously materialized pool npz (spec A3.9's materialize-ONCE
-    rule) if -- and only if -- it is the pool the caller asked for.
-
-    Validation is fully self-contained (no Gantner file is touched): the
-    stored fingerprint must equal `_pool_fingerprint` recomputed from the
-    REQUESTED run names + the npz's OWN per-run counts + *target_hz* (a
-    different `--pool-runs` list therefore always misses), the stored member
-    set/geometry/dtype must match the npz contract, and the counts must sum
-    to the window rows. Any unreadable or malformed file is a MISS (warned,
+    rule) if -- and only if -- it is the pool the caller asked for AND the
+    live corpus still matches (T6-review hardening: *expected_fingerprint* is
+    the file-signature `_pool_fingerprint` computed by the caller from the
+    CURRENT on-disk burst files via a stat-only pass -- a same-structure
+    re-ingest with different content therefore MISSES instead of silently
+    serving stale windows; no audio is ever read for validation). The stored
+    run-name list must equal the requested one, the stored member set/
+    geometry/dtype must match the npz contract, and the counts must sum to
+    the window rows. Any unreadable or malformed file is a MISS (warned,
     then re-materialized), never an error -- a half-written cache from an
     interrupted run heals itself on the next invocation.
 
@@ -423,12 +465,11 @@ def _load_cached_pool_windows(
         )
         return None
 
-    expected_fingerprint = _pool_fingerprint(pool_runs, per_run_counts.tolist(), target_hz)
     consistent = (
         stored_fingerprint == expected_fingerprint
         and run_names == pool_runs
         and windows.ndim == 2
-        and windows.shape[1] == target_hz
+        and windows.shape[1] == _POOL_TARGET_HZ
         and windows.dtype == np.float32
         and per_run_counts.shape[0] == len(pool_runs)
         and int(per_run_counts.sum()) == int(windows.shape[0])
@@ -448,7 +489,7 @@ def _load_cached_pool_windows(
 
 
 def _materialize_pool_windows(
-    runs: list[Run], data_cfg: Config, npz_path: Path, target_hz: int
+    runs: list[Run], data_cfg: Config, npz_path: Path, target_hz: int, fingerprint: str
 ) -> tuple[np.ndarray, np.ndarray, str]:
     """Draw every pool run's calibration-side windows (module docstring's
     leakage rule: `iter_target_windows` at ITS pinned split seed 7, resampled
@@ -459,11 +500,14 @@ def _materialize_pool_windows(
     poison every later run -- `main()`'s no-windows exit handles it) and
     returns an empty array.
 
+    *fingerprint* is the caller-computed `_pool_fingerprint` (file-signature
+    based, T6-review hardening) recorded verbatim in the npz -- this function
+    never computes identity itself, so cache-check and write can never drift.
+
     Returns:
         `(windows, per_run_counts, fingerprint)`: `(N, target_hz)` float32
         windows in pool order, `int64` per-run counts aligned with *runs*,
-        and the `_pool_fingerprint` of what was (or, for the empty pool,
-        would have been) written.
+        and *fingerprint* passed through.
     """
     run_names = [run.name for run in runs]
     logger.info(
@@ -487,7 +531,6 @@ def _materialize_pool_windows(
             logger.info("pretrain_tfc: pool run %s -- %d window(s)", run.name, n_run)
 
     per_run_counts = np.asarray(counts, dtype=np.int64)
-    fingerprint = _pool_fingerprint(run_names, counts, target_hz)
     if not all_windows:
         return np.empty((0, target_hz), dtype=np.float32), per_run_counts, fingerprint
 
@@ -513,17 +556,29 @@ def _load_continue_checkpoint(path: Path) -> tuple[TfcConfig, dict[str, torch.Te
     `cfg`, with `load_tfc_model`'s identical defensive `channels`-to-tuple
     coercion) and its model state dict, for `_train` to load as the init.
     Existence is checked by the caller (`main()`, a clean exit-2); a file
-    that exists but is not a TF-C checkpoint raises `SystemExit` with a
-    pointed message rather than a raw `KeyError` traceback."""
+    that exists but is not a TF-C checkpoint -- INCLUDING one torch cannot
+    even deserialize (garbage bytes, T6-review finding) -- prints a pointed
+    message to stderr and raises `SystemExit(2)`, never a raw traceback and
+    never the bare-string `SystemExit` whose process status is 1."""
     import torch
 
-    state = torch.load(path, map_location="cpu", weights_only=False)
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as exc:  # torch raises many types here; all mean "not a checkpoint"
+        print(
+            f"pretrain_tfc: --continue-from {path} could not be read as a torch "
+            f"checkpoint ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
     if not isinstance(state, dict) or "cfg" not in state or "model" not in state:
-        raise SystemExit(
+        print(
             f"pretrain_tfc: --continue-from {path} is not a Task-1-format TF-C checkpoint "
             "(expected a dict with 'cfg' and 'model' keys -- "
-            "rowii.tfc.wrapper.load_tfc_model's documented format)"
+            "rowii.tfc.wrapper.load_tfc_model's documented format)",
+            file=sys.stderr,
         )
+        raise SystemExit(2)
     cfg_dict = dict(state["cfg"])
     cfg_dict["channels"] = tuple(cfg_dict["channels"])
     return TfcConfig(**cfg_dict), state["model"]
@@ -640,7 +695,19 @@ def _train(
     if init_state is not None:
         # --continue-from: overwrite the fresh init with the source
         # checkpoint's weights (CPU tensors copy into the device parameters).
-        model.load_state_dict(init_state)
+        try:
+            model.load_state_dict(init_state)
+        except RuntimeError as exc:
+            # strict=True (the default) is load-bearing: under strict=False a
+            # MISSING key would silently keep its fresh random init -- a
+            # quietly corrupted "continued" run (T6-review finding). Normalize
+            # the mismatch to the CLI's loud exit-2 contract.
+            print(
+                f"pretrain_tfc: --continue-from state dict does not match the "
+                f"model architecture ({exc})",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     x_all = torch.from_numpy(windows.astype(np.float32)).to(device)
@@ -816,22 +883,30 @@ def main(argv: list[str] | None = None) -> int:
             print("pretrain_tfc: --pool-runs is empty -- nothing to pool", file=sys.stderr)
             return 2
         npz_path = args.out / _POOL_WINDOWS_FILENAME
-        cached = _load_cached_pool_windows(npz_path, requested, _POOL_TARGET_HZ)
+        # T6-review hardening: discovery + a stat-only file-signature pass run on
+        # EVERY invocation (a few seconds) so the cache-HIT check validates
+        # freshness against the live corpus -- a counts-only fingerprint was
+        # proven blind to same-structure content changes.
+        data_cfg = load_config()
+        index = discover(data_cfg.data_root)
+        runs_by_name = {run.name: run for run in index.runs}
+        unknown = [name for name in requested if name not in runs_by_name]
+        if unknown:
+            available = ", ".join(sorted(runs_by_name)) or "(none discovered)"
+            print(
+                f"pretrain_tfc: unknown --pool-runs run(s): {', '.join(unknown)}; "
+                f"available runs: {available}",
+                file=sys.stderr,
+            )
+            return 2
+        pool_run_objs = [runs_by_name[name] for name in requested]
+        expected_fp = _pool_fingerprint(
+            requested, _POOL_TARGET_HZ, _pool_file_signatures(pool_run_objs)
+        )
+        cached = _load_cached_pool_windows(npz_path, requested, expected_fp)
         if cached is None:
-            data_cfg = load_config()
-            index = discover(data_cfg.data_root)
-            runs_by_name = {run.name: run for run in index.runs}
-            unknown = [name for name in requested if name not in runs_by_name]
-            if unknown:
-                available = ", ".join(sorted(runs_by_name)) or "(none discovered)"
-                print(
-                    f"pretrain_tfc: unknown --pool-runs run(s): {', '.join(unknown)}; "
-                    f"available runs: {available}",
-                    file=sys.stderr,
-                )
-                return 2
             cached = _materialize_pool_windows(
-                [runs_by_name[name] for name in requested], data_cfg, npz_path, _POOL_TARGET_HZ
+                pool_run_objs, data_cfg, npz_path, _POOL_TARGET_HZ, expected_fp
             )
         pool_windows, per_run_counts, pool_fingerprint = cached
         pool_runs = requested
