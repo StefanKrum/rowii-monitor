@@ -1,6 +1,6 @@
 # Step-2 Package 7: Robustness & Best System — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Multi-day/multi-mode pools with honest held-out-day evaluation, session normalization, rolling thresholds, TF-C-PSHP continued pretraining, vib-corpus v2, pool-adapted encoders/snapshot — and the first REAL pillar-3 run on the 080726 induced-strike day.
 
@@ -104,27 +104,27 @@
 
 ### Task 9: Execution A — baselines, rotations, norm ablation (spec §8.2–8.4)
 
-- [ ] Monitor baselines: P6 snapshot on 290626-pu + 250526-pu-morning (both modes).
-- [ ] k-selection: fit_pooled k ∈ {4,5,6} on canonical pool → GT-ARI per pool day → pick + record.
-- [ ] Rotations (both modes × α grid {0.01,0.05,0.10}): fit {010726-*} → test 290626-{tu,pu}; fit {290626-*} → test 010726-{tu_ph_tu,pu}; cross-config probes → 250526-tu, 250526-pu-morning; coverage tables archived.
-- [ ] Session-norm ablation on the same rotations (N ∈ {5,20,60}) + monitor `--session-norm` on the cross-config days.
-- [ ] H2/H3 verdict vs single-day baselines; ledger.
+- [x] Monitor baselines: P6 snapshot on 290626-pu + 250526-pu-morning (both modes).
+- [x] k-selection: fit_pooled k ∈ {4,5,6} on canonical pool → GT-ARI per pool day → pick + record.
+- [x] Rotations (both modes × α grid {0.01,0.05,0.10}): fit {010726-*} → test 290626-{tu,pu}; fit {290626-*} → test 010726-{tu_ph_tu,pu}; cross-config probes → 250526-tu, 250526-pu-morning; coverage tables archived.
+- [x] Session-norm ablation on the same rotations (N ∈ {5,20,60}) + monitor `--session-norm` on the cross-config days.
+- [x] H2/H3 verdict vs single-day baselines; ledger.
 
 ### Task 10: Execution B — TF-C-PSHP, vib v2, pool adaptation, rolling, pillar-3 (spec §8.5–8.8)
 
-- [ ] Materialize pool windows → `tfc_audio_pshp.pt` + scratch control → Step-1 ARI (all GT days) + rotation rows (checkpoint-swap archival procedure).
-- [ ] Downloads K003–K006 (live sha256 transcription) → `tfc_vib_v2.pt` (window count vs 808) → vibration evidence side by side.
-- [ ] Pool-adapted LoRA + student (`--runs` canonical pool) → held-out evaluations only (A3.1) → pool snapshot via from_parts → monitor held-out days incl. pump.
-- [ ] Rolling ablation M ∈ {30,60,120} on monitor runs; coverage stats.
-- [ ] **Pillar-3 on 080726**: warm caches done → pooled snapshot (pool WITHOUT 080726) → monitor 080726-pu_strikes + st_strikes (recalibrate primary; frozen as cross-era row; session-norm arm) → `eval_events.py` vs `docs/groundtruth/080726_events_{st,pu}.csv` (α grid; per-class breakdown plate/vane/landmark) → per-event TPR, latency, FAR. Bruno-firewall framing in every output.
-- [ ] Ledger + hypothesis verdicts H4/H5/H6.
+- [x] Materialize pool windows → `tfc_audio_pshp.pt` + scratch control → Step-1 ARI (all GT days) + rotation rows (checkpoint-swap archival procedure).
+- [x] Downloads K003–K006 (live sha256 transcription) → `tfc_vib_v2.pt` (window count vs 808) → vibration evidence side by side.
+- [x] Pool-adapted LoRA + student (`--runs` canonical pool) → held-out evaluations only (A3.1) → pool snapshot via from_parts → monitor held-out days incl. pump.
+- [x] Rolling ablation M ∈ {30,60,120} on monitor runs; coverage stats.
+- [x] **Pillar-3 on 080726**: warm caches done → pooled snapshot (pool WITHOUT 080726) → monitor 080726-pu_strikes + st_strikes (recalibrate primary; frozen as cross-era row; session-norm arm) → `eval_events.py` vs `docs/groundtruth/080726_events_{st,pu}.csv` (α grid; per-class breakdown plate/vane/landmark) → per-event TPR, latency, FAR. Bruno-firewall framing in every output.
+- [x] Ledger + hypothesis verdicts H4/H5/H6.
 
 ### Task 11: Synthesis + audit + mockup + PR (spec §8.9, A2.4, A2.5)
 
-- [ ] README package-7 section + master-thesis research note (universality axis per A2.1 in every table; all numbers artifact-verified).
-- [ ] Design-vs-implementation audit note (A2.4): blueprint/design claims vs code, item-by-item table.
-- [ ] Demo mockup (A2.5): static visual of the live pipeline view built around 080726 (state timeline, per-state score trace, alarm markers, candidate report) — for Stefan's review.
-- [ ] Final whole-branch review (opus; named focuses: pools leakage, fit_pooled correctness, A3.1 guard, rolling fallback, pillar-3 number verification) → fix loop → PR #10 → merge.
+- [x] README package-7 section + master-thesis research note (universality axis per A2.1 in every table; all numbers artifact-verified).
+- [x] Design-vs-implementation audit note (A2.4): blueprint/design claims vs code, item-by-item table.
+- [x] Demo mockup (A2.5): static visual of the live pipeline view built around 080726 (state timeline, per-state score trace, alarm markers, candidate report) — for Stefan's review.
+- [x] Final whole-branch review (opus; named focuses: pools leakage, fit_pooled correctness, A3.1 guard, rolling fallback, pillar-3 number verification) → fix loop → PR #10 → merge.
 
 ## Self-review (at write time)
 
