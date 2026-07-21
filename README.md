@@ -1224,3 +1224,187 @@ machine-id collision refusal, mtime in the cache fingerprint, corpus-gone
 honesty with exit 1). The scarcity harness's leakage-freedom and clip-level
 calibration coherence were confirmed by the reviewer with adversarially
 constructed divergence cases, not just re-reads.
+
+## Step 2 package-7 evidence (2026-07-21): robustness & the best-system comparison
+
+Does the pipeline hold up ACROSS days, configurations, and modes — and which
+representation earns the best-system statement? Multi-day reference pools with
+held-out-day-group rotations, session normalization, TF-C continued pretraining
+on the plant's own audio, a 4x-larger vibration corpus, multi-day adaptation,
+rolling recalibration, and the first induced-anomaly evaluation (080726 hammer
+strikes). Universality tags per A2.1: [same-cfg] = fit and test days share a
+DAQ config era (MeasName), [cross-cfg] = they do not, [cross-mode] = the
+monitored mode is absent from the fit day.
+
+### Setup: pools, k selection, and the 080726 day
+
+Pool B1 = the four 010726 runs (era B), pool B2 = the two 290626 runs (era B),
+ALL-B = both; 250526 (era A) and 080726 (era C) are never pooled. Pooled k
+selected by mean GT-state ARI over the canonical pool: k=4 -> 0.671 vs k=5 ->
+0.670, k=6 -> 0.668 (`results/step2/cross-day-pooled/k_selection.json`) — flat
+in k, with a coverage-vs-granularity trade-off inside: PU days cluster at ARI
+0.87–0.96, TU days at 0.39–0.46 (the pooled detector merges TU load levels).
+
+**Ground-truth timebase lesson (deployment-real):** the 080726 strike protocol
+logs LOCAL time (CEST); the first transcription read it as UTC, which silently
+placed every ST event OUTSIDE the standstill recording and every PU event in
+plain post-strike pumping — and still produced plausible-looking TPRs from
+false-alarm coincidences. Two independent pins fixed the offset at exactly
+−2 h: the protocol's pump->phase-shifter changeover (~15:04–15:06 local)
+appears in OUR audio-UTC state timeline at 13:05:28 UTC, and the ST strike span
+fits its recording only under −2 h. Ground truth corrected
+(`docs/groundtruth/080726_events_*.csv` headers document the verification);
+every event evaluation below uses the corrected times. Clock discipline is a
+first-class deployment requirement.
+
+### D1/D2 — pooled references travel; frozen thresholds don't
+
+Fusion, pooled kNN (k=4), pooled FAR at alpha=0.05, frozen | recalibrate:
+
+| rotation (fit -> test) | tag | frozen | recalibrate |
+|---|---|---|---|
+| B1 -> 290626-tu | same-cfg | 0.075 | 0.044 |
+| B1 -> 290626-pu | same-cfg | 0.301 | 0.031 |
+| B2 -> 010726-tu_ph_tu | same-cfg | 0.203 | 0.068 |
+| B2 -> 010726-pu | same-cfg | 0.097 | 0.029 |
+| ALL-B -> 250526-tu | cross-cfg | 0.280 | 0.103 |
+| ALL-B -> 250526-pu-morning | cross-cfg | 1.000 | 0.091 |
+
+Recalibrate holds within ~2x of alpha on EVERY rotation including cross-config;
+frozen degrades 1.5–6x on same-config rotations and fails totally (FAR 1.0) on
+the cross-config PU day. Same pattern at alpha 0.01/0.10 (per-alpha artifacts:
+`fusion-pooled-a<alpha>/`). Versus the single-day P6 snapshot the pool helps
+exactly where coverage was the problem: monitor 290626-pu with the single-day
+010726 snapshot alarms at 0.932 frozen (cross-mode-starved) vs the pool's 0.301;
+on 250526-pu-morning both fail frozen (1.0) — a config change breaks frozen
+thresholds no matter how many days are pooled. The deployment recipe is pooled
+references + per-day (or rolling) threshold recalibration, not frozen artifacts.
+
+### Representation comparison on a held-out day (290626-tu, alpha=0.05)
+
+| representation | frozen | recalibrate |
+|---|---|---|
+| fusion (handcrafted audio+vib) | **0.075** | **0.044** |
+| audio-beats (frozen BEATs) | 0.233 | 0.068 |
+| audio-tfc (MIMII TF-C) | 0.305 | 0.217 |
+| audio (handcrafted) | 0.481 | 0.197 |
+| audio-student (pooled distill) | 0.360 | 0.154 |
+
+Fusion wins cross-day FAR control decisively; frozen BEATs is second. (290626-pu
+replicates the fusion-first ordering at 0.301|0.031 vs audio-beats 0.686|0.038.)
+
+### D3 — session normalization: falsified as a frozen-transfer fix
+
+First-20-min median/MAD normalization mostly BACKFIRES frozen (290626-tu 0.075
+-> 0.300; 010726-pu 0.097 -> 1.000; only 290626-pu improves 0.301 -> 0.101):
+the normalization window's STATE MIX, not the session offset, dominates the
+statistics. N-sweep (5/20/60 min on 290626-tu): frozen 0.363 / 0.300 / 0.001 —
+even the "good" N=60 case just overshoots into over-conservatism; recalibrate
+sits at 0.024–0.026 for every N, i.e. normalization adds nothing once
+thresholds recalibrate. Verdict: not part of the best system; kept as a
+documented negative result.
+
+### D4 — TF-C continued pretraining on PSHP audio: no free plant-tuning win
+
+Continued pretraining (`tfc_audio_pshp`, 7 min on MPS) and a from-scratch
+control (`tfc_audio_pshp_scratch`) on the canonical pool's unlabeled audio vs
+the frozen MIMII checkpoint:
+
+| checkpoint | Step-1 ARI 010726-tu_ph_tu | Step-1 ARI 290626-pu | rot 290626-tu frozen | recal |
+|---|---|---|---|---|
+| MIMII (frozen) | 0.907 | **0.954** | **0.305** | 0.217 |
+| PSHP-continued | 0.907 | 0.952 | 0.478 | 0.139 |
+| PSHP-scratch | 0.907 | 0.948 | 0.425 | **0.091** |
+
+State structure is unchanged (Step-1 flat to 3 decimals on the rich day);
+plant-audio pretraining reshapes SCORE distributions — frozen thresholds get
+worse, recalibrated FAR gets better, and the scratch control beats the
+continued model, so the gain is not MIMII-initialization carrying over. With
+recalibration mandatory anyway (D1/D2), the added training buys no reliable
+advantage: the frozen MIMII checkpoint stays the default.
+
+### D5 — vibration corpus v2 (Paderborn K003–K006, sha256-pinned): flat
+
+`tfc_vib_v2` (CWRU + Paderborn K001–K006) vs v1 (K001/K002 only), Step-1 state
+ARI: 010726-tu_ph_tu 0.920 -> 0.926, 290626-tu 0.859 -> 0.860. 4x more healthy
+bearing data moves nothing materially — the v1 "data floor" caveat was about
+corpus KIND, not corpus SIZE. v1 stays the default checkpoint.
+
+### D6 — multi-day adaptation: pools don't beat single-day adaptation
+
+Within-day FAR on the never-pooled cross-config day 250526-tu (per-state kNN,
+alpha=0.05, audio-beats family): frozen 0.007 (over-conservative), single-day
+full-FT 0.051, single-day LoRA 0.069, pool-LoRA (4 runs, both modes) 0.072,
+pooled student 0.069. Multi-mode pooling of the adaptation set does NOT improve
+calibration transfer over single-day adaptation here — and nothing beats
+full-FT's near-nominal 0.051. (Pool-adapted artifacts still matter for pillar-3
+below, where the student is a top performer.)
+
+### D7 — rolling recalibration: works, and M is forgiving
+
+Monitor 290626-tu against the B1 pool snapshot, trailing-window thresholds:
+alarm rate 0.0547 (M=30) / 0.0510 (M=60) / 0.0506 (M=120) at alpha=0.05, with
+the fit-day-fallback share dropping from 41% (M=30) to 24% (M>=60). Rolling
+approximates full recalibration without a second pass; M=60 is the default.
+
+### Pillar 3 — induced hammer strikes (080726, era C): the headline
+
+Corrected ground truth, ±5 s tolerance, event-level TPR | realized window-FAR;
+pool-B1 snapshots, recalibrate mode. PU session = 13 strikes DURING PUMPING
+(−279 MW); ST session = 13 strikes at standstill. All snapshots are fit on era-B
+days only -> every number below is [cross-cfg] AND zero-shot on the strike day.
+
+**PU (pumping), TPR at alpha 0.01 / 0.05 / 0.10:**
+
+| representation | 0.01 | 0.05 | 0.10 | FAR@0.05 |
+|---|---|---|---|---|
+| audio (handcrafted) | 0.62 | **0.77** | **0.77** | 0.061 |
+| audio-beats (frozen BEATs) | **0.69** | 0.69 | 0.69 | 0.050 |
+| audio-student (pooled distill) | 0.62 | 0.69 | 0.77 | 0.069 |
+| fusion | 0.31 | 0.69 | 0.69 | **0.047** |
+| audio-tfc | 0.08 | 0.23 | 0.46 | 0.081 |
+
+**ST (standstill):** every representation saturates at TPR 0.385 (5/13) from
+alpha 0.05; audio-beats reaches it already at alpha 0.01 with window-FAR
+**0.0000** — alarms fire ONLY at strikes. The detected five are the four
+turbine-floor plate strikes + the guide-vane sweep; the generator-floor plates
+and the distant landmarks (EG, 11TG, Kugelschieber) stay under threshold at
+standstill. In the PU session 11/13 detect (typical latency 1.4–2.4 s); the
+misses are the first two strike minutes and the distant EG landmark.
+
+Readings: (1) frozen BEATs — zero plant-specific training — is the best
+low-alpha operating point (PU 0.69 TPR at 0.008 window-FAR; ST perfect
+precision), the strongest universality datum in the package; (2) the 0.8 MB
+distilled student tracks its 361 MB teacher within one event on every cell —
+the compact deployment path costs almost nothing on real anomalies;
+(3) audio-tfc, the best STATE-structure transfer, is the WORST transient
+detector — representation choice is task-dependent; (4) fusion's vibration
+channels add nothing for airborne strikes (consistent with the plate source
+class); (5) detection latencies of 1–3 s at controlled FAR are compatible with
+the monitoring use case.
+
+### The best-system statement (comparison-derived, A2.1/A4.5)
+
+Per-state kNN + split conformal on FROZEN representations, pooled multi-day
+references, per-day or rolling (M=60) recalibration. Representation by target:
+fusion for cross-day FAR control (0.03–0.10 across all six rotations),
+audio-beats or handcrafted audio for event detection (and audio-student when
+size matters). Every plant-tuning attempt in this package — TF-C-PSHP continued
+pretraining, session normalization, multi-day LoRA/student pools — failed to
+beat its frozen/universal counterpart on held-out days: with scarce data, the
+universal-encoder + calibration-layer architecture IS the best system we can
+justify, which is the thesis' universality claim made empirical. The final
+deployed artifact pools ALL available days (A4.5); the rotation numbers above
+are its honest generalization estimate.
+
+Honesty: no real machine faults exist in any recording — induced strikes are
+surrogate transients (verified minute-level ground truth, seconds pending);
+ST/PU detection ceilings reflect sensor placement and plant noise, not
+exhaustively tuned detectors; the audio-student rotation on 290626-tu is
+pool-tainted for the STUDENT (its distillation pool contains that day's
+calibration side) and is excluded from held-out claims — its pillar-3 numbers
+(080726, never seen) are the valid ones. Execution surfaced and fixed three
+deployment-reality defects now under test: ground-truth CSV comment parsing,
+channel-availability drift between fit and monitored days (monitor now projects
+onto the snapshot's feature contract), and DAQ stream-set grid skew between
+audio-beats and logmel caches (distill now pairs by integer window shift).
