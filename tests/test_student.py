@@ -1040,3 +1040,71 @@ def test_multi_run_misaligned_second_run_exits_2_before_training(
     assert exc_info.value.code == 2
     assert "misaligned by >= one window" in capsys.readouterr().err
     assert captured == [], "the per-run alignment guard must fire BEFORE any training"
+
+
+def test_seed_not_seven_sidecar_note_carries_caveat_and_warns(
+    tmp_path, monkeypatch, caplog
+):
+    """T8-review HIGH (the objective bug): the leakage note is persisted into
+    provenance -- at seed != 7 it must carry the does-NOT-match caveat and the
+    CLI must warn; the previous static string was silently false."""
+    import logging
+
+    pytest.importorskip("torch")
+    run = _tiny_audio_run(tmp_path / "burst", name="seed-run")
+    cfg = _distill_cfg(tmp_path / "results")
+    rng = np.random.default_rng(3)
+    n = 12
+    segment_ids = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=np.int64)
+    _write_synthetic_cache(
+        cfg, run, "audio-beats",
+        features=rng.normal(size=(n, 1536)),
+        valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+        feature_names=(
+            [f"RAWGeneratorMic__0::beats_{i}" for i in range(768)]
+            + [f"RAWTurbineMic__1::beats_{i}" for i in range(768)]
+        ),
+    )
+    _write_synthetic_cache(
+        cfg, run, "logmel",
+        features=rng.normal(size=(n, 49 * 64)),
+        valid_mask=np.ones(n, dtype=bool), segment_ids=segment_ids,
+    )
+    monkeypatch.setattr(distill_beats, "discover", lambda data_root: _fake_index([run]))
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(cfg.results_root))
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", "")
+
+    out_dir = tmp_path / "out"
+    with caplog.at_level(logging.WARNING):
+        rc = distill_beats.main(
+            [
+                "--run", run.name, "--epochs", "1", "--batch-size", "4",
+                "--seed", "9", "--out", str(out_dir),
+            ]
+        )
+    assert rc == 0
+    sidecar = json.loads((out_dir / f"student_{run.name}.json").read_text())
+    assert "seed=9" in sidecar["note"]
+    assert "does NOT match" in sidecar["note"]
+    warned = [r.getMessage() for r in caplog.records]
+    assert any("canonical seed-7" in m for m in warned)
+
+    # The canonical seed keeps the unqualified claim (no caveat).
+    with caplog.at_level(logging.WARNING):
+        rc = distill_beats.main(
+            [
+                "--run", run.name, "--epochs", "1", "--batch-size", "4",
+                "--seed", "7", "--out", str(tmp_path / "out7"),
+            ]
+        )
+    assert rc == 0
+    sidecar7 = json.loads((tmp_path / "out7" / f"student_{run.name}.json").read_text())
+    assert "seed=7" in sidecar7["note"]
+    assert "does NOT match" not in sidecar7["note"]
+
+
+def test_distill_runs_with_only_blank_names_is_a_parser_error(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        distill_beats.main(["--runs", "  ,  ,", "--out", "/tmp/unused"])
+    assert exc_info.value.code == 2

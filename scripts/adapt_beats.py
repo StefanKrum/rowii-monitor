@@ -512,8 +512,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seed", type=int, default=7,
-        help="Seeds weight init (incl. the reconstruction head), window-shuffling, and "
-             "masked-token selection (default: 7).",
+        help="Seeds weight init (incl. the reconstruction head), window-shuffling, "
+             "masked-token selection, AND the per-run calibration/scoring SPLIT "
+             "(default: 7 -- the canonical seed every Step-2 sweep uses). A non-7 "
+             "seed reassigns canonical-scoring segments into the adaptation set, "
+             "VOIDING the leakage guarantee vs the seed-7 evaluations (T8 review: "
+             "40-70%% of scoring segments flip on typical seeds); pretrain_tfc "
+             "pins its split at 7 for exactly this reason, this CLI keeps the "
+             "shipped P5 contract and WARNS instead.",
     )
     parser.add_argument(
         "--max-windows", type=int, default=8000,
@@ -532,6 +538,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.seed != 7:
+        logger.warning(
+            "adapt_beats: --seed %d != 7 changes the per-run calibration/scoring "
+            "SPLIT -- the resulting checkpoint's leakage guarantee holds only "
+            "against a seed-%d evaluation, NOT the canonical seed-7 Step-2 sweeps "
+            "(T8-review seed-tension resolution)",
+            args.seed, args.seed,
+        )
 
     # Parse-level --runs validation (empty/duplicates) runs BEFORE the beats
     # import guard: a malformed flag value is a usage error regardless of the

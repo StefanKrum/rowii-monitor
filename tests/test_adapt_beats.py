@@ -804,3 +804,66 @@ def test_unknown_run_in_runs_exits_2(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "bogus-run" in err
     assert "run-a" in err
+
+
+def test_seed_not_seven_logs_leakage_warning(tmp_path, monkeypatch, caplog):
+    """T8-review seed-tension resolution: a non-canonical --seed must WARN that
+    the leakage guarantee no longer holds vs the seed-7 evaluations."""
+    import logging
+
+    _patch_for_e2e(monkeypatch, tmp_path, run_name="fake-run")
+    with caplog.at_level(logging.WARNING):
+        adapt_beats.main(
+            [
+                "--mode", "lora", "--run", "fake-run", "--epochs", "1",
+                "--batch-size", "2", "--max-windows", "4", "--seed", "9",
+                "--out", str(tmp_path / "out"),
+            ]
+        )
+    warned = [r.getMessage() for r in caplog.records if "seed" in r.getMessage().lower()]
+    assert any("canonical seed-7" in m for m in warned)
+
+
+def test_single_item_runs_list_matches_single_run_bitwise(tmp_path, monkeypatch):
+    """T8-review LOW: the commit claimed 1-run --runs parity but only distill
+    tested it. Same stubbed window source + same seed -> the two CLIs must
+    produce bitwise-identical checkpoints."""
+    torch = pytest.importorskip("torch")
+
+    import rowii.adapt.target_windows as tw
+
+    def _same_windows(run, cfg, *, target_hz=16_000, seed=7, max_windows=None):
+        rng = np.random.default_rng(11)
+        n = 4 if max_windows is None else min(4, max_windows)
+        return iter([rng.normal(0.0, 0.5, target_hz).astype(np.float32) for _ in range(n)])
+
+    for target in (adapt_beats, tw):
+        monkeypatch.setattr(target, "iter_target_windows", _same_windows)
+    monkeypatch.setattr(
+        adapt_beats, "discover", lambda data_root: _fake_index(["only-run"])
+    )
+    monkeypatch.setattr(adapt_beats, "load_beats_model", _stub_load_beats_model)
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", str(tmp_path / "fake_base.pt"))
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+
+    common = ["--mode", "lora", "--epochs", "1", "--batch-size", "2",
+              "--max-windows", "4", "--seed", "7"]
+    assert adapt_beats.main(
+        [*common, "--run", "only-run", "--out", str(tmp_path / "single")]
+    ) == 0
+    assert adapt_beats.main(
+        [*common, "--runs", "only-run", "--out", str(tmp_path / "multi")]
+    ) == 0
+
+    single = torch.load(
+        tmp_path / "single" / "beats_lora_only-run.pt", map_location="cpu",
+        weights_only=False,
+    )
+    multi = torch.load(
+        tmp_path / "multi" / "beats_lora_only-run.pt", map_location="cpu",
+        weights_only=False,
+    )
+    assert set(single["model"]) == set(multi["model"])
+    for key in single["model"]:
+        assert torch.equal(single["model"][key], multi["model"][key]), key

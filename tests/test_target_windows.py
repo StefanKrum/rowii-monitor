@@ -672,3 +672,28 @@ def test_multi_negative_budget_raises_value_error(tmp_path) -> None:
         target_windows.iter_target_windows_multi(
             [], _cfg(tmp_path), max_windows=-1, target_hz=16_000
         )
+
+
+def test_multi_zero_contribution_run_warns(monkeypatch, caplog) -> None:
+    """T8-review MEDIUM: a pool member contributing zero windows must produce a
+    RUNTIME warning, not just sidecar-JSON visibility."""
+    import logging
+    from types import SimpleNamespace
+
+    from rowii.adapt import target_windows as tw
+
+    def fake_iter(run, cfg, *, target_hz, seed=7, max_windows=None):
+        values = {"run-a": [1.0, 2.0], "run-empty": []}[run.name]
+        return iter([np.full(4, v, dtype=np.float32) for v in values])
+
+    monkeypatch.setattr(tw, "iter_target_windows", fake_iter)
+    runs = [SimpleNamespace(name="run-a"), SimpleNamespace(name="run-empty")]
+    with caplog.at_level(logging.WARNING):
+        out = list(
+            tw.iter_target_windows_multi(
+                runs, cfg=None, max_windows=10, target_hz=4  # type: ignore[arg-type]
+            )
+        )
+    assert len(out) == 2
+    warned = [r.getMessage() for r in caplog.records if "ZERO" in r.getMessage()]
+    assert any("run-empty" in m for m in warned)
