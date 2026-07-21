@@ -42,6 +42,25 @@ windows on the new run cannot be recalibrated -- ALL its windows get
 to the frozen fit-day threshold, which would smuggle exactly the un-recalibrated
 behavior the mode exists to avoid).
 
+`--session-norm` (package-7 Task 4, spec D3 as amended by A3.5): label-free
+per-session robust normalization of the SCORING space. The snapshot must carry
+session stats (format v2, `rowii.anomaly.normalize.SessionStats`) -- a v1 file or
+any snapshot fitted without stats is REFUSED with exit 2 (never a silent raw-space
+fallback). When active: the DETECTOR still consumes RAW features (labels are
+norm-invariant by construction, the A3.5 binding boundary); the scoring path
+transforms (a) the snapshot's stored RAW references with the SNAPSHOT's stats
+(`scorer_for_label(..., session_stats=...)` -- pool-global stats for a pooled
+snapshot, `norm_minutes == 0.0` sentinel) and (b) the monitored run's features
+with the MONITORED run's OWN first-N stats (N = the snapshot's stored
+`norm_minutes`; the pool-global sentinel falls back to the D3 default of
+`_DEFAULT_NORM_MINUTES`), so scores, thresholds and p-values all live in the
+session-normalized space. Roles and alarm logic are otherwise unchanged.
+Comparability with raw-space (P6) numbers is FAR-level only (A3.5). The reverse
+mismatch -- a stats-bearing snapshot run WITHOUT `--session-norm` -- only logs a
+WARNING: the stored references are raw, so recalibrate mode stays fully coherent;
+frozen mode would compare raw-space scores against the snapshot's
+normalized-space thresholds, which the warning names.
+
 Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` +
 `timeline.md` (the state half, `scripts/apply_detector.py`'s conventions incl.
 scatter-back over `valid_mask`), `alarms.parquet` (one row per VALID window:
@@ -73,6 +92,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import calibrate, p_values  # noqa: E402
+from rowii.anomaly.normalize import (  # noqa: E402
+    SessionStats,
+    apply_session_norm,
+    fit_session_stats,
+)
 from rowii.anomaly.overlap import to_utc_ns  # noqa: E402
 from rowii.anomaly.references import split_by_segments  # noqa: E402
 from rowii.config import load_config  # noqa: E402
@@ -96,6 +120,12 @@ run_step2.py`'s/`scripts/apply_detector.py`'s own `_INVALID_LABEL` (duplicated, 
 imported -- module docstring)."""
 
 _THRESHOLD_MODES: tuple[str, ...] = ("recalibrate", "frozen")
+
+_DEFAULT_NORM_MINUTES = 20.0
+"""`--session-norm` fallback prefix length for the MONITORED run's own stats when
+the snapshot's stored `norm_minutes` is the pool-global sentinel (0.0) -- the D3
+default ("first `--norm-minutes` (default 20)"); a first-N snapshot's stored value
+is used verbatim instead."""
 
 _ALARM_COLUMNS: tuple[str, ...] = (
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
@@ -165,6 +195,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recalibrate-mode nominal false-alarm target in (0, 1); default: the "
              "snapshot's own fit-time alpha. Ignored (with a warning) in frozen "
              "mode -- frozen thresholds are applied exactly as stored.",
+    )
+    parser.add_argument(
+        "--session-norm", action="store_true",
+        help="Score in the label-free session-normalized space (package-7 spec "
+             "D3/A3.5): the snapshot's stored references are transformed with the "
+             "SNAPSHOT's session stats and this run's windows with THIS run's own "
+             "first-N median/MAD stats (N from the snapshot; pool-global sentinel "
+             "falls back to 20 min). Requires a snapshot that stores session stats "
+             "(format v2) -- a v1/no-stats snapshot is refused (exit 2). The "
+             "detector always consumes RAW features; only scoring is normalized.",
     )
     parser.add_argument(
         "--no-cache", action="store_true",
@@ -282,11 +322,23 @@ def _mark_unknown_states(
 
 
 def _frozen_verdicts(
-    prepared: PreparedRun, snapshot: MonitorSnapshot, labels: np.ndarray
+    prepared: PreparedRun,
+    snapshot: MonitorSnapshot,
+    labels: np.ndarray,
+    *,
+    scoring_features: np.ndarray | None = None,
+    session_stats: SessionStats | None = None,
 ) -> _Verdicts:
     """Frozen mode (spec D2): every valid window of a snapshot-known state gets a
     verdict against the fit day's STORED threshold; p-values against the fit day's
-    stored calibration scores (the same set the threshold came from)."""
+    stored calibration scores (the same set the threshold came from).
+
+    Under `--session-norm` (D3/A3.5) the caller passes *scoring_features* (this
+    run's session-normalized matrix -- `None` means score the raw features) and
+    *session_stats* (the SNAPSHOT's stats, transforming the stored references via
+    `scorer_for_label`); the stored thresholds/calibration scores then live in the
+    snapshot's own normalized space, comparable at FAR level only (A3.5)."""
+    features = prepared.features if scoring_features is None else scoring_features
     score, p_value, alarm, low_confidence, role = _empty_verdict_arrays(
         prepared.features.shape[0]
     )
@@ -296,7 +348,9 @@ def _frozen_verdicts(
         idx = np.flatnonzero(prepared.valid_mask & (labels == label))
         n_alarms = 0
         if idx.size:
-            scores = scorer_for_label(snapshot, label).score(prepared.features[idx])
+            scores = scorer_for_label(
+                snapshot, label, session_stats=session_stats
+            ).score(features[idx])
             score[idx] = scores
             p_value[idx] = p_values(scores, snapshot.calibration_scores[label])
             alarms = scores > threshold.threshold
@@ -319,7 +373,13 @@ def _frozen_verdicts(
 
 
 def _recalibrate_verdicts(
-    prepared: PreparedRun, snapshot: MonitorSnapshot, labels: np.ndarray, alpha: float
+    prepared: PreparedRun,
+    snapshot: MonitorSnapshot,
+    labels: np.ndarray,
+    alpha: float,
+    *,
+    scoring_features: np.ndarray | None = None,
+    session_stats: SessionStats | None = None,
 ) -> _Verdicts:
     """Recalibrate mode (DEFAULT, spec D2 + A1.3): top split of the new run's valid
     windows at the snapshot's own `(calibration_frac, seed)`; per snapshot-known
@@ -327,7 +387,13 @@ def _recalibrate_verdicts(
     state (references stay the SNAPSHOT's -- thresholds only), verdicts for the
     scoring-side windows only. Calibration-side windows are consumed, never alarmed
     (calibration-bias rule); a state with zero calibration-side windows takes the
-    `no_conformal_data` path for ALL its windows."""
+    `no_conformal_data` path for ALL its windows.
+
+    Under `--session-norm` (D3/A3.5): *scoring_features*/*session_stats* exactly as
+    in `_frozen_verdicts` -- here the recalibrated thresholds AND p-values are
+    computed from this run's own scores in the normalized space end to end, so the
+    mode stays fully coherent (no cross-space comparison anywhere)."""
+    features = prepared.features if scoring_features is None else scoring_features
     score, p_value, alarm, low_confidence, role = _empty_verdict_arrays(
         prepared.features.shape[0]
     )
@@ -361,8 +427,8 @@ def _recalibrate_verdicts(
             )
             continue
 
-        scorer = scorer_for_label(snapshot, label)
-        cal_scores = scorer.score(prepared.features[label_cal])
+        scorer = scorer_for_label(snapshot, label, session_stats=session_stats)
+        cal_scores = scorer.score(features[label_cal])
         # Deliberately NO `min_ref` gate here (T2-review finding, resolved as a
         # documented reading of A1.3's "identical to sweeps"): `run_sweep` gates
         # the FIT side with `min_ref` (reference quality -- enforced for this
@@ -380,7 +446,7 @@ def _recalibrate_verdicts(
 
         n_alarms = 0
         if label_scr.size:
-            scores = scorer.score(prepared.features[label_scr])
+            scores = scorer.score(features[label_scr])
             score[label_scr] = scores
             p_value[label_scr] = p_values(scores, cal_scores)
             alarms = scores > threshold.threshold
@@ -506,6 +572,43 @@ def _timeline_markdown(
     return "\n".join(lines)
 
 
+def _session_norm_lines(snapshot_stats: SessionStats, run_stats: SessionStats) -> list[str]:
+    """The notes' `--session-norm` section (D3/A3.5): names the mode, BOTH stats'
+    n_windows, the pool-global sentinel where it applies, and the caveats that must
+    travel with every session-normalized number."""
+    if snapshot_stats.norm_minutes > 0.0:
+        snapshot_desc = (
+            f"n_windows={snapshot_stats.n_windows}, "
+            f"norm_minutes={snapshot_stats.norm_minutes:g} (fit-day first-N stats)"
+        )
+    else:
+        snapshot_desc = (
+            f"n_windows={snapshot_stats.n_windows}, norm_minutes=0 (pool-global "
+            f"stats over the pooled fit matrix -- `rowii.anomaly.normalize."
+            f"fit_pool_stats`' sentinel)"
+        )
+    return [
+        "",
+        "## Session normalization (--session-norm, spec D3/A3.5)",
+        "",
+        "Scoring happened in the session-normalized space: the snapshot's stored "
+        "RAW references were transformed with the SNAPSHOT's stats, this run's "
+        "windows with THIS run's own label-free first-N median/MAD stats -- "
+        "scores, thresholds and p-values above all live in that space. Detected "
+        "state labels come from RAW features (A3.5 binding boundary: labels are "
+        "norm-invariant by construction). Comparability with raw-space monitor "
+        "numbers is FAR-level only.",
+        "",
+        f"- snapshot reference-side stats: {snapshot_desc}",
+        f"- monitored-run stats: n_windows={run_stats.n_windows}, "
+        f"norm_minutes={run_stats.norm_minutes:g} (fit on this run's first "
+        f"minutes, no labels)",
+        "- caveats: if the first minutes contain a fault, normalization absorbs "
+        "part of it; the first minutes' STATE MIX parameterizes the stats "
+        "(state-mix confound -- the norm-minutes sweep is the sensitivity probe).",
+    ]
+
+
 def _notes_markdown(
     run_name: str,
     snapshot_path: Path,
@@ -514,6 +617,9 @@ def _notes_markdown(
     alpha_used: float,
     verdicts: _Verdicts,
     prepared: PreparedRun,
+    *,
+    session_stats: SessionStats | None = None,
+    run_stats: SessionStats | None = None,
 ) -> str:
     n_windows = int(prepared.features.shape[0])
     n_valid = int(prepared.valid_mask.sum())
@@ -567,6 +673,9 @@ def _notes_markdown(
             "windows are consumed by the threshold fit and are NEVER alarmed "
             f"(role `{ROLE_CONSUMED}` -- calibration-bias rule, A1.3)."
         )
+
+    if session_stats is not None and run_stats is not None:
+        lines += _session_norm_lines(session_stats, run_stats)
 
     lines += [
         "",
@@ -636,6 +745,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"monitor: cannot load snapshot {args.snapshot}: {exc}", file=sys.stderr)
         return 2
 
+    if args.session_norm and snapshot.session_stats is None:
+        # A3.5 binding: never a silent raw-space fallback under --session-norm.
+        print(
+            f"monitor: --session-norm requires a snapshot that stores session-"
+            f"normalization stats (format v2 with session stats), but "
+            f"{args.snapshot} has none -- it is a format-v1 file or was fitted "
+            f"without session normalization. Refit it with stats (scripts/"
+            f"run_step2.py --protocol cross-day-pooled --session-norm "
+            f"--save-snapshot) or drop --session-norm.",
+            file=sys.stderr,
+        )
+        return 2
+    if not args.session_norm and snapshot.session_stats is not None:
+        logger.warning(
+            "monitor: snapshot %s stores session-normalization stats (fitted under "
+            "--session-norm) but --session-norm is OFF -- its stored FROZEN "
+            "thresholds/calibration scores live in the session-normalized space and "
+            "would be compared against RAW-space scores; recalibrate mode is "
+            "unaffected (thresholds recomputed on this run's raw scores against the "
+            "raw references)",
+            args.snapshot,
+        )
+
     cfg = load_config()
     index = discover(cfg.data_root)
     by_name: dict[str, Run] = {r.name: r for r in index.runs}
@@ -663,7 +795,36 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     detector = to_detector(snapshot)
-    labels = _apply_detector_labels(prepared, detector)
+    labels = _apply_detector_labels(prepared, detector)  # ALWAYS raw features (A3.5)
+
+    session_stats: SessionStats | None = None
+    run_stats: SessionStats | None = None
+    scoring_features: np.ndarray | None = None
+    if args.session_norm:
+        session_stats = snapshot.session_stats
+        assert session_stats is not None  # guarded right after load_snapshot
+        norm_minutes = session_stats.norm_minutes
+        if norm_minutes <= 0.0:
+            logger.info(
+                "monitor: snapshot stats are pool-global (norm_minutes=0 sentinel) "
+                "-- fitting the monitored run's own stats over the default first "
+                "%g minutes",
+                _DEFAULT_NORM_MINUTES,
+            )
+            norm_minutes = _DEFAULT_NORM_MINUTES
+        try:
+            run_stats = fit_session_stats(
+                prepared.features, prepared.valid_mask, prepared.grid,
+                norm_minutes=norm_minutes,
+            )
+        except ValueError as exc:
+            print(
+                f"monitor: --session-norm cannot fit run {args.run!r}'s first-"
+                f"{norm_minutes:g}-minute stats: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        scoring_features = apply_session_norm(prepared.features, run_stats)
 
     if args.thresholds == "frozen":
         if args.alpha is not None:
@@ -673,10 +834,16 @@ def main(argv: list[str] | None = None) -> int:
                 args.alpha, snapshot.alpha,
             )
         alpha_used = snapshot.alpha
-        verdicts = _frozen_verdicts(prepared, snapshot, labels)
+        verdicts = _frozen_verdicts(
+            prepared, snapshot, labels,
+            scoring_features=scoring_features, session_stats=session_stats,
+        )
     else:
         alpha_used = args.alpha if args.alpha is not None else snapshot.alpha
-        verdicts = _recalibrate_verdicts(prepared, snapshot, labels, alpha_used)
+        verdicts = _recalibrate_verdicts(
+            prepared, snapshot, labels, alpha_used,
+            scoring_features=scoring_features, session_stats=session_stats,
+        )
 
     _assert_roles_complete(verdicts.role, prepared.valid_mask)
 
@@ -698,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         _notes_markdown(
             args.run, args.snapshot, snapshot, args.thresholds, alpha_used,
             verdicts, prepared,
+            session_stats=session_stats, run_stats=run_stats,
         )
     )
 

@@ -78,9 +78,21 @@ keys, per-label arrays under `ref__<label>` / `cal__<label>`, and ONE `meta` mem
 -- a single JSON string in a 1-element str array (the pipeline-cache convention) --
 carrying every scalar/string/threshold field. `format_version` gates loading: a
 future incompatible layout bumps `SNAPSHOT_FORMAT_VERSION` and old readers fail with
-both versions named instead of misreading. A human-readable `<stem>.json` sidecar
+the versions named instead of misreading. A human-readable `<stem>.json` sidecar
 duplicates the metadata for quick inspection (`cat`-able provenance next to the
 binary artifact); `load_snapshot` never reads it -- the npz is self-contained.
+
+**Format v2: session stats (package-7 Task 4, spec D3/A3.5).** A snapshot may carry
+`session_stats` (`rowii.anomaly.normalize.SessionStats`) -- the fit-side robust
+center/scale the monitor's `--session-norm` mode uses as the REFERENCE-side
+transform (the stored references stay RAW; normalization happens at scoring time).
+On disk: `session_center`/`session_scale` npz members plus a `session_stats`
+meta entry (`n_windows`, `norm_minutes`), present ONLY when the snapshot has stats.
+New saves write `format_version = 2` either way; `load_snapshot` accepts {1, 2},
+and a v1 FILE (no session members by construction) loads with
+`session_stats=None`. Refusing a stats-less snapshot under `--session-norm` is the
+MONITOR's job (spec A3.5), not the reader's -- a v1 artifact is still a perfectly
+valid raw-space snapshot.
 """
 from __future__ import annotations
 
@@ -95,6 +107,7 @@ import numpy as np
 from hmmlearn.hmm import GaussianHMM
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate
+from rowii.anomaly.normalize import SessionStats, apply_session_norm
 from rowii.anomaly.references import build_references, split_by_segments
 from rowii.anomaly.scorers import KnnScorer, MahalanobisScorer, Scorer
 from rowii.anomaly.sweep import SweepConfig, _assert_three_way_disjoint
@@ -106,9 +119,14 @@ from rowii.state.smooth import StickyHmmSmoother
 
 logger = logging.getLogger(__name__)
 
-SNAPSHOT_FORMAT_VERSION: int = 1
+SNAPSHOT_FORMAT_VERSION: int = 2
 """Bump on any incompatible change to the npz layout or meta schema -- `load_snapshot`
-refuses a mismatched file naming both versions."""
+refuses an unsupported file naming the versions. v2 (package-7 Task 4) adds the
+OPTIONAL session-stats members (module docstring); v1 files remain readable."""
+
+_SUPPORTED_FORMAT_VERSIONS: tuple[int, ...] = (1, 2)
+"""Every on-disk version `load_snapshot` can read -- v2 is a strict superset of v1
+(session members optional), so both load through the same code path."""
 
 _RUNTIME_SCORERS: tuple[str, ...] = ("knn", "mahalanobis")
 """The pickle-free runtime scorer whitelist (module docstring) -- everything else is
@@ -192,6 +210,14 @@ class MonitorSnapshot:
     """ISO-8601 UTC timestamp of `fit_snapshot` (provenance)."""
     format_version: int
     """`SNAPSHOT_FORMAT_VERSION` at creation -- checked by `load_snapshot`."""
+    session_stats: SessionStats | None = None
+    """Fit-side session-normalization stats (format v2, spec D3/A3.5), or `None`
+    for a raw-space snapshot (every v1 file; any snapshot fitted without session
+    normalization). When present, the monitor's `--session-norm` mode transforms
+    the stored RAW references with THESE stats (`scorer_for_label`'s
+    `session_stats` parameter) and the monitored run with its own first-N stats;
+    a pooled artifact stores POOL-GLOBAL stats with the `norm_minutes == 0.0`
+    sentinel (`rowii.anomaly.normalize.fit_pool_stats`)."""
 
 
 def _runtime_scorer(name: str) -> Scorer:
@@ -217,7 +243,12 @@ def _runtime_scorer(name: str) -> Scorer:
     )
 
 
-def scorer_for_label(snapshot: MonitorSnapshot, label: int) -> Scorer:
+def scorer_for_label(
+    snapshot: MonitorSnapshot,
+    label: int,
+    *,
+    session_stats: SessionStats | None = None,
+) -> Scorer:
     """The fitted runtime scorer for *label*, refit from the snapshot's stored raw
     reference -- deterministic normalization, not training (module docstring), so
     scores are bit-identical across save/load round trips.
@@ -225,6 +256,12 @@ def scorer_for_label(snapshot: MonitorSnapshot, label: int) -> Scorer:
     Args:
         snapshot: The snapshot to draw the reference (and scorer name) from.
         label: A state label present in `snapshot.references`.
+        session_stats: When given (the monitor's `--session-norm` mode, spec
+            D3/A3.5), the scorer is fit on the SESSION-NORMALIZED reference
+            (`apply_session_norm(references[label], session_stats)`) instead of
+            the raw one -- the reference-side half of the scoring-space-only
+            rule; the caller transforms its query windows with their own run's
+            stats. `None` (default) keeps the raw-space behavior unchanged.
 
     Returns:
         A fitted `Scorer` (higher = more anomalous, the shared contract).
@@ -241,7 +278,10 @@ def scorer_for_label(snapshot: MonitorSnapshot, label: int) -> Scorer:
             f"label {label} has no reference in this snapshot (known labels: "
             f"{sorted(snapshot.references)})"
         )
-    return _runtime_scorer(snapshot.scorer).fit(snapshot.references[label])
+    reference = snapshot.references[label]
+    if session_stats is not None:
+        reference = apply_session_norm(reference, session_stats)
+    return _runtime_scorer(snapshot.scorer).fit(reference)
 
 
 def _hmm_arrays(
@@ -488,10 +528,12 @@ def fit_snapshot_from_parts(
     fit_run: str,
     feature_names: list[str],
     checkpoints: dict[str, str],
+    session_stats: SessionStats | None = None,
 ) -> MonitorSnapshot:
     """Assemble a `MonitorSnapshot` from ALREADY-COMPUTED parts -- the pooled
     counterpart to `fit_snapshot` (Step-2 package-7 spec `docs/superpowers/specs/
-    2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3).
+    2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3; the
+    `session_stats` kwarg is Task 4's D3/A3.5 extension).
 
     `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
     references, thresholds). Pooled artifacts derive those parts across runs
@@ -525,6 +567,18 @@ def fit_snapshot_from_parts(
             a bare run name.
         feature_names: Feature column names -- every reference's width must match.
         checkpoints: Config-field-name -> checkpoint path (provenance only).
+        session_stats: Optional fit-side session-normalization stats (format v2,
+            spec D3/A3.5). References are stored RAW regardless (the field
+            contract); these stats are the transform the monitor's
+            `--session-norm` mode applies to them at scoring time. POOLED-STATS
+            SEMANTICS (plan Task 4 design decision): a pooled artifact has no
+            single fit day, so its caller passes POOL-GLOBAL stats -- center/
+            scale over the raw pooled fit matrix as a whole
+            (`rowii.anomaly.normalize.fit_pool_stats`), sentinel
+            `norm_minutes == 0.0` -- and its `calibration_scores`/`thresholds`
+            must be computed in that same pool-global-normalized space so the
+            artifact stays self-consistent (`scripts/run_step2.py`'s
+            cross-day-pooled `--session-norm` path does exactly this).
 
     Returns:
         A `MonitorSnapshot` at the CURRENT format version -- `save_snapshot`/
@@ -539,7 +593,10 @@ def fit_snapshot_from_parts(
             the same rule, re-checked at assembly so a corrupt snapshot is never
             even built); if any reference is not a non-empty 2-D matrix of width
             `len(feature_names)` (the geometry-guard fields would otherwise
-            promise a width the stored references cannot deliver).
+            promise a width the stored references cannot deliver); if
+            *session_stats* is given with a center/scale width different from
+            `len(feature_names)` (the same geometry rule -- stats that cannot
+            transform the stored references must never be stored beside them).
         RuntimeError: from `_hmm_arrays` if the detector's component/id invariant
             is violated (see its docstring).
     """
@@ -564,6 +621,16 @@ def fit_snapshot_from_parts(
                 f"label {label}'s reference is {reference.shape[1]} column(s) wide "
                 f"but feature_names has {n_features} name(s) -- geometry mismatch"
             )
+    if session_stats is not None and (
+        session_stats.center.shape != (n_features,)
+        or session_stats.scale.shape != (n_features,)
+    ):
+        raise ValueError(
+            f"session_stats center/scale must be ({n_features},) to match "
+            f"feature_names, got center {session_stats.center.shape} / scale "
+            f"{session_stats.scale.shape} -- stats that cannot transform the "
+            f"stored references must never be stored beside them"
+        )
     if not thresholds:
         logger.warning(
             "fit_snapshot_from_parts: assembling a snapshot with an EMPTY scoring "
@@ -602,6 +669,7 @@ def fit_snapshot_from_parts(
         checkpoints=dict(checkpoints),
         created_at=datetime.now(UTC).isoformat(),
         format_version=SNAPSHOT_FORMAT_VERSION,
+        session_stats=session_stats,
     )
 
 
@@ -660,8 +728,10 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
     `labels` preserves the real int values). A low-confidence threshold's `+inf`
     serializes as JSON `Infinity` -- a Python-`json` extension to strict JSON,
     round-tripped exactly by `json.loads` (the only reader of the npz meta member;
-    the sidecar is for humans)."""
-    return {
+    the sidecar is for humans). Format v2: a `session_stats` entry (scalars only;
+    the center/scale ARRAYS live in their own npz members) is added exactly when
+    the snapshot carries stats."""
+    meta: dict[str, object] = {
         "format_version": snapshot.format_version,
         "min_dwell_s": snapshot.min_dwell_s,
         "k": snapshot.k,
@@ -689,6 +759,12 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
             for label, t in snapshot.thresholds.items()
         },
     }
+    if snapshot.session_stats is not None:
+        meta["session_stats"] = {
+            "n_windows": snapshot.session_stats.n_windows,
+            "norm_minutes": snapshot.session_stats.norm_minutes,
+        }
+    return meta
 
 
 def save_snapshot(
@@ -750,6 +826,15 @@ def save_snapshot(
         arrays["hmm_transmat"] = np.asarray(snapshot.hmm_transmat, dtype=np.float64)
         arrays["hmm_means"] = np.asarray(snapshot.hmm_means, dtype=np.float64)
         arrays["hmm_covars_diag"] = np.asarray(snapshot.hmm_covars_diag, dtype=np.float64)
+    if snapshot.session_stats is not None:
+        # Format v2 members, present exactly when the snapshot carries stats --
+        # the scalar halves (n_windows/norm_minutes) live in `meta` (_meta_dict).
+        arrays["session_center"] = np.asarray(
+            snapshot.session_stats.center, dtype=np.float64
+        )
+        arrays["session_scale"] = np.asarray(
+            snapshot.session_stats.scale, dtype=np.float64
+        )
     for label in sorted(snapshot.thresholds):
         arrays[f"ref__{label}"] = np.asarray(snapshot.references[label], dtype=np.float64)
         arrays[f"cal__{label}"] = np.asarray(
@@ -782,8 +867,11 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
 
     Raises:
         ValueError: if the file has no `meta` member (not a snapshot), or if its
-            `format_version` differs from `SNAPSHOT_FORMAT_VERSION` (both versions
-            named -- never misread an incompatible layout).
+            `format_version` is not in `_SUPPORTED_FORMAT_VERSIONS` (all versions
+            named -- never misread an incompatible layout). A v1 file loads with
+            `session_stats=None` (v1 never had session members); refusing it is
+            the monitor's `--session-norm` job, not the reader's (module
+            docstring).
     """
     with np.load(path, allow_pickle=False) as data:
         if "meta" not in data.files:
@@ -792,11 +880,11 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             )
         meta = json.loads(str(data["meta"][0]))
         version = int(meta["format_version"])
-        if version != SNAPSHOT_FORMAT_VERSION:
+        if version not in _SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(
                 f"snapshot {path} has format_version {version}, but this reader "
-                f"supports only {SNAPSHOT_FORMAT_VERSION} -- refusing to misread an "
-                f"incompatible layout"
+                f"supports only {_SUPPORTED_FORMAT_VERSIONS} -- refusing to misread "
+                f"an incompatible layout"
             )
 
         labels = [int(label) for label in meta["labels"]]
@@ -826,6 +914,23 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
         }
         has_hmm = "hmm_startprob" in data.files
 
+        session_stats: SessionStats | None = None
+        if "session_center" in data.files:
+            session_meta = meta.get("session_stats")
+            if session_meta is None or "session_scale" not in data.files:
+                raise ValueError(
+                    f"snapshot {path} is corrupt: session_center is present but "
+                    f"its session_scale member / session_stats meta entry is "
+                    f"missing -- a save_snapshot product always carries all three "
+                    f"together"
+                )
+            session_stats = SessionStats(
+                center=data["session_center"],
+                scale=data["session_scale"],
+                n_windows=int(session_meta["n_windows"]),
+                norm_minutes=float(session_meta["norm_minutes"]),
+            )
+
         return MonitorSnapshot(
             mean=data["mean"],
             std=data["std"],
@@ -852,4 +957,5 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             checkpoints={str(k_): str(v) for k_, v in meta["checkpoints"].items()},
             created_at=str(meta["created_at"]),
             format_version=version,
+            session_stats=session_stats,
         )

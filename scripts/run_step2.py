@@ -156,6 +156,25 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   `MonitorSnapshot` via `rowii.runtime.snapshot.fit_snapshot_from_parts` (frozen
   pool-conformal thresholds, `fit_run="pool:<csv>"`) and saves it with per-run pool
   provenance in the meta/sidecar.
+- **Session normalization** (`--session-norm [--norm-minutes F]`, package-7 Task 4,
+  spec D3/A3.5): scoring moves into the label-free session-normalized space --
+  every run's rows (pool references, pool conformal rows, the test run's
+  calibration AND scoring windows) are transformed with THAT run's OWN first-N
+  median/MAD stats (`rowii.anomaly.normalize.fit_session_stats`, N =
+  `--norm-minutes`, default 20; per-run stats for pool members, BINDING). The
+  pooled DETECTOR still fits/applies on RAW features (A3.5 boundary: labels are
+  norm-invariant). Outputs land in a `-snorm<N>` suffixed leaf
+  (`<variant>-pooled-snorm20/`) so the A2.2 N-sweep never overwrites the raw
+  baseline. With `--save-snapshot`, the snapshot keeps RAW references (the field
+  contract) plus POOL-GLOBAL stats over the raw pooled fit matrix
+  (`fit_pool_stats`, `norm_minutes == 0.0` sentinel), and its stored conformal
+  scores/thresholds are recomputed in that pool-global space so the artifact is
+  SELF-CONSISTENT under the monitor's `--session-norm` reconstruction -- they
+  deliberately differ from `far_table_frozen.csv`'s per-run-normalized thresholds
+  (FAR-level-only comparability, A3.5). DEFERRED (Task 4 scope decision): the
+  plan's within-day/cross-day `--session-norm` wiring is NOT implemented in this
+  package's Task 4 -- cross-day-pooled only, to keep the change reviewable; the
+  other protocols refuse the flag.
 - **Failures are loud** (unlike the pair-matrix protocols' log-and-skip): this
   protocol names every run explicitly and produces exactly ONE combo, so any
   pool-level failure (a member that cannot prepare, k too large for the pool, a
@@ -294,6 +313,12 @@ from rowii.anomaly.fusion import (  # noqa: E402
     fisher_statistic,
     split_branch_columns,
     tippett_statistic,
+)
+from rowii.anomaly.normalize import (  # noqa: E402
+    SessionStats,
+    apply_session_norm,
+    fit_pool_stats,
+    fit_session_stats,
 )
 from rowii.anomaly.pools import (  # noqa: E402
     PoolResult,
@@ -542,6 +567,26 @@ def build_parser() -> argparse.ArgumentParser:
             "fit_run='pool:<fit-runs>') and save it to this path with per-run pool "
             "provenance in the meta/sidecar. Requires a runtime scorer "
             "(knn/mahalanobis)."
+        ),
+    )
+    parser.add_argument(
+        "--session-norm", action="store_true",
+        help=(
+            "cross-day-pooled only (package-7 Task 4, spec D3/A3.5; the plan's "
+            "within-day/cross-day wiring is deferred): score in the label-free "
+            "session-normalized space -- every run's rows are transformed with "
+            "THAT run's own first-N median/MAD stats (per-run stats for pool "
+            "members). The pooled detector still consumes RAW features. Outputs "
+            "go to a '-snorm<N>' suffixed leaf; a --save-snapshot artifact "
+            "stores RAW references + pool-global stats (norm_minutes=0 sentinel)."
+        ),
+    )
+    parser.add_argument(
+        "--norm-minutes", type=float, default=None,
+        help=(
+            "cross-day-pooled + --session-norm only: first-N prefix length in "
+            "minutes for the per-run session stats (default: 20; spec A2.2 sweeps "
+            "{5, 20, 60}). Must be > 0."
         ),
     )
     return parser
@@ -3153,6 +3198,11 @@ _POOLED_DEFAULT_K = 5
 k by a GT-state-ARI sweep over {4, 5, 6} at execution time -- this default only
 covers an invocation that does not say."""
 
+_DEFAULT_NORM_MINUTES = 20.0
+"""`--norm-minutes`' default (spec D3: "first `--norm-minutes` (default 20)");
+the A2.2 sweep varies it over {5, 20, 60}. Duplicated in `scripts/monitor.py`
+(same value, sibling scripts never import each other's internals)."""
+
 _BURST_NAME_DATE_RE = re.compile(r"_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}_\d{6}\.dat$")
 """The date portion of the burst filename pattern `<stream>_YYYY-MM-DD_HH-MM-SS_
 ffffff.dat` -- a deliberately NARROWED duplicate of `rowii.io.dataset._BURST_RE`
@@ -3206,11 +3256,23 @@ def _run_day_groups(run: Run) -> set[str]:
     return days
 
 
-def _cross_day_pooled_out_dir(results_root: Path, test_run: str, variant: str) -> Path:
+def _cross_day_pooled_out_dir(
+    results_root: Path,
+    test_run: str,
+    variant: str,
+    *,
+    norm_minutes: float | None = None,
+) -> Path:
     """`results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- the plan's
     literal layout (module docstring's "Output layout" section has the full
-    rationale: keyed by the HELD-OUT run, no scorer segment)."""
-    return results_root / "step2" / "cross-day-pooled" / test_run / f"{variant}-pooled"
+    rationale: keyed by the HELD-OUT run, no scorer segment). A `--session-norm`
+    run (*norm_minutes* not None) appends `-snorm<N>` (the `--states`/`-k<K>`
+    suffix precedent) so the A2.2 N-sweep and the raw baseline never overwrite
+    each other."""
+    leaf = f"{variant}-pooled"
+    if norm_minutes is not None:
+        leaf += f"-snorm{norm_minutes:g}"
+    return results_root / "step2" / "cross-day-pooled" / test_run / leaf
 
 
 def _pool_row_labels(pool: PoolResult, labels_per_run: dict[str, np.ndarray]) -> np.ndarray:
@@ -3222,6 +3284,24 @@ def _pool_row_labels(pool: PoolResult, labels_per_run: dict[str, np.ndarray]) ->
     for member_idx, member in enumerate(pool.members):
         mask = pool.run_index == member_idx
         out[mask] = labels_per_run[member.run_name][pool.window_index[mask]]
+    return out
+
+
+def _session_norm_pool(
+    pool: PoolResult, stats_by_run: dict[str, SessionStats]
+) -> np.ndarray:
+    """The pool's stacked feature rows in the session-normalized scoring space
+    (D3/A3.5): each member's block transformed with ITS OWN run's first-N stats
+    (per-run stats for pool members, Task 4 BINDING -- pool-global stats here would
+    let one run's session shift leak into every other run's normalized rows).
+    Returns a fresh matrix; `pool.features` stays raw for the detector."""
+    out = pool.features.copy()
+    for member_idx, member in enumerate(pool.members):
+        mask = pool.run_index == member_idx
+        if mask.any():
+            out[mask] = apply_session_norm(
+                pool.features[mask], stats_by_run[member.run_name]
+            )
     return out
 
 
@@ -3250,7 +3330,7 @@ def _cross_day_pooled_tables(
     pool_fit_labels: np.ndarray,
     pool_conformal_features: np.ndarray,
     pool_conformal_labels: np.ndarray,
-    prepared_test: PreparedRun,
+    test_features: np.ndarray,
     labels_test: np.ndarray,
     cal_windows: np.ndarray,
     scoring_windows: np.ndarray,
@@ -3264,7 +3344,11 @@ def _cross_day_pooled_tables(
     dict[int, ConformalThreshold],
 ]:
     """Both threshold modes' FAR tables from ONE pooled-reference pass, plus the
-    pooled snapshot parts.
+    pooled snapshot parts. Space-agnostic (Task 4): the caller passes the feature
+    matrices in the SCORING space -- raw ones normally, session-normalized ones
+    under `--session-norm` (pool rows per-run-normalized via `_session_norm_pool`,
+    *test_features* with the test run's own stats) -- and every reference/score/
+    threshold below simply lives in whatever space arrived here.
 
     Per label of the pooled-detector id space (ONE label space across every run --
     the property `_cross_day_per_state_sweep`'s transfer establishes for a pair,
@@ -3314,7 +3398,7 @@ def _cross_day_pooled_tables(
 
         label_scoring = scoring_windows[labels_test[scoring_windows] == label]
         scoring_scores = (
-            scorer.score(prepared_test.features[label_scoring])
+            scorer.score(test_features[label_scoring])
             if label_scoring.shape[0]
             else None
         )
@@ -3337,7 +3421,7 @@ def _cross_day_pooled_tables(
             recal_rows.append(far_row_no_conformal_data(label, sweep_cfg))
         else:
             recal_threshold = calibrate(
-                scorer.score(prepared_test.features[label_cal]), sweep_cfg.alpha
+                scorer.score(test_features[label_cal]), sweep_cfg.alpha
             )
             recal_rows.append(
                 _pooled_mode_row(label, sweep_cfg, recal_threshold, label_scoring, scoring_scores)
@@ -3370,13 +3454,18 @@ def _cross_day_pooled_notes(
     k: int,
     side_provenance: dict[str, dict[str, dict[str, int]]],
     coverage_warning_lines: list[str],
+    *,
+    session_norm_lines: list[str] | None = None,
 ) -> str:
     """`notes.md` body: pool composition/provenance, threshold-mode semantics,
-    coverage warnings (A4.1/A4.2 -- `"(none)"` sentinel when empty), the A4.5
-    estimator-vs-final framing, and the honesty notes every pooled output must
-    carry (spec §4). Pure string assembly -- the warning-plumbing seam the tests
-    exercise directly, since detected-label warnings cannot fire on a pool whose
-    own detector defines the label space."""
+    the `--session-norm` section when active (*session_norm_lines*, built by
+    `_run_cross_day_pooled` -- keyword-only with a `None` default so raw-baseline
+    callers and the existing seam test stay untouched), coverage warnings
+    (A4.1/A4.2 -- `"(none)"` sentinel when empty), the A4.5 estimator-vs-final
+    framing, and the honesty notes every pooled output must carry (spec §4). Pure
+    string assembly -- the warning-plumbing seam the tests exercise directly, since
+    detected-label warnings cannot fire on a pool whose own detector defines the
+    label space."""
     lines = [
         "# cross-day-pooled (held-out-day-group evaluation) -- notes",
         "",
@@ -3407,6 +3496,11 @@ def _cross_day_pooled_notes(
         "  recalibrate recipe); references stay the pool's.",
         "- Both modes score the SAME window set: the test run's top-split SCORING",
         "  side only. Every FAR number names its mode by the file it lives in.",
+    ]
+    if session_norm_lines is not None:
+        lines += ["", "## Session normalization (--session-norm, spec D3/A3.5)", ""]
+        lines += session_norm_lines
+    lines += [
         "",
         "## Coverage warnings (A4.1/A4.2)",
         "",
@@ -3452,12 +3546,18 @@ def _run_cross_day_pooled(
     k: int,
     use_cache: bool,
     save_snapshot_path: Path | None,
+    session_norm: bool,
+    norm_minutes: float,
 ) -> int:
     """The full cross-day-pooled pipeline for ONE (pool, test run) rotation --
-    module docstring's dedicated section. Returns a process exit code: 0 on
+    module docstring's dedicated section (incl. the `--session-norm` bullet:
+    detector RAW, scoring space per-run session-normalized, `-snorm<N>` out-dir
+    leaf, pooled-snapshot pool-global stats). Returns a process exit code: 0 on
     success, 2 for any pool-level failure (loud-failure rationale there: exactly
     one combo, explicitly named runs, so log-and-skip would always mean "silently
-    wrote nothing" and a silently shrunken pool would corrupt provenance).
+    wrote nothing" and a silently shrunken pool would corrupt provenance -- a run
+    whose first-N session-stats prefix is unusable under `--session-norm` is the
+    same kind of hard error).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -3491,6 +3591,28 @@ def _run_cross_day_pooled(
             file=sys.stderr,
         )
         return 2
+
+    # --session-norm (D3/A3.5): one label-free first-N stats fit PER RUN -- fit
+    # runs and test run alike, each on its OWN prefix (per-run stats for pool
+    # members, Task 4 binding). Fitted BEFORE any pooling so an unusable prefix
+    # fails fast, loudly naming the run.
+    stats_by_run: dict[str, SessionStats] | None = None
+    if session_norm:
+        stats_by_run = {}
+        for name, prep in prepared_all.items():
+            try:
+                stats_by_run[name] = fit_session_stats(
+                    prep.features, prep.valid_mask, prep.grid,
+                    norm_minutes=norm_minutes,
+                )
+            except ValueError as exc:
+                print(
+                    f"run_step2: --session-norm cannot fit run {name!r}'s first-"
+                    f"{norm_minutes:g}-minute stats ({exc}) -- every run in a "
+                    f"session-normalized rotation needs a usable first-N prefix",
+                    file=sys.stderr,
+                )
+                return 2
 
     # `scorer_name` is a plain `str` (same deliberate ignore as
     # `_cross_day_per_state_sweep`'s own SweepConfig construction).
@@ -3542,13 +3664,29 @@ def _run_cross_day_pooled(
         return 2
     cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
 
+    # Scoring-space matrices (A3.5 boundary): the DETECTOR above consumed raw
+    # features; under --session-norm everything the SCORING path touches is
+    # per-run session-normalized from here on.
+    pool_fit_labels = _pool_row_labels(pool_fit, labels_per_run)
+    pool_conformal_labels = _pool_row_labels(pool_conformal, labels_per_run)
+    if stats_by_run is None:
+        pool_fit_scoring = pool_fit.features
+        pool_conformal_scoring = pool_conformal.features
+        test_features_scoring = prepared_test.features
+    else:
+        pool_fit_scoring = _session_norm_pool(pool_fit, stats_by_run)
+        pool_conformal_scoring = _session_norm_pool(pool_conformal, stats_by_run)
+        test_features_scoring = apply_session_norm(
+            prepared_test.features, stats_by_run[test_run.name]
+        )
+
     far_frozen, far_recal, references, calibration_scores, thresholds = (
         _cross_day_pooled_tables(
-            pool_fit.features,
-            _pool_row_labels(pool_fit, labels_per_run),
-            pool_conformal.features,
-            _pool_row_labels(pool_conformal, labels_per_run),
-            prepared_test,
+            pool_fit_scoring,
+            pool_fit_labels,
+            pool_conformal_scoring,
+            pool_conformal_labels,
+            test_features_scoring,
             labels_test,
             cal_windows,
             scoring_windows,
@@ -3557,7 +3695,10 @@ def _run_cross_day_pooled(
         )
     )
 
-    out_dir = _cross_day_pooled_out_dir(cfg.results_root, test_run.name, variant)
+    out_dir = _cross_day_pooled_out_dir(
+        cfg.results_root, test_run.name, variant,
+        norm_minutes=norm_minutes if session_norm else None,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     for filename, table in (
         ("far_table_frozen.csv", far_frozen),
@@ -3627,10 +3768,38 @@ def _run_cross_day_pooled(
         "fit": pool_fit.provenance,
         "conformal": pool_conformal.provenance,
     }
+    session_note_lines: list[str] | None = None
+    if stats_by_run is not None:
+        session_note_lines = [
+            "Scoring happened in the label-free session-normalized space: every "
+            "run's rows (pool references, pool conformal rows, the test run's "
+            "calibration and scoring windows) were transformed with THAT run's "
+            f"own first-{norm_minutes:g}-minute median/MAD stats (scale floored "
+            "at 1e-8). The pooled DETECTOR consumed RAW features (A3.5 binding "
+            "boundary: labels are norm-invariant). Comparability with raw-space "
+            "FAR tables is FAR-level only (A3.5).",
+            "",
+            "| run | stats n_windows | norm_minutes |",
+            "|---|---|---|",
+            *(
+                f"| {name} | {stats_by_run[name].n_windows} "
+                f"| {stats_by_run[name].norm_minutes:g} |"
+                for name in (*fit_run_names, test_run.name)
+            ),
+            "",
+            "- caveats: if a run's first minutes contain a fault, normalization "
+            "absorbs part of it; the first minutes' STATE MIX parameterizes the "
+            "stats (state-mix confound -- the A2.2 norm-minutes sweep is the "
+            "sensitivity probe).",
+            "- scope: --session-norm is wired for cross-day-pooled only in this "
+            "package; the within-day/cross-day wiring is DEFERRED (Task 4 scope "
+            "decision).",
+        ]
     (out_dir / "notes.md").write_text(
         _cross_day_pooled_notes(
             fit_run_names, test_run.name, variant, scorer_name, alpha, k,
             side_provenance, warning_lines,
+            session_norm_lines=session_note_lines,
         )
     )
 
@@ -3650,11 +3819,44 @@ def _run_cross_day_pooled(
             )
             if path is not None
         }
+        snapshot_references = references
+        snapshot_cal_scores = calibration_scores
+        snapshot_thresholds = thresholds
+        snapshot_session_stats: SessionStats | None = None
+        if stats_by_run is not None:
+            # Pooled-snapshot session-norm semantics (Task 4 design decision,
+            # documented in fit_snapshot_from_parts' docstring): references stay
+            # RAW (the MonitorSnapshot field contract), session_stats are
+            # POOL-GLOBAL (center/scale of the raw pooled fit matrix,
+            # norm_minutes=0.0 sentinel -- a pooled artifact has no single fit
+            # day, hence no first-N prefix), and the stored conformal scores +
+            # frozen thresholds are recomputed in that pool-global space so the
+            # artifact is SELF-CONSISTENT under the monitor's --session-norm
+            # reconstruction (stored stats transform the stored references into
+            # exactly the space the scores were calibrated in). They deliberately
+            # differ from far_table_frozen.csv's per-run-normalized thresholds --
+            # FAR-level-only comparability (A3.5).
+            snapshot_session_stats = fit_pool_stats(pool_fit.features)
+            snapshot_references = {}
+            snapshot_cal_scores = {}
+            snapshot_thresholds = {}
+            for label in sorted(thresholds):
+                raw_reference = pool_fit.features[pool_fit_labels == label]
+                scorer = _make_scorer(scorer_name).fit(
+                    apply_session_norm(raw_reference, snapshot_session_stats)
+                )
+                raw_conformal = pool_conformal.features[pool_conformal_labels == label]
+                scores = scorer.score(
+                    apply_session_norm(raw_conformal, snapshot_session_stats)
+                )
+                snapshot_references[label] = raw_reference
+                snapshot_cal_scores[label] = scores
+                snapshot_thresholds[label] = calibrate(scores, alpha)
         snapshot = fit_snapshot_from_parts(
             detector,
-            references,
-            calibration_scores,
-            thresholds,
+            snapshot_references,
+            snapshot_cal_scores,
+            snapshot_thresholds,
             scorer=scorer_name,
             alpha=alpha,
             min_ref=sweep_cfg.min_ref,
@@ -3664,6 +3866,7 @@ def _run_cross_day_pooled(
             fit_run="pool:" + ",".join(fit_run_names),
             feature_names=list(next(iter(prepared_fit.values())).feature_names),
             checkpoints=checkpoints,
+            session_stats=snapshot_session_stats,
         )
         provenance: dict[str, object] = {
             "protocol": "cross-day-pooled",
@@ -3672,6 +3875,15 @@ def _run_cross_day_pooled(
             "k": k,
             "pool_members": side_provenance,
         }
+        if snapshot_session_stats is not None:
+            provenance["session_norm"] = {
+                "norm_minutes": norm_minutes,
+                "pool_stats_n_windows": snapshot_session_stats.n_windows,
+                "per_run_stats_n_windows": {
+                    name: stats.n_windows
+                    for name, stats in (stats_by_run or {}).items()
+                },
+            }
         save_snapshot(save_snapshot_path, snapshot, provenance=provenance)
         print(f"run_step2: saved pooled snapshot to {save_snapshot_path}")
 
@@ -3750,12 +3962,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"the snapshot whitelist, rowii.runtime.snapshot), got --scorer "
                 f"{args.scorer!r}"
             )
+        if args.norm_minutes is not None and not args.session_norm:
+            parser.error(
+                "--norm-minutes requires --session-norm (it parameterizes the "
+                "per-run session stats, spec D3)"
+            )
+        if args.norm_minutes is not None and args.norm_minutes <= 0:
+            parser.error(f"--norm-minutes must be > 0, got {args.norm_minutes}")
     else:
         for flag, value in (
             ("--fit-runs", args.fit_runs),
             ("--test-run", args.test_run),
             ("--k", args.k),
             ("--save-snapshot", args.save_snapshot),
+            # store_true flag: only its True state is a usage error elsewhere.
+            ("--session-norm", args.session_norm or None),
+            ("--norm-minutes", args.norm_minutes),
         ):
             if value is not None:
                 parser.error(
@@ -3902,6 +4124,12 @@ def main(argv: list[str] | None = None) -> int:
             k=args.k if args.k is not None else _POOLED_DEFAULT_K,
             use_cache=not args.no_cache,
             save_snapshot_path=args.save_snapshot,
+            session_norm=args.session_norm,
+            norm_minutes=(
+                args.norm_minutes
+                if args.norm_minutes is not None
+                else _DEFAULT_NORM_MINUTES
+            ),
         )
 
     use_cache = not args.no_cache

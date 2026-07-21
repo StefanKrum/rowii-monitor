@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from rowii.anomaly.normalize import fit_pool_stats, fit_session_stats
 from rowii.anomaly.references import split_by_segments
 from rowii.anomaly.sweep import SweepConfig
 from rowii.config import Config, DetectConfig
@@ -554,3 +555,200 @@ def test_missing_snapshot_file_exits_2(
     )
     assert exit_code == 2
     assert not (tmp_path / "out-missing").exists()
+
+
+# ---------------------------------------------------------------------------
+# T4: --session-norm (package-7 Task 4, spec D3/A3.5) -- refusal on stats-less
+#     snapshots, scoring-space-only wiring, detector-RAW invariance
+# ---------------------------------------------------------------------------
+
+
+def _stats_snapshot(
+    tmp_path: Path, *, norm_minutes: float = 20.0
+) -> tuple[Path, MonitorSnapshot]:
+    """A REAL fit_snapshot product upgraded with fit-day session stats (the
+    monitor's reference-side transform, D3/A3.5) -- the 300 s fixture sits entirely
+    inside the default 20-minute prefix, so the stats cover every valid window."""
+    fit_prepared = _two_state_prepared(_FIT_T0_NS, seed=0)
+    snapshot, _ = fit_snapshot(
+        fit_prepared, _cfg(tmp_path / "unused"), SweepConfig(),
+        variant="fusion", fit_run=_FIT_RUN,
+    )
+    if norm_minutes > 0.0:
+        stats = fit_session_stats(
+            fit_prepared.features, fit_prepared.valid_mask, fit_prepared.grid,
+            norm_minutes=norm_minutes,
+        )
+    else:
+        stats = fit_pool_stats(fit_prepared.features)  # the pool-global sentinel
+    snapshot = replace(snapshot, session_stats=stats)
+    path = tmp_path / "snapshot_v2_stats.npz"
+    save_snapshot(path, snapshot)
+    return path, snapshot
+
+
+def test_session_norm_refuses_snapshot_without_stats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A snapshot with `session_stats=None` (a v1 FILE or any snapshot fitted
+    without session stats) must be REFUSED under --session-norm with exit 2 and a
+    message naming the v1/no-stats cause (spec A3.5, binding)."""
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)  # no session stats
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-refused"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--session-norm", "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--session-norm" in err
+    assert "v1" in err  # names the v1/no-stats cause
+    assert "session" in err.lower()
+    assert not out_dir.exists()  # refused BEFORE writing anything
+
+
+def test_session_norm_removes_global_shift_in_recalibrate_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The D3 property end to end: a GLOBAL affine shift of the monitored run is
+    absorbed by --session-norm -- (shifted run + norm) produces the SAME states,
+    roles and alarm set as (unshifted run + norm), because each run's own first-N
+    median/MAD stats map both into the same normalized scoring space."""
+    import monitor
+
+    snapshot_path, snapshot = _stats_snapshot(tmp_path)
+    base = _two_state_prepared(_MON_T0_NS, seed=1)
+    shifted = replace(base, features=base.features + 5.0)
+
+    out_base = tmp_path / "out-base-norm"
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", base)
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--session-norm", "--out", str(out_base),
+        ]
+    ) == 0
+
+    out_shifted = tmp_path / "out-shifted-norm"
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", shifted)
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--session-norm", "--out", str(out_shifted),
+        ]
+    ) == 0
+
+    alarms_base = pd.read_parquet(out_base / "alarms.parquet", engine="pyarrow")
+    alarms_shift = pd.read_parquet(out_shifted / "alarms.parquet", engine="pyarrow")
+
+    # Non-vacuousness guard: the equality below must compare a REAL alarm set
+    # (probed at test-writing time: 5 alarm windows at these seeds).
+    assert int(alarms_base["alarm"].sum()) > 0
+
+    # The shift is REMOVED: identical states/roles/alarm sets, scores equal to
+    # floating-point noise (the shifted run's median shifts by exactly the offset).
+    np.testing.assert_array_equal(
+        alarms_shift["state"].to_numpy(), alarms_base["state"].to_numpy()
+    )
+    np.testing.assert_array_equal(
+        alarms_shift["role"].to_numpy(), alarms_base["role"].to_numpy()
+    )
+    np.testing.assert_array_equal(
+        alarms_shift["alarm"].to_numpy(), alarms_base["alarm"].to_numpy()
+    )
+    np.testing.assert_allclose(
+        alarms_shift["score"].to_numpy(), alarms_base["score"].to_numpy(),
+        rtol=1e-9, atol=1e-9,
+    )
+
+    # Recalibrate-mode FAR sanity on the shifted+normed run: near alpha per state.
+    scored = alarms_shift[alarms_shift["role"] == "scored"]
+    for _state, group in scored.groupby("state"):
+        assert group["alarm"].mean() <= 3 * snapshot.alpha
+
+    notes = (out_shifted / "monitor_notes.md").read_text()
+    assert "session" in notes.lower()
+    # Both stats' n_windows are named (the fit fixture and the monitored fixture
+    # each have 300 valid windows inside the 20-minute prefix).
+    assert "reference-side stats: n_windows=300" in notes
+    assert "monitored-run stats: n_windows=300" in notes
+
+
+def test_session_norm_detector_labels_bitwise_invariant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3.5 binding boundary: the DETECTOR always consumes RAW features -- the
+    state column (and segments.csv) must be bitwise identical with and without
+    --session-norm on the same run."""
+    import monitor
+
+    snapshot_path, _ = _stats_snapshot(tmp_path)
+    shifted = replace(
+        _two_state_prepared(_MON_T0_NS, seed=1),
+        features=_two_state_prepared(_MON_T0_NS, seed=1).features + 5.0,
+    )
+
+    out_norm = tmp_path / "out-with-norm"
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", shifted)
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--session-norm", "--out", str(out_norm),
+        ]
+    ) == 0
+    out_raw = tmp_path / "out-without-norm"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--out", str(out_raw),
+        ]
+    ) == 0
+
+    with_norm = pd.read_parquet(out_norm / "alarms.parquet", engine="pyarrow")
+    without_norm = pd.read_parquet(out_raw / "alarms.parquet", engine="pyarrow")
+    np.testing.assert_array_equal(
+        with_norm["state"].to_numpy(), without_norm["state"].to_numpy()
+    )
+    assert (
+        (out_norm / "segments.csv").read_text() == (out_raw / "segments.csv").read_text()
+    )
+
+
+def test_session_norm_pool_global_sentinel_falls_back_to_default_minutes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pooled snapshot's stats carry the `norm_minutes == 0.0` sentinel (pool-
+    global, not first-N) -- the monitor must fit the MONITORED run's own stats over
+    the DEFAULT 20-minute prefix instead of a zero-length one, and proceed."""
+    import monitor
+
+    snapshot_path, _ = _stats_snapshot(tmp_path, norm_minutes=0.0)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-sentinel"
+
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--session-norm", "--out", str(out_dir),
+        ]
+    ) == 0
+    notes = (out_dir / "monitor_notes.md").read_text()
+    assert "pool-global" in notes
+    assert "monitored-run stats: n_windows=300" in notes
+
+
+def test_help_documents_session_norm(capsys: pytest.CaptureFixture[str]) -> None:
+    import monitor
+
+    with pytest.raises(SystemExit) as exc_info:
+        monitor.main(["--help"])
+    assert exc_info.value.code == 0
+    assert "--session-norm" in capsys.readouterr().out
