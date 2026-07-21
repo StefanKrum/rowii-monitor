@@ -175,6 +175,24 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   plan's within-day/cross-day `--session-norm` wiring is NOT implemented in this
   package's Task 4 -- cross-day-pooled only, to keep the change reviewable; the
   other protocols refuse the flag.
+- **Level-only recalibration** (`--level-recal`, package-8 Task 6, spec D2/
+  A1.4/A1.9/A1.11): the shape-preserving, feature-native counterpart to
+  `--session-norm` -- an additive offset in the log10 domain, applied ONLY to
+  the TEST run's LEVEL columns (`*_log_rms`/`*_band_*`/`*_octave_*`,
+  `rowii.anomaly.levelrecal`); shape columns (`*_spectral_centroid`/
+  `*_rolloff95`/`*_kurtosis`) are untouched. The anchor (reference) is the
+  per-column median over the POOLED FIT side's own RAW features (A1.4); the
+  run-side statistic is the TEST run's own label-free first-
+  `_DEFAULT_NORM_MINUTES` (20) minutes of valid windows (mirrors
+  `fit_session_stats`' first-N-minutes membership rule, duplicated locally --
+  `_first_n_minutes_rows`). Only the TEST run's SCORING-space features shift;
+  the pooled FIT/CONFORMAL rows stay RAW (they define the anchor -- mirrors
+  `monitor.py`, where only the monitored run shifts, package-8 Task 7).
+  Requires `--variant audio` or `vibration` (fusion's per-run z-scored
+  features have no meaningful level column, A1.1 -- any other variant is a
+  `parser.error`); mutually exclusive with `--session-norm` (A1.10 fit-path
+  exclusivity); cross-day-pooled only, same precedent as `--session-norm`.
+  Outputs land in a `-lrecal` suffixed leaf (`<variant>-pooled-lrecal/`).
 - **Failures are loud** (unlike the pair-matrix protocols' log-and-skip): this
   protocol names every run explicitly and produces exactly ONE combo, so any
   pool-level failure (a member that cannot prepare, k too large for the pool, a
@@ -313,6 +331,11 @@ from rowii.anomaly.fusion import (  # noqa: E402
     fisher_statistic,
     split_branch_columns,
     tippett_statistic,
+)
+from rowii.anomaly.levelrecal import (  # noqa: E402
+    apply_level_recal,
+    column_medians,
+    level_recal_offsets,
 )
 from rowii.anomaly.normalize import (  # noqa: E402
     SessionStats,
@@ -587,6 +610,21 @@ def build_parser() -> argparse.ArgumentParser:
             "cross-day-pooled + --session-norm only: first-N prefix length in "
             "minutes for the per-run session stats (default: 20; spec A2.2 sweeps "
             "{5, 20, 60}). Must be > 0."
+        ),
+    )
+    parser.add_argument(
+        "--level-recal", action="store_true",
+        help=(
+            "cross-day-pooled only (package-8 Task 6, spec D2/A1.4/A1.9): "
+            "shape-preserving level-only recalibration -- recentre the TEST "
+            "run's LEVEL columns (*_log_rms/_band_*/_octave_*, log10-scaled) "
+            "onto the pooled FIT side's own per-column median via an additive "
+            "offset (rowii.anomaly.levelrecal), computed label-free from the "
+            "TEST run's own first-20-minute prefix; shape columns are "
+            "untouched. Requires --variant audio or vibration (fusion's "
+            "per-run z-scored features have no meaningful level column, spec "
+            "A1.1); mutually exclusive with --session-norm (A1.10). Outputs "
+            "go to a '-lrecal' suffixed leaf."
         ),
     )
     return parser
@@ -3262,16 +3300,22 @@ def _cross_day_pooled_out_dir(
     variant: str,
     *,
     norm_minutes: float | None = None,
+    level_recal: bool = False,
 ) -> Path:
     """`results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- the plan's
     literal layout (module docstring's "Output layout" section has the full
     rationale: keyed by the HELD-OUT run, no scorer segment). A `--session-norm`
     run (*norm_minutes* not None) appends `-snorm<N>` (the `--states`/`-k<K>`
     suffix precedent) so the A2.2 N-sweep and the raw baseline never overwrite
-    each other."""
+    each other. A `--level-recal` run (*level_recal* True, package-8 Task 6)
+    appends `-lrecal` -- mutually exclusive with *norm_minutes* by construction
+    (the CLI guard, `main`), but this function itself stays a plain string
+    composition, agnostic to which caller enforces that."""
     leaf = f"{variant}-pooled"
     if norm_minutes is not None:
         leaf += f"-snorm{norm_minutes:g}"
+    if level_recal:
+        leaf += "-lrecal"
     return results_root / "step2" / "cross-day-pooled" / test_run / leaf
 
 
@@ -3303,6 +3347,36 @@ def _session_norm_pool(
                 pool.features[mask], stats_by_run[member.run_name]
             )
     return out
+
+
+def _first_n_minutes_rows(prepared: PreparedRun, norm_minutes: float) -> np.ndarray:
+    """*prepared*'s own first *norm_minutes* of VALID windows, float64 -- the
+    `--level-recal` run-side anchor source (package-8 Task 6, spec A1.4/A1.11:
+    "the TEST run's own first-N-minutes windows", label-free).
+
+    Mirrors `rowii.anomaly.normalize.fit_session_stats`'s identical window-
+    membership rule (window START offset < `norm_minutes * 60s` AND
+    `valid_mask`) -- duplicated here rather than imported, since level-recal
+    needs the qualifying ROWS themselves (`rowii.anomaly.levelrecal.
+    column_medians`' input), not a fitted `SessionStats` center/scale, and
+    `rowii/anomaly/normalize.py` is out of this task's file scope.
+
+    Raises:
+        ValueError: if zero windows qualify (empty prefix / all-invalid) --
+            the same failure mode as `fit_session_stats`, loud rather than
+            silently medianing over nothing.
+    """
+    n_windows = prepared.features.shape[0]
+    cutoff_ns = int(round(norm_minutes * 60.0 * 1e9))
+    window_offsets = np.arange(n_windows, dtype=np.int64) * np.int64(prepared.grid.window_ns)
+    qualifying = (window_offsets < cutoff_ns) & prepared.valid_mask
+    rows = prepared.features[qualifying]
+    if rows.shape[0] == 0:
+        raise ValueError(
+            f"zero valid windows start within the first {norm_minutes:g} minute(s) "
+            f"of the run -- cannot compute the level-recal run-side median"
+        )
+    return np.asarray(rows, dtype=np.float64)
 
 
 def _pooled_mode_row(
@@ -3456,16 +3530,18 @@ def _cross_day_pooled_notes(
     coverage_warning_lines: list[str],
     *,
     session_norm_lines: list[str] | None = None,
+    level_recal_lines: list[str] | None = None,
 ) -> str:
     """`notes.md` body: pool composition/provenance, threshold-mode semantics,
     the `--session-norm` section when active (*session_norm_lines*, built by
     `_run_cross_day_pooled` -- keyword-only with a `None` default so raw-baseline
-    callers and the existing seam test stay untouched), coverage warnings
-    (A4.1/A4.2 -- `"(none)"` sentinel when empty), the A4.5 estimator-vs-final
-    framing, and the honesty notes every pooled output must carry (spec §4). Pure
-    string assembly -- the warning-plumbing seam the tests exercise directly, since
-    detected-label warnings cannot fire on a pool whose own detector defines the
-    label space."""
+    callers and the existing seam test stay untouched), the `--level-recal`
+    section when active (*level_recal_lines*, package-8 Task 6, same `None`-
+    default keyword-only convention), coverage warnings (A4.1/A4.2 -- `"(none)"`
+    sentinel when empty), the A4.5 estimator-vs-final framing, and the honesty
+    notes every pooled output must carry (spec §4). Pure string assembly -- the
+    warning-plumbing seam the tests exercise directly, since detected-label
+    warnings cannot fire on a pool whose own detector defines the label space."""
     lines = [
         "# cross-day-pooled (held-out-day-group evaluation) -- notes",
         "",
@@ -3500,6 +3576,9 @@ def _cross_day_pooled_notes(
     if session_norm_lines is not None:
         lines += ["", "## Session normalization (--session-norm, spec D3/A3.5)", ""]
         lines += session_norm_lines
+    if level_recal_lines is not None:
+        lines += ["", "## Level-only recalibration (--level-recal, spec D2/A1.4)", ""]
+        lines += level_recal_lines
     lines += [
         "",
         "## Coverage warnings (A4.1/A4.2)",
@@ -3548,16 +3627,21 @@ def _run_cross_day_pooled(
     save_snapshot_path: Path | None,
     session_norm: bool,
     norm_minutes: float,
+    level_recal: bool,
 ) -> int:
     """The full cross-day-pooled pipeline for ONE (pool, test run) rotation --
     module docstring's dedicated section (incl. the `--session-norm` bullet:
     detector RAW, scoring space per-run session-normalized, `-snorm<N>` out-dir
-    leaf, pooled-snapshot pool-global stats). Returns a process exit code: 0 on
-    success, 2 for any pool-level failure (loud-failure rationale there: exactly
-    one combo, explicitly named runs, so log-and-skip would always mean "silently
-    wrote nothing" and a silently shrunken pool would corrupt provenance -- a run
-    whose first-N session-stats prefix is unusable under `--session-norm` is the
-    same kind of hard error).
+    leaf, pooled-snapshot pool-global stats; and the `--level-recal` bullet,
+    package-8 Task 6: detector RAW, only the TEST run's scoring features shape-
+    preservingly recentred onto the pooled FIT side's own median, `-lrecal`
+    out-dir leaf). Returns a process exit code: 0 on success, 2 for any
+    pool-level failure (loud-failure rationale there: exactly one combo,
+    explicitly named runs, so log-and-skip would always mean "silently wrote
+    nothing" and a silently shrunken pool would corrupt provenance -- a run
+    whose first-N session-stats prefix is unusable under `--session-norm`, or
+    whose first-N-minutes level median is unusable under `--level-recal`, is
+    the same kind of hard error).
     """
     if _is_beats_variant(variant):
         _import_beats_or_exit()
@@ -3666,19 +3750,47 @@ def _run_cross_day_pooled(
 
     # Scoring-space matrices (A3.5 boundary): the DETECTOR above consumed raw
     # features; under --session-norm everything the SCORING path touches is
-    # per-run session-normalized from here on.
+    # per-run session-normalized, and under --level-recal only the TEST run's
+    # own scoring features are shape-preservingly recentred onto the pooled
+    # FIT side's anchor (spec A1.4/A1.11) -- the two are mutually exclusive
+    # (parser-guarded in `main`), so at most one branch below ever applies.
     pool_fit_labels = _pool_row_labels(pool_fit, labels_per_run)
     pool_conformal_labels = _pool_row_labels(pool_conformal, labels_per_run)
-    if stats_by_run is None:
-        pool_fit_scoring = pool_fit.features
-        pool_conformal_scoring = pool_conformal.features
-        test_features_scoring = prepared_test.features
-    else:
+    level_recal_offsets_used: dict[str, float] | None = None
+    if stats_by_run is not None:
         pool_fit_scoring = _session_norm_pool(pool_fit, stats_by_run)
         pool_conformal_scoring = _session_norm_pool(pool_conformal, stats_by_run)
         test_features_scoring = apply_session_norm(
             prepared_test.features, stats_by_run[test_run.name]
         )
+    elif level_recal:
+        # A1.4 anchor = the per-column median over the POOLED FIT side's own
+        # RAW features; the run-side statistic is the TEST run's own label-free
+        # first-N-minutes prefix (_first_n_minutes_rows). The pooled FIT/
+        # CONFORMAL rows stay RAW below -- only the TEST run shifts (mirrors
+        # monitor.py, package-8 Task 7).
+        feature_names = list(next(iter(prepared_fit.values())).feature_names)
+        try:
+            anchor = column_medians(pool_fit.features, feature_names)
+            test_first_n_rows = _first_n_minutes_rows(prepared_test, _DEFAULT_NORM_MINUTES)
+            test_median = column_medians(test_first_n_rows, feature_names)
+            level_recal_offsets_used = level_recal_offsets(test_median, anchor)
+        except ValueError as exc:
+            print(
+                f"run_step2: --level-recal cannot compute offsets for test run "
+                f"{test_run.name!r} ({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        pool_fit_scoring = pool_fit.features
+        pool_conformal_scoring = pool_conformal.features
+        test_features_scoring = apply_level_recal(
+            prepared_test.features, feature_names, level_recal_offsets_used
+        )
+    else:
+        pool_fit_scoring = pool_fit.features
+        pool_conformal_scoring = pool_conformal.features
+        test_features_scoring = prepared_test.features
 
     far_frozen, far_recal, references, calibration_scores, thresholds = (
         _cross_day_pooled_tables(
@@ -3698,6 +3810,7 @@ def _run_cross_day_pooled(
     out_dir = _cross_day_pooled_out_dir(
         cfg.results_root, test_run.name, variant,
         norm_minutes=norm_minutes if session_norm else None,
+        level_recal=level_recal,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     for filename, table in (
@@ -3795,11 +3908,40 @@ def _run_cross_day_pooled(
             "package; the within-day/cross-day wiring is DEFERRED (Task 4 scope "
             "decision).",
         ]
+    level_recal_note_lines: list[str] | None = None
+    if level_recal_offsets_used is not None:
+        level_recal_note_lines = [
+            "Scoring happened with the TEST run's LEVEL columns (`*_log_rms`/"
+            "`*_band_*`/`*_octave_*`, log10-scaled by construction -- VERIFIED "
+            "fact, `rowii.anomaly.levelrecal` module docstring) additively "
+            "recentred onto the pooled FIT side's own per-column median "
+            "(spec A1.4 anchor: `column_medians(pool_fit.features, ...)`); "
+            "shape columns (`*_spectral_centroid`/`*_rolloff95`/`*_kurtosis`) "
+            "pass through untouched by construction. Offset = `run_median - "
+            "reference_median` per column, the run-side median drawn from the "
+            f"TEST run's own label-free first-{_DEFAULT_NORM_MINUTES:g}-minute "
+            "prefix. The pooled FIT/CONFORMAL rows stay RAW below (they define "
+            "the anchor) -- only the TEST run's own scoring features shift.",
+            "",
+            "This is our own, independent, feature-native test of the "
+            "partner's channel-recalibration idea (Rodrigues & Zhang, 2026): "
+            "every offset below is computed from OUR OWN caches; no partner "
+            "dB figure is imported here (D2, spec A1.1/A1.9).",
+            "",
+            "| level column | offset (log10 units, run - reference) |",
+            "|---|---|",
+            *(
+                f"| {name} | {offset:.6g} |"
+                for name, offset in sorted(level_recal_offsets_used.items())
+            ),
+            "",
+        ]
     (out_dir / "notes.md").write_text(
         _cross_day_pooled_notes(
             fit_run_names, test_run.name, variant, scorer_name, alpha, k,
             side_provenance, warning_lines,
             session_norm_lines=session_note_lines,
+            level_recal_lines=level_recal_note_lines,
         )
     )
 
@@ -3969,6 +4111,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.norm_minutes is not None and args.norm_minutes <= 0:
             parser.error(f"--norm-minutes must be > 0, got {args.norm_minutes}")
+        if args.level_recal and args.session_norm:
+            parser.error(
+                "--level-recal is mutually exclusive with --session-norm "
+                "(package-8 spec D2/A1.4/A1.10 fit-path exclusivity)"
+            )
+        if args.level_recal and args.variant not in ("audio", "vibration"):
+            parser.error(
+                f"--level-recal requires --variant audio or vibration: fusion's "
+                f"per-run z-scored features have no meaningful level column "
+                f"(spec A1.1) -- got --variant {args.variant!r}"
+            )
     else:
         for flag, value in (
             ("--fit-runs", args.fit_runs),
@@ -3978,6 +4131,7 @@ def main(argv: list[str] | None = None) -> int:
             # store_true flag: only its True state is a usage error elsewhere.
             ("--session-norm", args.session_norm or None),
             ("--norm-minutes", args.norm_minutes),
+            ("--level-recal", args.level_recal or None),
         ):
             if value is not None:
                 parser.error(
@@ -4130,6 +4284,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.norm_minutes is not None
                 else _DEFAULT_NORM_MINUTES
             ),
+            level_recal=args.level_recal,
         )
 
     use_cache = not args.no_cache
