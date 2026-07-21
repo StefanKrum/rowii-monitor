@@ -44,6 +44,13 @@ condition. This CLI surfaces the affected mode names both in `metrics.json`
 stderr-bound by `main`'s `logging.basicConfig` call like every other Step-2 CLI)
 whenever the fitted bank has any (`_warn_low_confidence`).
 
+`no_mode_fits_rate` and `ari`/`accuracy` sit on DIFFERENT footings, deliberately:
+the rejection rate is computed on the bank's RAW pre-`--smooth` assignment over
+EVERY valid window (`metrics.json`'s `bank.n_valid`, GT-independent), while
+`ari`/`accuracy` score the (possibly `--smooth`ed) assigned labels restricted to
+the `{unknown, transition}`-masked `n_masked` subset above -- the two rates'
+denominators are therefore never directly comparable.
+
 Artifacts under `results/step2/modebank/<test_run>/<variant>-<family>/`:
 `metrics.json` (bank ARI/accuracy/no_mode_fits_rate/low_confidence_modes +
 P7-comparison ARI, supervised/unsupervised tags), `confusion.csv` (GT state x
@@ -164,6 +171,12 @@ def _run_day_groups(run: Run) -> set[str]:
                 f"the expected _YYYY-MM-DD_HH-MM-SS_ffffff.dat timestamp"
             )
         days.add(match.group(1))
+    if len(days) > 1:
+        logger.info(
+            "run_modebank: run %s spans %d calendar days (%s) -- its A3.8 day "
+            "group is the full set",
+            run.name, len(days), ", ".join(sorted(days)),
+        )
     return days
 
 
@@ -290,13 +303,23 @@ def _smooth_ids(labels: np.ndarray, min_dwell: int) -> np.ndarray:
 
 
 def _bank_metrics(
-    bank: ModeBank, *, ari: float, n_masked: int, accuracy: float, no_mode_fits_rate: float
+    bank: ModeBank,
+    *,
+    ari: float,
+    n_masked: int,
+    accuracy: float,
+    no_mode_fits_rate: float,
+    n_valid: int,
 ) -> dict[str, object]:
     """The `"bank"` sub-dict of `metrics.json` (the supervised arm) -- includes
     `low_confidence_modes` (adversarial-review binding, T2 finding 1, module
     docstring): a caller reading `no_mode_fits_rate` alone cannot tell whether it
     under-fires, so the affected mode names travel with every written artifact,
-    not just the log line `_warn_low_confidence` emits at fit time."""
+    not just the log line `_warn_low_confidence` emits at fit time. `n_valid` is
+    `no_mode_fits_rate`'s OWN denominator (every valid window, GT-independent,
+    computed on the bank's RAW pre-`--smooth` assignment -- module docstring's
+    raw/smoothed, masked/unmasked coexistence note); it is NOT the same
+    denominator as `ari`/`accuracy`'s `n_masked` above."""
     return {
         "tag": "supervised",
         "family": bank.family,
@@ -305,6 +328,7 @@ def _bank_metrics(
         "ari": ari,
         "n_masked": n_masked,
         "accuracy": accuracy,
+        "n_valid": n_valid,
         "no_mode_fits_rate": no_mode_fits_rate,
     }
 
@@ -326,6 +350,12 @@ def _warn_low_confidence(bank: ModeBank) -> None:
     the `no_mode_fits_rate` this rotation reports UNDER-FIRES for these modes --
     it must NOT be read as "no novelty" while any of them survive. A no-op when
     every surviving member calibrated with enough data.
+
+    This CLI-level re-warn is intentional, not a duplicate left over from
+    `ModeBank.fit`'s own internal low-confidence WARNING (`rowii.state.
+    modebank`): it is artifact-adjacent surfacing, emitted right where this
+    rotation's own artifacts are about to be written, for a signal the
+    fit-time warning can already have scrolled away past in a long run's log.
     """
     if not bank.low_confidence_modes:
         return
@@ -527,6 +557,46 @@ def main(argv: list[str] | None = None) -> int:
     prepared_fit = {name: prepared_all[name] for name in fit_run_names}
     prepared_test = prepared_all[test_run_obj.name]
 
+    # Test-run feature-contract guard (T3-review MEDIUM finding 1, mirrors
+    # scripts/run_step2.py's `_run_cross_day_pooled` test-run-vs-fit-pool
+    # geometry guard): `feature_names` here is the SAME "first fit run's
+    # names" value ModeBank.fit is handed below as the pool's contract.
+    # Checking full name equality (not just column COUNT) catches BOTH a
+    # width mismatch -- otherwise an uncaught ValueError traceback out of
+    # ModeBank.assign's own width check further down -- AND same-width
+    # channel-name drift, which a width-only check would miss and which
+    # would otherwise score silently against a positionally-misaligned
+    # contract (the 080726 TurbineVib-ch0 case, rowii.anomaly.pools.
+    # build_pool's own sibling guard against the same failure mode).
+    feature_names = list(next(iter(prepared_fit.values())).feature_names)
+    test_feature_names = list(prepared_test.feature_names)
+    if test_feature_names != feature_names:
+        if len(test_feature_names) != len(feature_names):
+            detail = (
+                f"{len(test_feature_names)} feature column(s) vs the fit "
+                f"pool's {len(feature_names)} -- incompatible feature dims"
+            )
+        else:
+            diverging = [
+                (a, b)
+                for a, b in zip(feature_names, test_feature_names, strict=True)
+                if a != b
+            ]
+            detail = (
+                f"same width ({len(feature_names)} column(s)) but disagrees "
+                f"on feature names/order (first divergence(s): "
+                f"{diverging[:3]}) -- channel-availability drift between "
+                f"days can produce same-width runs whose columns MEAN "
+                f"different channels"
+            )
+        print(
+            f"run_modebank: test run {test_run_obj.name!r} feature contract "
+            f"does not match the fit pool's ({detail}) -- refusing to score "
+            f"a positionally-misaligned contract",
+            file=sys.stderr,
+        )
+        return 2
+
     sweep_cfg = SweepConfig(alpha=args.alpha)
     pool_fit = build_pool(prepared_fit, "fit", sweep_cfg)
     pool_conformal = build_pool(prepared_fit, "conformal", sweep_cfg)
@@ -541,7 +611,6 @@ def main(argv: list[str] | None = None) -> int:
 
     fit_gt = _pool_gt_labels(pool_fit, gt_by_run)
     calib_gt = _pool_gt_labels(pool_conformal, gt_by_run)
-    feature_names = list(next(iter(prepared_fit.values())).feature_names)
 
     try:
         bank = ModeBank.fit(
@@ -595,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
     metrics: dict[str, dict[str, object]] = {
         "bank": _bank_metrics(
             bank, ari=ari, n_masked=n_masked, accuracy=accuracy,
-            no_mode_fits_rate=no_mode_fits_rate,
+            no_mode_fits_rate=no_mode_fits_rate, n_valid=n_valid_test,
         ),
         "p7_pooled": _p7_metrics(args.p7_k, p7_ari, p7_n_masked),
     }
@@ -610,6 +679,10 @@ def main(argv: list[str] | None = None) -> int:
     # Scattered to the test run's FULL grid (plan interface text), invalid
     # windows carrying the ""/False scatter-back sentinel -- mirrors
     # scripts/run_step2.py's `_INVALID_LABEL` convention (module docstring).
+    # `assigned` carries --smooth's duration-filtered labels when requested
+    # (raw argmin otherwise); `no_mode_fits` stays the RAW pre-smooth
+    # per-window conformal-rejection signal (module docstring's raw/smoothed
+    # note) and is never itself smoothed.
     n_grid = prepared_test.grid.n_windows
     full_assigned = np.full(n_grid, "", dtype=object)
     full_no_mode_fits = np.zeros(n_grid, dtype=bool)

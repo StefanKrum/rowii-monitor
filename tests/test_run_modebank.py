@@ -148,6 +148,11 @@ def test_run_modebank_writes_metrics_with_supervised_and_unsupervised_tags(
     assert 0.0 <= metrics["bank"]["ari"] <= 1.0
     assert "accuracy" in metrics["bank"] and "accuracy" not in metrics["p7_pooled"]
     assert 0.0 <= metrics["bank"]["no_mode_fits_rate"] <= 1.0
+    # T3-review LOW finding 2: n_valid documents no_mode_fits_rate's OWN
+    # denominator (every valid window, GT-independent) -- distinct from
+    # ari/accuracy's n_masked denominator above (module docstring's
+    # raw/smoothed, masked/unmasked coexistence note).
+    assert metrics["bank"]["n_valid"] == int(pt.valid_mask.sum())
     # Mandatory addition (T2 finding 1): the field is ALWAYS present, empty when
     # every surviving member calibrated with enough data (this fixture's case).
     assert metrics["bank"]["low_confidence_modes"] == []
@@ -223,7 +228,9 @@ def test_low_confidence_modes_surfaced_in_metrics_and_warning(caplog) -> None:
     )
     assert bank.low_confidence_modes == ("pump",)
 
-    metrics = rm._bank_metrics(bank, ari=1.0, n_masked=10, accuracy=1.0, no_mode_fits_rate=0.0)
+    metrics = rm._bank_metrics(
+        bank, ari=1.0, n_masked=10, accuracy=1.0, no_mode_fits_rate=0.0, n_valid=12
+    )
     assert metrics["low_confidence_modes"] == ["pump"]
 
     with caplog.at_level(logging.WARNING):
@@ -323,3 +330,86 @@ def test_day_group_overlap_between_fit_and_test_exits_2(tmp_path, monkeypatch, c
     err = capsys.readouterr().err
     assert "fitA" in err
     assert "2026-07-01" in err
+
+
+# ---------------------------------------------------------------------------
+# 7. Test-run feature-contract guard (T3-review MEDIUM finding 1, mirrors
+#    scripts/run_step2.py's `_run_cross_day_pooled` test-run-vs-fit-pool
+#    geometry guard): checked against `list(prepared_test.feature_names) !=
+#    feature_names` -- the pool's own contract -- so it catches BOTH a width
+#    mismatch (previously an uncaught ValueError traceback out of
+#    ModeBank.assign's own width check) AND same-width channel-name drift
+#    (previously scored silently -- the documented 080726 TurbineVib-ch0 case,
+#    rowii.anomaly.pools.build_pool's own sibling guard).
+# ---------------------------------------------------------------------------
+
+
+def test_test_run_feature_name_drift_same_width_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    """Same-width channel-name drift: the test run's own feature_names disagree
+    with the fit pool's at one column, byte-for-byte equal lengths -- must
+    refuse loudly and NAME the drifted column, not score against a
+    positionally-misaligned contract."""
+    import dataclasses as dc
+
+    import run_modebank as rm
+
+    pf1, g1 = _prepared(0, 1)
+    pt, gt = _prepared(9_000_000_000, 3)
+    pt = dc.replace(pt, feature_names=[*_NAMES[:-1], "ch0_octave_99"])
+    prepared = {"fitA": pf1, "testC": pt}
+    gts = {"fitA": g1, "testC": gt}
+    _install(monkeypatch, rm, tmp_path / "results", prepared, gts)
+    monkeypatch.setattr(rm, "_run_day_groups", lambda run: {run.name})  # force disjoint
+
+    code = rm.main([
+        "--fit-runs", "fitA", "--test-run", "testC",
+        "--variant", "fusion", "--family", "gaussian", "--min-ref", "10",
+    ])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "ch0_octave_99" in err  # names the specific drifted column
+
+
+def test_test_run_feature_width_mismatch_exits_2_not_traceback(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The width-mismatch half of the same guard: previously an UNCAUGHT
+    ValueError traceback out of ModeBank.assign's own width check (called from
+    inside main, no try/except around it) -- must now be a clean, loud exit 2
+    instead, before the bank is ever asked to score anything."""
+    import dataclasses as dc
+
+    import run_modebank as rm
+
+    pf1, g1 = _prepared(0, 1)
+    pt, gt = _prepared(9_000_000_000, 3)
+    pt = dc.replace(pt, features=pt.features[:, :-1], feature_names=_NAMES[:-1])
+    prepared = {"fitA": pf1, "testC": pt}
+    gts = {"fitA": g1, "testC": gt}
+    _install(monkeypatch, rm, tmp_path / "results", prepared, gts)
+    monkeypatch.setattr(rm, "_run_day_groups", lambda run: {run.name})  # force disjoint
+
+    code = rm.main([
+        "--fit-runs", "fitA", "--test-run", "testC",
+        "--variant", "fusion", "--family", "gaussian", "--min-ref", "10",
+    ])
+    assert code == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. Drift tripwire (T3-review LOW finding 3): this CLI's duplicated
+#    _EXCLUDED_GT (module docstring: "single local source of truth ... if
+#    ModeBank's own set ever changes, this constant's docstring is the flag to
+#    update it too") must never quietly diverge from modebank's own.
+# ---------------------------------------------------------------------------
+
+
+def test_excluded_gt_matches_modebank_source_of_truth() -> None:
+    """Pins `run_modebank._EXCLUDED_GT` byte-identical to `rowii.state.modebank.
+    _EXCLUDED_GT` -- an update to one without the other would silently mask a
+    different GT set than the one ModeBank itself trained on."""
+    import run_modebank
+
+    from rowii.state.modebank import _EXCLUDED_GT
+
+    assert run_modebank._EXCLUDED_GT == _EXCLUDED_GT
