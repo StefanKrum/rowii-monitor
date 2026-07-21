@@ -49,6 +49,22 @@ def test_top_split_parity_with_run_step2_convention() -> None:
     np.testing.assert_array_equal(got.scoring_windows, ref.scoring_windows)
 
 
+def test_top_split_literals_match_sweepconfig_defaults() -> None:
+    """Tripwire (T4-review follow-up F1): `_TOP_FRAC`/`_TOP_SEED` are HARD-CODED
+    literals, not read off `SweepConfig`'s own fields (module docstring's BINDING
+    split-parity rationale) -- so if `SweepConfig`'s `calibration_frac`/`seed`
+    defaults ever drift, nothing else here would notice: the held-out top split
+    would silently diverge from run_step2's while the pools kept following the new
+    defaults. A failure here means the split-parity contract must be RE-DECIDED
+    (should the literals now track the new default, or intentionally keep the old
+    one?) -- not that the literals should be blindly bumped to make this pass again.
+    """
+    import run_modebank_chain as rc
+
+    assert SweepConfig().calibration_frac == rc._TOP_FRAC
+    assert SweepConfig().seed == rc._TOP_SEED
+
+
 def test_far_math_on_synthetic_two_mode_scoring() -> None:
     import run_modebank_chain as rc
 
@@ -268,6 +284,11 @@ def test_run_modebank_chain_writes_far_table_with_both_modes_and_pooled_row(
     notes = (out / "notes.md").read_text()
     assert "fitA" in notes and "fitB" in notes and "testC" in notes
     assert "inspired by the partner" in notes
+    # Threshold-regime self-description (T4-review follow-up F3): notes.md must
+    # name its own regime and point at the correct P7 comparison file, not the
+    # recalibrate one this probe has no arm for.
+    assert "frozen" in notes
+    assert "far_table_frozen.csv" in notes
 
 
 # ---------------------------------------------------------------------------

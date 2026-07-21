@@ -141,7 +141,10 @@ top_k=top_k, scorer=scorer_name)`) never overrides `calibration_frac`/`seed`, so
 effective top split is always `(0.5, 7)` -- the two literals here, rather than this
 script's own locally-constructed `SweepConfig`'s fields, so the held-out day's
 scoring-window SET stays byte-identical to the P7 chain's regardless of any future
-flag added to THIS script that might otherwise perturb its own `SweepConfig`."""
+flag added to THIS script that might otherwise perturb its own `SweepConfig`.
+Tripwire: `tests/test_run_modebank_chain.py::test_top_split_literals_match_sweepconfig_defaults`
+pins these two literals against `SweepConfig`'s own defaults, so a future default
+drift fails loudly there instead of silently rotting this parity claim."""
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +429,9 @@ def _notes_markdown(
         f"- bank family: {family}, chain scorer: {scorer_name}, alpha: {alpha}",
         f"- bank modes (drive the chain's per-mode conditioning): "
         f"{', '.join(bank.modes) or '(none)'}",
+        "- thresholds: pool-conformal (FROZEN regime, spec A3.7) -- compare "
+        "against run_step2's far_table_frozen.csv for the same rotation, NOT "
+        "far_table_recalibrate.csv (this probe has no recalibrate arm)",
     ]
     if bank.dropped_modes:
         dropped = ", ".join(f"{m} (n={n})" for m, n in sorted(bank.dropped_modes.items()))
