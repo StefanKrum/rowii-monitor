@@ -56,8 +56,12 @@ _SEG_LEN = 30
 
 _ALARM_COLUMNS = [
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
+    "threshold_source",
 ]
-"""The plan's exact alarms.parquet column contract (order included)."""
+"""The plan's exact alarms.parquet column contract (order included) --
+`threshold_source` appended by package-7 Task 5 (spec D7/A3.2): per-window
+`rolling`/`fit_day_fallback` on rolling-mode scored rows, the constant mode name in
+the other modes, so the column exists uniformly."""
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +208,10 @@ def test_recalibrate_mode_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
     roles = set(alarms["role"].unique().tolist())
     assert roles == {"scored", "consumed_for_calibration"}
 
+    # T5 column contract: outside rolling mode, threshold_source is the constant
+    # mode name on EVERY row (spec D7/A3.2 uniform-column rule).
+    assert (alarms["threshold_source"] == "recalibrate").all()
+
     scored = alarms[alarms["role"] == "scored"]
     assert set(scored["state"].unique().tolist()) == set(snapshot.thresholds)
     assert ((scored["p_value"] > 0.0) & (scored["p_value"] <= 1.0)).all()
@@ -260,6 +268,8 @@ def test_frozen_mode_flags_shift_warning(
     assert len(alarms) == int(mon_prepared.valid_mask.sum())
     assert (alarms["role"] == "scored").all()
     assert ((alarms["p_value"] > 0.0) & (alarms["p_value"] <= 1.0)).all()
+    # T5 column contract: constant mode name outside rolling mode (D7/A3.2).
+    assert (alarms["threshold_source"] == "frozen").all()
 
     notes = (out_dir / "monitor_notes.md").read_text()
     assert "frozen" in notes
@@ -752,3 +762,345 @@ def test_help_documents_session_norm(capsys: pytest.CaptureFixture[str]) -> None
         monitor.main(["--help"])
     assert exc_info.value.code == 0
     assert "--session-norm" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# T5: --thresholds rolling (package-7 Task 5, spec D7 as amended by A3.2) --
+#     per-window trailing thresholds with conformal-floor fallback, the
+#     threshold_source column, coverage stats, and the all-invalid guard
+# ---------------------------------------------------------------------------
+
+_ROLLING_ALPHA = 0.30
+"""Rolling tests' alpha: the conformal floor is ceil(1/0.30) - 1 = 3 trailing
+windows, small enough that a 1-minute trailing window over the 10-segment fixture
+exercises BOTH branches deterministically. Derivation (module-docstring split:
+calibration segments {0, 1, 3, 7, 8}, scoring {2, 4, 5, 6, 9}; segment s = windows
+[30s, 30s + 30), 1-s windows, states alternate by segment parity): the even-parity
+state's scored segment 2 rolls for w = 60..87 (trailing calibration windows
+90 - w from segment 0) and falls back for w = 88..89 and ALL of segments 4/6 (no
+same-state calibration window within 60 s); the odd-parity state rolls for
+w = 150..177 and 270..297 and falls back for w = 178..179 and 298..299."""
+
+_ROLLING_M_NS = 60 * 1_000_000_000
+"""1 minute (--rolling-minutes 1) in grid nanoseconds."""
+
+_ROLLING_FLOOR = 3
+"""ceil(1 / _ROLLING_ALPHA) - 1 (A3.2's conformal floor at alpha=0.30)."""
+
+
+def _run_rolling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    monitor: object,
+    out_dir: Path,
+    *extra: str,
+) -> tuple[MonitorSnapshot, pd.DataFrame, str]:
+    """One rolling-mode monitor pass over the standard two-state fixture at
+    `--rolling-minutes 1 --alpha 0.30`; returns (snapshot, alarms, notes)."""
+    snapshot_path, snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    exit_code = monitor.main(  # type: ignore[attr-defined]  # object-typed seam
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--rolling-minutes", "1",
+            "--alpha", str(_ROLLING_ALPHA), "--out", str(out_dir), *extra,
+        ]
+    )
+    assert exit_code == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    notes = (out_dir / "monitor_notes.md").read_text()
+    return snapshot, alarms, notes
+
+
+def test_rolling_mode_fallback_and_rolling_branches_bitwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core D7/A3.2 semantics, verified from first principles: for EVERY scored
+    window, the trailing set is recomputed here from the parquet's own consumed rows
+    (same state, window start in [t_w - M, t_w)) and the emitted threshold_source,
+    alarm bit, p-value and low_confidence must match the branch that trailing count
+    dictates -- bitwise (`calibrate`/`p_values` on the recomputed trailing set for
+    rolling windows, the snapshot's STORED threshold/calibration scores for
+    fallback windows). Both branches must be non-empty for both states
+    (`_ROLLING_ALPHA` docstring derivation)."""
+    import monitor
+
+    from rowii.anomaly.conformal import calibrate as _calibrate
+    from rowii.anomaly.conformal import p_values as _p_values
+
+    snapshot, alarms, _notes = _run_rolling(
+        tmp_path, monkeypatch, monitor, tmp_path / "out-rolling"
+    )
+    assert list(alarms.columns) == _ALARM_COLUMNS
+
+    # Same roles as recalibrate mode: rolling replaces HOW thresholds are derived,
+    # not WHICH windows get verdicts (calibration side stays consumed, A1.3).
+    assert set(alarms["role"].unique().tolist()) == {"scored", "consumed_for_calibration"}
+    consumed = alarms[alarms["role"] == "consumed_for_calibration"]
+    scored = alarms[alarms["role"] == "scored"]
+    assert not consumed["alarm"].any()
+    assert consumed["p_value"].isna().all()
+    assert (consumed["threshold_source"] == "").all()
+    assert set(scored["threshold_source"].unique().tolist()) == {
+        "rolling", "fit_day_fallback",
+    }
+
+    for state, group in scored.groupby("state"):
+        cal = consumed[consumed["state"] == state].sort_values("t_utc_ns")
+        cal_t = cal["t_utc_ns"].to_numpy(dtype=np.int64)
+        cal_scores = cal["score"].to_numpy(dtype=np.float64)
+        frozen = snapshot.thresholds[int(state)]
+        stored_cal = snapshot.calibration_scores[int(state)]
+        n_roll = n_fall = 0
+        for row in group.itertuples(index=False):
+            t_w = int(row.t_utc_ns)
+            trailing = cal_scores[(cal_t >= t_w - _ROLLING_M_NS) & (cal_t < t_w)]
+            if trailing.size >= _ROLLING_FLOOR:
+                n_roll += 1
+                assert row.threshold_source == "rolling"
+                expected = _calibrate(trailing, _ROLLING_ALPHA)
+                assert bool(row.alarm) == bool(row.score > expected.threshold)
+                assert row.p_value == _p_values(np.array([row.score]), trailing)[0]
+                assert not row.low_confidence  # count >= floor => real threshold
+            else:
+                n_fall += 1
+                assert row.threshold_source == "fit_day_fallback"
+                assert bool(row.alarm) == bool(row.score > frozen.threshold)
+                assert row.p_value == _p_values(np.array([row.score]), stored_cal)[0]
+                assert bool(row.low_confidence) == frozen.low_confidence
+        # Non-vacuousness: BOTH branches occur for BOTH states at these settings.
+        assert n_roll > 0
+        assert n_fall > 0
+
+    # Hand-computed chosen window (docstring derivation): w=60 is the first
+    # scoring-side window (segment 2); the ONLY same-state windows starting in
+    # [t_60 - 1 min, t_60) are calibration segment 0 = windows 0..29 -> it rolls
+    # on exactly that 30-window trailing set.
+    w60 = scored[scored["window"] == 60].iloc[0]
+    assert w60["threshold_source"] == "rolling"
+    trail = consumed[
+        (consumed["state"] == w60["state"])
+        & (consumed["t_utc_ns"] >= int(w60["t_utc_ns"]) - _ROLLING_M_NS)
+        & (consumed["t_utc_ns"] < int(w60["t_utc_ns"]))
+    ]
+    assert sorted(trail["window"].tolist()) == list(range(0, 30))
+    expected_60 = _calibrate(
+        trail["score"].to_numpy(dtype=np.float64), _ROLLING_ALPHA
+    ).threshold
+    assert bool(w60["alarm"]) == bool(w60["score"] > expected_60)
+
+
+def test_rolling_coverage_stats_in_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3.2 MANDATORY output: the notes carry a per-state trailing-coverage table
+    whose counts/fractions match the parquet, the motivating measurement as the
+    rationale line, and the D7 double-reference honesty note (slow-fault
+    absorption; the threshold_source column as the visibility)."""
+    import monitor
+
+    _snapshot, alarms, notes = _run_rolling(
+        tmp_path, monkeypatch, monitor, tmp_path / "out-cov"
+    )
+    scored = alarms[alarms["role"] == "scored"]
+    assert "## Rolling trailing coverage" in notes
+    assert f"conformal floor = {_ROLLING_FLOOR}" in notes
+    assert "M = 1 min" in notes
+    for state, group in scored.groupby("state"):
+        n_scored = len(group)
+        n_roll = int((group["threshold_source"] == "rolling").sum())
+        n_fall = int((group["threshold_source"] == "fit_day_fallback").sum())
+        assert n_scored == n_roll + n_fall
+        expected_row = (
+            f"| {int(state)} | {n_scored} | {n_roll} | {n_fall} "
+            f"| {n_roll / n_scored:.4f} |"
+        )
+        assert expected_row in notes
+    # The A3.2 motivating measurement is cited as the rationale.
+    assert "46.8%" in notes
+    assert "M=20" in notes
+    assert "290626" in notes
+    # The D7 double-reference honesty note.
+    assert "absorb" in notes.lower()
+    assert "side by side" in notes.lower()
+    assert "fit_day_fallback" in notes
+    assert "rolling" in notes
+
+
+def test_rolling_composes_with_session_norm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rolling must compose with --session-norm (scores in whichever space is
+    active): smoke -- exit 0, both threshold sources present (the source PATTERN is
+    norm-invariant: labels come from raw features and the split is fixed, so
+    trailing COUNTS are unchanged), scores finite, both notes sections present."""
+    import monitor
+
+    snapshot_path, _snapshot = _stats_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-rolling-norm"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--rolling-minutes", "1",
+            "--alpha", str(_ROLLING_ALPHA), "--session-norm", "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 0
+
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    scored = alarms[alarms["role"] == "scored"]
+    assert set(scored["threshold_source"].unique().tolist()) == {
+        "rolling", "fit_day_fallback",
+    }
+    assert np.isfinite(scored["score"].to_numpy(dtype=np.float64)).all()
+    notes = (out_dir / "monitor_notes.md").read_text()
+    assert "Session normalization" in notes
+    assert "## Rolling trailing coverage" in notes
+
+
+def test_rolling_default_minutes_is_60(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --rolling-minutes, M defaults to 60 (A3.2 binding). The 300-s
+    fixture sits entirely inside 60 minutes, so every scored window's trailing set
+    is its state's FULL earlier calibration side (>= 30 windows >= floor 3) -- all
+    sources must be `rolling` and the notes must name M = 60."""
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-default-m"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--alpha", str(_ROLLING_ALPHA),
+            "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    scored = alarms[alarms["role"] == "scored"]
+    assert (scored["threshold_source"] == "rolling").all()
+    assert "M = 60 min" in (out_dir / "monitor_notes.md").read_text()
+
+
+def test_eval_events_consumes_rolling_alarms_parquet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The events harness must keep working on a rolling-mode parquet: its role
+    filter selects the scored rows and the extra threshold_source column is
+    ignored (evaluate_events consumes t_utc_ns/alarm/role only)."""
+    import monitor
+
+    from rowii.eval.events import evaluate_events
+
+    _snapshot, alarms, _notes = _run_rolling(
+        tmp_path, monkeypatch, monitor, tmp_path / "out-events"
+    )
+    # Windows 150..179 are scoring-side (segment 5, module-docstring split).
+    events = pd.DataFrame(
+        {
+            "start_utc": [
+                pd.Timestamp(_MON_T0_NS + 150 * _WINDOW_NS, unit="ns", tz="UTC").isoformat()
+            ],
+            "end_utc": [
+                pd.Timestamp(_MON_T0_NS + 180 * _WINDOW_NS, unit="ns", tz="UTC").isoformat()
+            ],
+        }
+    )
+    result = evaluate_events(alarms, events, window_s=1.0)
+    assert result.n_events == 1
+    assert result.n_detected in (0, 1)
+    # The role filter really applied: non-event scored windows only (150 scored
+    # windows total, 30 inside the event) -- consumed rows never count.
+    n_scored = int((alarms["role"] == "scored").sum())
+    assert result.false_alarm_windows <= n_scored - 30
+
+
+def test_all_invalid_run_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T4-review hardening: a monitored run whose valid_mask is all False must be
+    refused with a clean exit 2 naming the zero-valid-windows cause BEFORE the
+    detector apply (previously a raw sklearn ValueError), writing nothing."""
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    base = _two_state_prepared(_MON_T0_NS, seed=1)
+    all_invalid = replace(
+        base, valid_mask=np.zeros(base.features.shape[0], dtype=bool)
+    )
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", all_invalid)
+    out_dir = tmp_path / "out-invalid"
+
+    exit_code = monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_dir)]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "zero valid windows" in err
+    assert _MONITOR_RUN in err
+    assert not out_dir.exists()  # refused BEFORE writing anything
+
+
+def test_rolling_minutes_requires_rolling_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--rolling-minutes with any other --thresholds mode is a usage error (exit 2
+    naming both flags), not a silently ignored knob."""
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-mins-guard"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--rolling-minutes", "30", "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--rolling-minutes" in err
+    assert "rolling" in err
+    assert not out_dir.exists()
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "nan"])
+def test_rolling_minutes_must_be_positive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-mins-bad"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--rolling-minutes", bad, "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 2
+    assert not out_dir.exists()
+
+
+def test_help_documents_rolling_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    import monitor
+
+    with pytest.raises(SystemExit) as exc_info:
+        monitor.main(["--help"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "--rolling-minutes" in out
+    assert "rolling" in out  # the third --thresholds choice is documented

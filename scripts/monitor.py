@@ -32,6 +32,26 @@ the snapshot's OWN fit-day references, thresholded in one of two modes:
   valid window of a snapshot-known state. Reported with an explicit
   distribution-shift warning in the notes: in package-2's cross-day evidence,
   frozen cross-day thresholds did NOT hold their nominal FAR.
+- `--thresholds rolling --rolling-minutes M` (package-7 Task 5, spec D7 as amended
+  by A3.2; default M=60): the SAME roles/split as recalibrate mode -- rolling
+  replaces HOW each scored window's threshold is derived, not WHICH windows get
+  verdicts. Per (state, scored window): the threshold is `calibrate(...)` over the
+  scores of the SAME state's calibration-side ("consumed") windows whose window
+  START lies within `[t_w - M minutes, t_w)`, whenever that trailing count reaches
+  the conformal floor `ceil(1/alpha) - 1`; below the floor the window FALLS BACK to
+  the snapshot's stored fit-day frozen threshold. p-values follow the same branch
+  (against the trailing set when rolling, against the fit day's stored calibration
+  scores when falling back). Every scored row is flagged per window in the
+  `threshold_source` column (`rolling` / `fit_day_fallback`) -- never a SILENT
+  fallback (the A1.3 recalibrate-mode rule forbids silent frozen fallbacks; here
+  the fallback is the designed, per-window-flagged behavior, and per-state
+  trailing-coverage statistics are a MANDATORY notes output, A3.2). Consumed
+  windows' scores stay recorded in alarms.parquet, so every rolling threshold is
+  auditable from the artifact alone. Explicit limitation (D7): a slowly developing
+  fault inflates the trailing calibration scores and can be ABSORBED by a rolling
+  threshold -- the notes carry the double-reference honesty note (read rolling
+  verdicts side by side with fit-day-referenced verdicts). This is a batch
+  ablation over recorded files, not a production stream.
 
 Per-state semantics on the new run (A1.3, binding): a valid window's detected
 state can be absent from the snapshot (no reference/threshold survived fitting) --
@@ -64,7 +84,10 @@ normalized-space thresholds, which the warning names.
 Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` +
 `timeline.md` (the state half, `scripts/apply_detector.py`'s conventions incl.
 scatter-back over `valid_mask`), `alarms.parquet` (one row per VALID window:
-`window, t_utc_ns, state, score, p_value, alarm, low_confidence, role`),
+`window, t_utc_ns, state, score, p_value, alarm, low_confidence, role,
+threshold_source` -- `threshold_source` is per-window `rolling`/`fit_day_fallback`
+on rolling-mode scored rows, `""` on rolling-mode rows without a verdict, and the
+constant mode name in the other modes, so the column exists uniformly),
 `alarm_segments.csv` (maximal alarm runs: `start_utc, end_utc, duration_s`), and
 `monitor_notes.md` (snapshot provenance, mode, per-state table, window accounting,
 and the standing honesty framing: NO fault labels exist -- alarms are candidates
@@ -91,7 +114,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rowii.anomaly.conformal import calibrate, p_values  # noqa: E402
+from rowii.anomaly.conformal import calibrate, p_values, threshold_index  # noqa: E402
 from rowii.anomaly.normalize import (  # noqa: E402
     SessionStats,
     apply_session_norm,
@@ -119,7 +142,12 @@ _INVALID_LABEL = -1
 run_step2.py`'s/`scripts/apply_detector.py`'s own `_INVALID_LABEL` (duplicated, not
 imported -- module docstring)."""
 
-_THRESHOLD_MODES: tuple[str, ...] = ("recalibrate", "frozen")
+_THRESHOLD_MODES: tuple[str, ...] = ("recalibrate", "frozen", "rolling")
+
+_DEFAULT_ROLLING_MINUTES = 60.0
+"""`--thresholds rolling`'s default trailing-window length M in minutes -- A3.2's
+binding default (its motivating probe on 290626-tu: at M=20 only 46.8% of scored
+windows reach the conformal floor, states 2/3 at 0%; at M=60 still 53.8%)."""
 
 _DEFAULT_NORM_MINUTES = 20.0
 """`--session-norm` fallback prefix length for the MONITORED run's own stats when
@@ -129,8 +157,20 @@ is used verbatim instead."""
 
 _ALARM_COLUMNS: tuple[str, ...] = (
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
+    "threshold_source",
 )
-"""alarms.parquet's exact column contract (spec D2 / plan Task 2), in this order."""
+"""alarms.parquet's exact column contract (spec D2 / plan Task 2; `threshold_source`
+appended by package-7 Task 5, spec D7/A3.2), in this order. Downstream readers that
+select columns by name (`rowii.eval.events.evaluate_events`,
+`scripts/eval_events.py`) ignore the addition by construction."""
+
+SOURCE_ROLLING = "rolling"
+"""`threshold_source` value: the window's threshold/p-value came from its own
+trailing same-state calibration set (rolling mode only)."""
+SOURCE_FIT_DAY_FALLBACK = "fit_day_fallback"
+"""`threshold_source` value: the trailing count sat below the conformal floor, so
+the snapshot's stored fit-day threshold/calibration scores were applied (rolling
+mode only -- the A3.2 per-window-flagged fallback)."""
 
 ROLE_SCORED = "scored"
 """A window with a real verdict: its state's threshold was applied to its score."""
@@ -188,13 +228,24 @@ def build_parser() -> argparse.ArgumentParser:
              "(package-2's cross-day recipe -- the only one whose FAR held); "
              "'frozen' applies the fit-day thresholds unchanged (reported with a "
              "distribution-shift warning -- package-2 evidence: frozen cross-day "
-             "thresholds did NOT hold their FAR).",
+             "thresholds did NOT hold their FAR); 'rolling' (package-7 spec "
+             "D7/A3.2, batch ablation) recalibrates each scored window's threshold "
+             "on the trailing --rolling-minutes of same-state calibration-side "
+             "windows, falling back per window to the fit-day frozen threshold "
+             "below the conformal floor ceil(1/alpha)-1 -- flagged in "
+             "alarms.parquet's threshold_source column.",
     )
     parser.add_argument(
         "--alpha", type=float, default=None,
-        help="Recalibrate-mode nominal false-alarm target in (0, 1); default: the "
-             "snapshot's own fit-time alpha. Ignored (with a warning) in frozen "
-             "mode -- frozen thresholds are applied exactly as stored.",
+        help="Recalibrate-/rolling-mode nominal false-alarm target in (0, 1); "
+             "default: the snapshot's own fit-time alpha. Ignored (with a warning) "
+             "in frozen mode -- frozen thresholds are applied exactly as stored.",
+    )
+    parser.add_argument(
+        "--rolling-minutes", type=float, default=None,
+        help=f"Rolling-mode trailing window length M in minutes (default "
+             f"{_DEFAULT_ROLLING_MINUTES:g}, spec A3.2). Only valid with "
+             f"--thresholds rolling; must be > 0.",
     )
     parser.add_argument(
         "--session-norm", action="store_true",
@@ -261,9 +312,17 @@ class _StateRow:
     """The threshold actually applied (recalibrated or frozen); NaN when none could
     be (the `no_conformal_data` path)."""
     low_confidence: bool | None
-    """The applied threshold's low-confidence flag; None when no threshold exists."""
+    """The applied threshold's low-confidence flag; None when no threshold exists
+    -- also None in rolling mode, where no single per-state threshold exists."""
     status: str
     """`"scored"` or `"no_conformal_data"` (per-state, not per-window)."""
+    n_rolling: int = 0
+    """Rolling mode only: scored windows whose threshold came from their own
+    trailing calibration set (`threshold_source == "rolling"`); 0 elsewhere."""
+    n_fallback: int = 0
+    """Rolling mode only: scored windows below the conformal floor that fell back
+    to the fit-day threshold (`threshold_source == "fit_day_fallback"`); 0
+    elsewhere. `n_rolling + n_fallback == n_scored` in rolling mode."""
 
 
 @dataclass(frozen=True)
@@ -284,20 +343,26 @@ class _Verdicts:
     low-confidence (threshold=+inf, can never alarm)."""
     role: np.ndarray
     """(W,) object -- one of the ROLE_* strings on valid windows, "" on invalid."""
+    threshold_source: np.ndarray
+    """(W,) object -- alarms.parquet's `threshold_source` column (spec D7/A3.2):
+    per-window `SOURCE_ROLLING`/`SOURCE_FIT_DAY_FALLBACK` on rolling-mode scored
+    windows ("" on rolling-mode windows without a verdict), the constant mode name
+    everywhere in the other modes."""
     state_rows: list[_StateRow]
     unknown_counts: dict[int, int]
     """Detected-but-not-snapshot-known state id -> valid-window count."""
 
 
 def _empty_verdict_arrays(
-    n: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n: int, threshold_source_fill: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     score = np.full(n, math.nan, dtype=np.float64)
     p_value = np.full(n, math.nan, dtype=np.float64)
     alarm = np.zeros(n, dtype=bool)
     low_confidence = np.zeros(n, dtype=bool)
     role = np.full(n, "", dtype=object)
-    return score, p_value, alarm, low_confidence, role
+    threshold_source = np.full(n, threshold_source_fill, dtype=object)
+    return score, p_value, alarm, low_confidence, role, threshold_source
 
 
 def _mark_unknown_states(
@@ -339,8 +404,8 @@ def _frozen_verdicts(
     `scorer_for_label`); the stored thresholds/calibration scores then live in the
     snapshot's own normalized space, comparable at FAR level only (A3.5)."""
     features = prepared.features if scoring_features is None else scoring_features
-    score, p_value, alarm, low_confidence, role = _empty_verdict_arrays(
-        prepared.features.shape[0]
+    score, p_value, alarm, low_confidence, role, threshold_source = _empty_verdict_arrays(
+        prepared.features.shape[0], "frozen"
     )
     state_rows: list[_StateRow] = []
     for label in sorted(snapshot.thresholds):
@@ -368,7 +433,8 @@ def _frozen_verdicts(
     unknown_counts = _mark_unknown_states(prepared, snapshot, labels, role)
     return _Verdicts(
         score=score, p_value=p_value, alarm=alarm, low_confidence=low_confidence,
-        role=role, state_rows=state_rows, unknown_counts=unknown_counts,
+        role=role, threshold_source=threshold_source, state_rows=state_rows,
+        unknown_counts=unknown_counts,
     )
 
 
@@ -394,8 +460,8 @@ def _recalibrate_verdicts(
     computed from this run's own scores in the normalized space end to end, so the
     mode stays fully coherent (no cross-space comparison anywhere)."""
     features = prepared.features if scoring_features is None else scoring_features
-    score, p_value, alarm, low_confidence, role = _empty_verdict_arrays(
-        prepared.features.shape[0]
+    score, p_value, alarm, low_confidence, role, threshold_source = _empty_verdict_arrays(
+        prepared.features.shape[0], "recalibrate"
     )
     top = split_by_segments(
         prepared.segment_ids, prepared.valid_mask, snapshot.calibration_frac, snapshot.seed
@@ -466,7 +532,144 @@ def _recalibrate_verdicts(
     unknown_counts = _mark_unknown_states(prepared, snapshot, labels, role)
     return _Verdicts(
         score=score, p_value=p_value, alarm=alarm, low_confidence=low_confidence,
-        role=role, state_rows=state_rows, unknown_counts=unknown_counts,
+        role=role, threshold_source=threshold_source, state_rows=state_rows,
+        unknown_counts=unknown_counts,
+    )
+
+
+def _rolling_floor(alpha: float) -> int:
+    """Smallest trailing calibration count at which `calibrate(..., alpha)` yields a
+    REAL (finite, non-low-confidence) threshold -- mathematically `ceil(1/alpha) - 1`
+    (spec A3.2's conformal floor, equivalently `n >= 1/alpha - 1`). Derived by
+    probing `threshold_index` around the closed-form candidate instead of a separate
+    floating-point `ceil(1/alpha)` so the rolling gate and `calibrate`'s own
+    `low_confidence` boundary can NEVER disagree (the same boundary-consistency rule
+    `threshold_index`'s docstring pins for `calibrate` itself). The achievability
+    condition `threshold_index(n, alpha) <= n` is monotone in `n` ( `<=>`
+    `(n + 1) * alpha >= 1` up to the shared ceil tolerance), so the two local
+    adjustment loops terminate after at most a step each in practice."""
+    candidate = max(1, math.ceil(1.0 / alpha) - 1)
+    while threshold_index(candidate, alpha) > candidate:
+        candidate += 1
+    while candidate > 1 and threshold_index(candidate - 1, alpha) <= candidate - 1:
+        candidate -= 1
+    return candidate
+
+
+def _rolling_verdicts(
+    prepared: PreparedRun,
+    snapshot: MonitorSnapshot,
+    labels: np.ndarray,
+    alpha: float,
+    *,
+    rolling_minutes: float,
+    scoring_features: np.ndarray | None = None,
+    session_stats: SessionStats | None = None,
+) -> _Verdicts:
+    """Rolling mode (spec D7 as amended by A3.2): the SAME top split and roles as
+    recalibrate mode (calibration side consumed and never alarmed, scoring side
+    scored -- rolling changes HOW each threshold is derived, not WHICH windows get
+    verdicts). Per scored window `w` of state `s`: the trailing set is the scores
+    of `s`'s calibration-side windows whose window START lies in
+    `[t_w - rolling_minutes, t_w)`; when its count reaches the conformal floor
+    `ceil(1/alpha) - 1` (`_rolling_floor`) the threshold is `calibrate(trailing,
+    alpha)` and the p-value is computed against that SAME trailing set
+    (`threshold_source = SOURCE_ROLLING`); below the floor the window falls back to
+    the snapshot's STORED fit-day threshold and stored calibration scores
+    (`SOURCE_FIT_DAY_FALLBACK`) -- an explicit, per-window-flagged fallback, never
+    a silent one (the A1.3 rule against silent frozen fallbacks is exactly why the
+    flag column exists). Consumed windows' scores are recorded (no p-value, never
+    an alarm), which doubles as the audit trail: every rolling threshold is
+    recomputable from alarms.parquet alone.
+
+    Under `--session-norm` (D3/A3.5): *scoring_features*/*session_stats* exactly as
+    in `_recalibrate_verdicts` -- trailing calibration scores, rolling thresholds
+    and rolling p-values all live in the session-normalized space; the FALLBACK
+    branch compares against the snapshot's stored (fit-space) thresholds exactly
+    like frozen mode, with frozen mode's comparability caveats."""
+    features = prepared.features if scoring_features is None else scoring_features
+    score, p_value, alarm, low_confidence, role, threshold_source = _empty_verdict_arrays(
+        prepared.features.shape[0], ""
+    )
+    top = split_by_segments(
+        prepared.segment_ids, prepared.valid_mask, snapshot.calibration_frac, snapshot.seed
+    )
+    cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
+    m_ns = int(round(rolling_minutes * 60.0 * 1e9))
+    floor = _rolling_floor(alpha)
+
+    state_rows: list[_StateRow] = []
+    for label in sorted(snapshot.thresholds):
+        frozen = snapshot.thresholds[label]
+        label_all = np.flatnonzero(prepared.valid_mask & (labels == label))
+        # Ascending window index == ascending start time (uniform grid), as
+        # np.searchsorted below requires.
+        label_cal = np.sort(cal_windows[labels[cal_windows] == label])
+        label_scr = scoring_windows[labels[scoring_windows] == label]
+
+        scorer = scorer_for_label(snapshot, label, session_stats=session_stats)
+        if label_cal.size:
+            cal_scores = scorer.score(features[label_cal])
+            score[label_cal] = cal_scores
+            role[label_cal] = ROLE_CONSUMED
+        else:
+            # No same-state calibration windows on this run: every scored window's
+            # trailing count is 0 < floor -> all take the flagged fallback branch
+            # (the rolling analogue of recalibrate mode's no_conformal_data state,
+            # made explicit per window instead of withholding verdicts).
+            cal_scores = np.empty(0, dtype=np.float64)
+
+        n_alarms = n_rolling = n_fallback = 0
+        if label_scr.size:
+            scr_scores = scorer.score(features[label_scr])
+            score[label_scr] = scr_scores
+            role[label_scr] = ROLE_SCORED
+
+            cal_t = prepared.grid.t0_ns + label_cal.astype(np.int64) * prepared.grid.window_ns
+            scr_t = prepared.grid.t0_ns + label_scr.astype(np.int64) * prepared.grid.window_ns
+            lo = np.searchsorted(cal_t, scr_t - m_ns, side="left")
+            hi = np.searchsorted(cal_t, scr_t, side="left")
+            rolling_mask = (hi - lo) >= floor
+
+            fallback_idx = label_scr[~rolling_mask]
+            if fallback_idx.size:
+                fb_scores = scr_scores[~rolling_mask]
+                p_value[fallback_idx] = p_values(
+                    fb_scores, snapshot.calibration_scores[label]
+                )
+                alarm[fallback_idx] = fb_scores > frozen.threshold
+                low_confidence[fallback_idx] = frozen.low_confidence
+                threshold_source[fallback_idx] = SOURCE_FIT_DAY_FALLBACK
+                n_fallback = int(fallback_idx.size)
+
+            for pos in np.flatnonzero(rolling_mask).tolist():
+                w = int(label_scr[pos])
+                trailing = cal_scores[int(lo[pos]) : int(hi[pos])]
+                rolled = calibrate(trailing, alpha)
+                p_value[w] = p_values(scr_scores[pos : pos + 1], trailing)[0]
+                alarm[w] = bool(scr_scores[pos] > rolled.threshold)
+                low_confidence[w] = rolled.low_confidence  # False: count >= floor
+                threshold_source[w] = SOURCE_ROLLING
+                n_rolling += 1
+
+            n_alarms = int(alarm[label_scr].sum())
+
+        state_rows.append(
+            _StateRow(
+                state=label, n_windows=int(label_all.size), n_scored=int(label_scr.size),
+                n_alarms=n_alarms, n_consumed=int(label_cal.size),
+                # No single per-state threshold exists in rolling mode -- the
+                # per-state picture lives in the notes' coverage table.
+                threshold=math.nan, low_confidence=None, status=ROLE_SCORED,
+                n_rolling=n_rolling, n_fallback=n_fallback,
+            )
+        )
+
+    unknown_counts = _mark_unknown_states(prepared, snapshot, labels, role)
+    return _Verdicts(
+        score=score, p_value=p_value, alarm=alarm, low_confidence=low_confidence,
+        role=role, threshold_source=threshold_source, state_rows=state_rows,
+        unknown_counts=unknown_counts,
     )
 
 
@@ -512,6 +715,7 @@ def _alarms_frame(
             "alarm": verdicts.alarm[idx],
             "low_confidence": verdicts.low_confidence[idx],
             "role": verdicts.role[idx].astype(str),
+            "threshold_source": verdicts.threshold_source[idx].astype(str),
         }
     )
     frame = to_utc_ns(frame, prepared.grid.t0_ns, prepared.grid.window_ns)
@@ -609,6 +813,52 @@ def _session_norm_lines(snapshot_stats: SessionStats, run_stats: SessionStats) -
     ]
 
 
+def _rolling_coverage_lines(
+    state_rows: list[_StateRow],
+    snapshot: MonitorSnapshot,
+    rolling_minutes: float,
+    floor: int,
+) -> list[str]:
+    """The notes' MANDATORY rolling-mode block (spec A3.2): per-state trailing-
+    coverage table (fraction of scored windows whose trailing calibration count
+    reached the conformal floor at this M), the A3.2 motivating measurement as the
+    rationale, and the D7 double-reference honesty note."""
+    lines = [
+        "",
+        f"## Rolling trailing coverage (M = {rolling_minutes:g} min, conformal "
+        f"floor = {floor} window(s); MANDATORY output, spec A3.2)",
+        "",
+        "| state | n_scored | n_rolling | n_fallback | rolling_coverage "
+        "| fit_day_fallback_threshold |",
+        "|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in state_rows:
+        coverage = f"{row.n_rolling / row.n_scored:.4f}" if row.n_scored else "n/a"
+        fallback = snapshot.thresholds[row.state].threshold
+        fallback_str = "inf" if math.isinf(fallback) else f"{fallback:.6g}"
+        lines.append(
+            f"| {row.state} | {row.n_scored} | {row.n_rolling} | {row.n_fallback} "
+            f"| {coverage} | {fallback_str} |"
+        )
+    lines += [
+        "",
+        "Rationale (A3.2's motivating measurement, spec-review probe on 290626-tu): "
+        "at M=20 only 46.8% of scored windows reach the conformal floor (states 2/3: "
+        "0%), and at M=60 still only 53.8% -- trailing coverage varies sharply with "
+        "state mix and M, so this per-state table is a mandatory output and the "
+        "fit-day fallback is what keeps every scored window verdict-bearing.",
+        "",
+        "**Double-reference honesty note (spec D7):** a slowly developing fault "
+        "inflates the trailing calibration scores themselves, so a rolling threshold "
+        "can absorb it. Rolling verdicts must therefore be read side by side with "
+        "fit-day-referenced verdicts -- the `threshold_source` column is that "
+        f"visibility: every `{SOURCE_FIT_DAY_FALLBACK}` row IS a fit-day verdict, "
+        "and a separate frozen/recalibrate pass over the same recording supplies "
+        "the full fit-day comparison.",
+    ]
+    return lines
+
+
 def _notes_markdown(
     run_name: str,
     snapshot_path: Path,
@@ -620,6 +870,7 @@ def _notes_markdown(
     *,
     session_stats: SessionStats | None = None,
     run_stats: SessionStats | None = None,
+    rolling_minutes: float | None = None,
 ) -> str:
     n_windows = int(prepared.features.shape[0])
     n_valid = int(prepared.valid_mask.sum())
@@ -662,6 +913,28 @@ def _notes_markdown(
     lines += ["", f"## Threshold mode: {mode}", ""]
     if mode == "frozen":
         lines.append(_FROZEN_SHIFT_WARNING)
+    elif mode == "rolling":
+        assert rolling_minutes is not None  # main() always supplies it in this mode
+        floor = _rolling_floor(alpha_used)
+        lines.append(
+            "References stay the snapshot's fit-day references. Per SCORED window, "
+            f"the threshold was recalibrated from the trailing {rolling_minutes:g} "
+            "minutes' consumed calibration-side windows of the SAME state (top "
+            f"split: calibration_frac={snapshot.calibration_frac}, "
+            f"seed={snapshot.seed}) at alpha={alpha_used} whenever at least "
+            f"ceil(1/alpha)-1 = {floor} such windows exist; below that conformal "
+            "floor the window FELL BACK to the snapshot's stored fit-day threshold "
+            f"(calibrated at fit-time alpha={snapshot.alpha}), flagged per window "
+            f"in alarms.parquet's `threshold_source` column (`{SOURCE_ROLLING}` / "
+            f"`{SOURCE_FIT_DAY_FALLBACK}` -- never a silent fallback). p-values "
+            "follow the same branch: against the trailing set when rolling, "
+            "against the fit day's stored calibration scores when falling back. "
+            "Calibration-side windows are consumed by the trailing sets and are "
+            f"NEVER alarmed (role `{ROLE_CONSUMED}` -- calibration-bias rule, "
+            "A1.3); their recorded scores make every rolling threshold auditable "
+            "from alarms.parquet alone. Batch ablation over recorded files, not a "
+            "production stream (spec D7)."
+        )
     else:
         lines.append(
             "References stay the snapshot's fit-day references; ONLY the per-state "
@@ -693,6 +966,18 @@ def _notes_markdown(
             f"| {row.state} | {row.n_windows} | {row.n_scored} | {row.n_alarms} "
             f"| {rate} | {low_conf} | {threshold} | {row.n_consumed} | {row.status} |"
         )
+    if mode == "rolling":
+        assert rolling_minutes is not None
+        lines += [
+            "",
+            "In rolling mode no single per-state threshold exists (the `threshold` "
+            "column above is n/a by design) -- the per-window picture is in "
+            "alarms.parquet's `threshold_source` column and the coverage table "
+            "below.",
+        ]
+        lines += _rolling_coverage_lines(
+            verdicts.state_rows, snapshot, rolling_minutes, _rolling_floor(alpha_used)
+        )
     lines += [
         "",
         "A state with `low_confidence=True` has too few calibration windows to "
@@ -707,7 +992,13 @@ def _notes_markdown(
         "alarms.parquet)",
         f"- {ROLE_SCORED}: {n_scored}",
         f"- {ROLE_CONSUMED}: {n_consumed}"
-        + (" (recalibrate-mode calibration side; never alarmed)" if mode == "recalibrate" else ""),
+        + (
+            " (recalibrate-mode calibration side; never alarmed)"
+            if mode == "recalibrate"
+            else " (rolling-mode calibration side -- the trailing sets; never alarmed)"
+            if mode == "rolling"
+            else ""
+        ),
         f"- {ROLE_UNKNOWN_STATE}: {n_unknown} (detected state has no snapshot "
         "reference/threshold; never alarmed)",
         f"- {ROLE_NO_CONFORMAL_DATA}: {n_no_conformal} (snapshot-known state with "
@@ -735,6 +1026,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.alpha is not None and not (0.0 < args.alpha < 1.0):
         print(f"monitor: --alpha must be in (0, 1), got {args.alpha!r}", file=sys.stderr)
+        return 2
+    if args.rolling_minutes is not None and args.thresholds != "rolling":
+        print(
+            f"monitor: --rolling-minutes is only valid with --thresholds rolling "
+            f"(got --thresholds {args.thresholds})",
+            file=sys.stderr,
+        )
+        return 2
+    if args.rolling_minutes is not None and not (
+        math.isfinite(args.rolling_minutes) and args.rolling_minutes > 0.0
+    ):
+        print(
+            f"monitor: --rolling-minutes must be a positive number of minutes, got "
+            f"{args.rolling_minutes!r}",
+            file=sys.stderr,
+        )
         return 2
     if not args.snapshot.is_file():
         print(f"monitor: snapshot file not found: {args.snapshot}", file=sys.stderr)
@@ -794,6 +1101,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if not bool(prepared.valid_mask.any()):
+        # T4-review hardening: an all-invalid run would otherwise surface as a raw
+        # sklearn ValueError inside the detector apply -- refuse cleanly instead.
+        print(
+            f"monitor: monitored run {args.run!r} has zero valid windows (valid_mask "
+            f"is all False) -- nothing can be labeled or scored; refusing before "
+            f"the detector apply",
+            file=sys.stderr,
+        )
+        return 2
+
     detector = to_detector(snapshot)
     labels = _apply_detector_labels(prepared, detector)  # ALWAYS raw features (A3.5)
 
@@ -826,6 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         scoring_features = apply_session_norm(prepared.features, run_stats)
 
+    rolling_minutes: float | None = None
     if args.thresholds == "frozen":
         if args.alpha is not None:
             logger.warning(
@@ -836,6 +1155,17 @@ def main(argv: list[str] | None = None) -> int:
         alpha_used = snapshot.alpha
         verdicts = _frozen_verdicts(
             prepared, snapshot, labels,
+            scoring_features=scoring_features, session_stats=session_stats,
+        )
+    elif args.thresholds == "rolling":
+        alpha_used = args.alpha if args.alpha is not None else snapshot.alpha
+        rolling_minutes = (
+            args.rolling_minutes
+            if args.rolling_minutes is not None
+            else _DEFAULT_ROLLING_MINUTES
+        )
+        verdicts = _rolling_verdicts(
+            prepared, snapshot, labels, alpha_used, rolling_minutes=rolling_minutes,
             scoring_features=scoring_features, session_stats=session_stats,
         )
     else:
@@ -866,6 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
             args.run, args.snapshot, snapshot, args.thresholds, alpha_used,
             verdicts, prepared,
             session_stats=session_stats, run_stats=run_stats,
+            rolling_minutes=rolling_minutes,
         )
     )
 
