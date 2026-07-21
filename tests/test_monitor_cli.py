@@ -978,6 +978,50 @@ def test_help_documents_level_recal(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# T7-review carry-over (T8 fix-loop item 6): equivalence tripwire pinning
+# monitor's own `_first_n_minutes_rows` to `rowii.anomaly.normalize.
+# fit_session_stats`'s window-membership rule -- mirrors
+# `tests/test_step2_pooled_cli.py`'s `test_first_n_minutes_rows_matches_
+# fit_session_stats_window_membership` (run_step2's own duplicate against the
+# same canonical rule). The rule is now triplicated (run_step2, monitor,
+# fit_session_stats each independently encode "window START offset <
+# norm_minutes*60s AND valid_mask") -- a failure here means monitor's copy
+# drifted from the other two.
+# ---------------------------------------------------------------------------
+
+
+def test_first_n_minutes_rows_matches_fit_session_stats_window_membership() -> None:
+    import monitor
+
+    rng = np.random.default_rng(11)
+    n = 40
+    window_ns = 10_000_000_000  # 10 s/window -> cutoff at 5 min = window index 30
+    grid = WindowGrid(t0_ns=0, window_ns=window_ns, n_windows=n)
+    valid_mask = np.ones(n, dtype=bool)
+    valid_mask[[2, 29]] = False  # invalid windows inside AND at the time-cutoff edge
+    features = rng.normal(0.0, 100.0, (n, 3))  # well-spread, non-degenerate values
+    prepared = PreparedRun(
+        features=features, grid=grid, valid_mask=valid_mask,
+        feature_names=["f0", "f1", "f2"], segment_ids=np.zeros(n, dtype=np.int64),
+    )
+
+    norm_minutes = 5.0
+    rows = monitor._first_n_minutes_rows(prepared, norm_minutes)
+    stats = fit_session_stats(features, valid_mask, grid, norm_minutes=norm_minutes)
+
+    assert rows.shape[0] == stats.n_windows
+    # `fit_session_stats` exposes no raw rows -- recompute its own documented
+    # `_center_scale` formula (median; MAD * 1.4826, floored at 1e-8) from
+    # `_first_n_minutes_rows`' selected rows: if the two rules ever select a
+    # DIFFERENT row set, this well-spread fixture makes the median/MAD diverge.
+    expected_center = np.median(rows, axis=0)
+    expected_mad = np.median(np.abs(rows - expected_center), axis=0)
+    expected_scale = np.maximum(expected_mad * 1.4826, 1e-8)
+    np.testing.assert_array_equal(stats.center, expected_center)
+    np.testing.assert_array_equal(stats.scale, expected_scale)
+
+
+# ---------------------------------------------------------------------------
 # T5: --thresholds rolling (package-7 Task 5, spec D7 as amended by A3.2) --
 #     per-window trailing thresholds with conformal-floor fallback, the
 #     threshold_source column, coverage stats, and the all-invalid guard

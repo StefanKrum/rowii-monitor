@@ -81,6 +81,75 @@ def test_rotations_heatmap_subcommand_writes_png_and_csv(tmp_path, monkeypatch) 
 
 
 # ---------------------------------------------------------------------------
+# T8-review item 4: rotations-heatmap `--leaf-suffix` discovery + the <2-
+# rotations guard (never render a 1-cell "matrix" silently).
+# ---------------------------------------------------------------------------
+
+
+def test_rotations_heatmap_leaf_suffix_discovers_suffixed_leaves(tmp_path) -> None:
+    root = tmp_path / "results" / "step2" / "cross-day-pooled"
+    for test, fit, far in (("290626-tu", "010726-pu", 0.03), ("010726-pu", "290626-tu", 0.51)):
+        d = root / test / "fusion-pooled-a0.05"
+        d.mkdir(parents=True)
+        pd.DataFrame(
+            [{"label": "0", "realized_far": 0.0}, {"label": "pooled", "realized_far": far}]
+        ).to_csv(d / "far_table_frozen.csv", index=False)
+        (d / "notes.md").write_text(f"- fit pool: {fit} (pool order = `--fit-runs` order)\n")
+    # a PLAIN (no-suffix) leaf also exists for one test run -- must NOT be
+    # picked up when --leaf-suffix selects the '-a0.05' leaves only.
+    plain = root / "290626-tu" / "fusion-pooled"
+    plain.mkdir(parents=True)
+    pd.DataFrame(
+        [{"label": "0", "realized_far": 0.0}, {"label": "pooled", "realized_far": 0.99}]
+    ).to_csv(plain / "far_table_frozen.csv", index=False)
+    (plain / "notes.md").write_text("- fit pool: 010726-pu (pool order = `--fit-runs` order)\n")
+
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(
+        [
+            "rotations-heatmap", "--root", str(root), "--out", str(out),
+            "--variant", "fusion", "--mode", "frozen",
+            # NOTE: argparse's "looks like another option" heuristic misreads a
+            # bare `-a0.05` token as a flag -- the `--leaf-suffix=...` form
+            # keeps it inside one token (a real CLI-usage gotcha, not a bug in
+            # the discovery logic itself, which _run_rotations_heatmap reads
+            # via `str(args.leaf_suffix)` either way).
+            "--leaf-suffix=-a0.05",
+        ]
+    )
+    assert code == 0
+    assert (out / "rotations-heatmap" / "fusion-frozen.png").is_file()
+    csv_path = out / "rotations-heatmap" / "fusion-frozen.csv"
+    assert csv_path.is_file()
+    table = pd.read_csv(csv_path, index_col=0)
+    # the plain leaf's 0.99 value must never surface -- only the '-a0.05' pair.
+    assert table.loc["010726-pu", "290626-tu"] == pytest.approx(0.03)
+
+
+def test_rotations_heatmap_single_leaf_exits_2_with_hint(tmp_path, capsys) -> None:
+    root = tmp_path / "results" / "step2" / "cross-day-pooled"
+    d = root / "290626-tu" / "audio-pooled"
+    d.mkdir(parents=True)
+    pd.DataFrame(
+        [{"label": "0", "realized_far": 0.0}, {"label": "pooled", "realized_far": 0.2}]
+    ).to_csv(d / "far_table_frozen.csv", index=False)
+    (d / "notes.md").write_text("- fit pool: 010726-pu (pool order = `--fit-runs` order)\n")
+
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(
+        [
+            "rotations-heatmap", "--root", str(root), "--out", str(out),
+            "--variant", "audio", "--mode", "frozen",
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "--leaf-suffix" in err
+    assert "010726-pu" in err  # what WAS found is listed, not just a bare count
+    assert not (out / "rotations-heatmap").exists()  # never rendered
+
+
+# ---------------------------------------------------------------------------
 # Extension 1: `_era_step_row` pure helper (named in the plan's own Interfaces
 # section -- "Pure helper `_era_step_row(levels_by_stream, gt_mode_mask) -> dict`"
 # -- but not itself part of the plan's given RED block).
@@ -196,6 +265,158 @@ def test_feature_stability_unknown_run_name_exits_2(tmp_path, monkeypatch, capsy
 
 
 # ---------------------------------------------------------------------------
+# T8-review item 1 (BLOCKER, unit coherence): feature-stability's slow/
+# drifting cutoff must compare against a genuine dB figure, not a raw log10
+# shift -- `_log_rms` stores log10(RMS AMPLITUDE) (dB = 20*log10(ratio)),
+# `_band_`/`_octave_` store log10(mean Welch PSD, POWER) (dB =
+# 10*log10(ratio)). Exact fixture values chosen so the family factor itself
+# is pinned: 0.2 log10 units reads "slow" for a band/octave column (x10 -> 2
+# dB) but "drifting" for a log_rms column (x20 -> 4 dB) -- these would
+# collapse to the SAME classification under the old, unconverted comparison.
+# ---------------------------------------------------------------------------
+
+_DB_FIX_NAMES = ["s::ch0_band_shaft", "s::ch0_log_rms"]
+
+
+def _db_fix_run(run_name: str, *, band_value: float, log_rms_value: float) -> ad._RunFeatures:
+    """A single-mode ('turbine'), noise-free run: every one of its 10 windows
+    holds the SAME (band_value, log_rms_value) pair, so the cross-day
+    `shift_abs` between two calls of this helper is EXACTLY the difference of
+    the values passed in -- no bootstrap/median noise to obscure the family-
+    factor boundary math."""
+    n = 10
+    features = np.column_stack([np.full(n, band_value), np.full(n, log_rms_value)])
+    return ad._RunFeatures(
+        run_name=run_name, features=features,
+        gt_states=np.array(["turbine"] * n, dtype=object),
+        segment_ids=np.zeros(n, dtype=np.int64),
+        feature_names=list(_DB_FIX_NAMES), has_gt=True,
+    )
+
+
+def test_feature_stability_band_shift_04_log10_is_4db_drifting() -> None:
+    runs = [
+        _db_fix_run("dayA", band_value=0.0, log_rms_value=0.0),
+        _db_fix_run("dayB", band_value=0.4, log_rms_value=0.0),
+    ]
+    table = ad._feature_stability_table(
+        runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="audio",
+    )
+    band_rows = table[table["feature"] == "s::ch0_band_shaft"]
+    assert band_rows["shift_db"].iloc[0] == pytest.approx(4.0)  # 0.4 * 10
+    assert (band_rows["classification"] == "drifting").all()
+
+
+def test_feature_stability_band_shift_02_log10_is_2db_slow() -> None:
+    runs = [
+        _db_fix_run("dayA", band_value=0.0, log_rms_value=0.0),
+        _db_fix_run("dayB", band_value=0.2, log_rms_value=0.0),
+    ]
+    table = ad._feature_stability_table(
+        runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="audio",
+    )
+    band_rows = table[table["feature"] == "s::ch0_band_shaft"]
+    assert band_rows["shift_db"].iloc[0] == pytest.approx(2.0)  # 0.2 * 10
+    assert (band_rows["classification"] == "slow").all()
+
+
+def test_feature_stability_log_rms_shift_02_log10_is_4db_drifting() -> None:
+    # SAME 0.2 log10-unit magnitude as the band 'slow' case above, but
+    # log_rms's own x20 family factor puts it over the 3.0 dB cutoff -- the
+    # two families must NOT share one raw-unit comparison (the BLOCKER bug).
+    runs = [
+        _db_fix_run("dayA", band_value=0.0, log_rms_value=0.0),
+        _db_fix_run("dayB", band_value=0.0, log_rms_value=0.2),
+    ]
+    table = ad._feature_stability_table(
+        runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="audio",
+    )
+    log_rms_rows = table[table["feature"] == "s::ch0_log_rms"]
+    assert log_rms_rows["shift_db"].iloc[0] == pytest.approx(4.0)  # 0.2 * 20
+    assert (log_rms_rows["classification"] == "drifting").all()
+
+
+# ---------------------------------------------------------------------------
+# T8-review item 2: classification is LEVEL-columns-only (shape columns keep
+# their dot-interval rows but read "n/a"); fusion/embedding variants skip the
+# dB classification entirely (warned), since their level-NAMED columns hold
+# z-score/embedding values, not log10 ones.
+# ---------------------------------------------------------------------------
+
+_SHAPE_FIX_NAMES = ["s::ch0_band_shaft", "s::ch0_spectral_centroid"]
+
+
+def _shape_fix_run(run_name: str, *, band_value: float, shape_value: float) -> ad._RunFeatures:
+    n = 10
+    features = np.column_stack([np.full(n, band_value), np.full(n, shape_value)])
+    return ad._RunFeatures(
+        run_name=run_name, features=features,
+        gt_states=np.array(["turbine"] * n, dtype=object),
+        segment_ids=np.zeros(n, dtype=np.int64),
+        feature_names=list(_SHAPE_FIX_NAMES), has_gt=True,
+    )
+
+
+def test_feature_stability_shape_column_is_n_a_but_keeps_dot_interval_rows() -> None:
+    runs = [
+        _shape_fix_run("dayA", band_value=0.0, shape_value=100.0),
+        _shape_fix_run("dayB", band_value=0.4, shape_value=500.0),
+    ]
+    table = ad._feature_stability_table(
+        runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="audio",
+    )
+    shape_rows = table[table["feature"] == "s::ch0_spectral_centroid"]
+    assert len(shape_rows) == 2  # one dot-interval row per day, never dropped
+    assert (shape_rows["classification"] == "n/a").all()
+    assert shape_rows["shift_db"].isna().all()
+    # the LEVEL column in the same table is unaffected -- still classified.
+    band_rows = table[table["feature"] == "s::ch0_band_shaft"]
+    assert (band_rows["classification"] == "drifting").all()
+
+
+def test_feature_stability_fusion_variant_skips_db_classification(caplog) -> None:
+    runs = [
+        _db_fix_run("dayA", band_value=0.0, log_rms_value=0.0),
+        _db_fix_run("dayB", band_value=0.4, log_rms_value=0.0),
+    ]
+    with caplog.at_level(logging.WARNING):
+        table = ad._feature_stability_table(
+            runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="fusion",
+        )
+    assert (table["classification"] == "n/a").all()
+    assert table["shift_db"].isna().all()
+    assert any(
+        "fusion" in r.getMessage() and "z-score" in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
+
+
+def test_feature_stability_embedding_variant_skips_db_classification(caplog) -> None:
+    names = ["beats_0", "beats_1"]  # no _log_rms/_band_/_octave_ token at all
+
+    def _embed_run(run_name: str, value: float) -> ad._RunFeatures:
+        n = 10
+        return ad._RunFeatures(
+            run_name=run_name, features=np.column_stack([np.full(n, value), np.zeros(n)]),
+            gt_states=np.array(["turbine"] * n, dtype=object),
+            segment_ids=np.zeros(n, dtype=np.int64), feature_names=list(names), has_gt=True,
+        )
+
+    runs = [_embed_run("dayA", 0.0), _embed_run("dayB", 5.0)]
+    with caplog.at_level(logging.WARNING):
+        table = ad._feature_stability_table(
+            runs, n_boot=20, seed=1, cutoff=3.0, min_mode_windows=5, variant="audio-beats",
+        )
+    assert (table["classification"] == "n/a").all()
+    assert any(
+        "embedding" in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
+
+
+# ---------------------------------------------------------------------------
 # Extension 3: era-step end-to-end -- the 27.06-style unmatched point (A1.2)
 # and the --include-080726 gate (A1.2).
 # ---------------------------------------------------------------------------
@@ -263,6 +484,26 @@ def test_era_step_marks_unmatched_day_and_gates_080726(tmp_path, monkeypatch, ca
     assert set(table2["run"]) == {"dayGT", "dayNoGT", "080726-pu_strikes"}
     strikes_rows = table2[table2["run"] == "080726-pu_strikes"]
     assert strikes_rows["matched"].all()
+
+
+# ---------------------------------------------------------------------------
+# T8-review item 3: era-step's `--variant` is raw-scale-only (audio/
+# vibration) -- fusion's per-run z-score (A1.1) has no meaningful log10 level
+# to plot here.
+# ---------------------------------------------------------------------------
+
+
+def test_era_step_refuses_fusion_variant(tmp_path, capsys) -> None:
+    code = ad.main(
+        [
+            "era-step", "--runs", "dayA", "--variant", "fusion",
+            "--out", str(tmp_path / "out"),
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "fusion" in err
+    assert "audio" in err and "vibration" in err
 
 
 # ---------------------------------------------------------------------------

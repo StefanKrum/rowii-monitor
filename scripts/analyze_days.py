@@ -12,25 +12,42 @@ artifacts directly (mirrors `rotations-heatmap`'s own direct-filesystem-read
 style), and `digest` only reads THIS module's own output tree:
 
 1. `rotations-heatmap` -- day x day pooled flag-rate heatmap, read straight from
-   `results/step2/cross-day-pooled/<test_run>/<variant>-pooled/far_table_<mode>.csv`
-   (the `label == "pooled"` aggregate row) + that leaf's own `notes.md` "fit pool:"
-   line -- the visual replacement for the FAR tables Stefan found unreadable
-   (spec D3 point 1; no partner attribution -- this is Stefan's own usability
-   motivation).
-2. `feature-stability` -- per-feature cross-day shift (own stored units: log10
-   for level columns, raw units for shape columns -- NOT a calibrated acoustic-dB
-   conversion), per GT mode, on GT-bearing days only (A1.2), with 12-minute-block
+   `results/step2/cross-day-pooled/<test_run>/<variant>-pooled<leaf_suffix>/
+   far_table_<mode>.csv` (`--leaf-suffix`, default `""` -- e.g. `-a0.05` reaches
+   an alpha-suffixed leaf instead of the plain one) (the `label == "pooled"`
+   aggregate row) + that leaf's own `notes.md` "fit pool:" line -- the visual
+   replacement for the FAR tables Stefan found unreadable (spec D3 point 1; no
+   partner attribution -- this is Stefan's own usability motivation). Refuses to
+   render below 2 discovered rotations (exit 2, listing what WAS found and
+   hinting at `--leaf-suffix`) -- a 1-cell "matrix" is never silently plotted.
+2. `feature-stability` -- per-feature cross-day shift (own stored units for the
+   PRIMARY dot-interval figure: log10 for level columns, raw units for shape
+   columns), per GT mode, on GT-bearing days only (A1.2), with 12-minute-block
    (`PreparedRun.segment_ids`, NEVER wall-clock, A1.11) bootstrap CIs. The
    CONTINUOUS per-day dot-interval figure is the PRIMARY deliverable; the binary
-   slow(<3)/drifting(>=3) classification is SECONDARY, using a cutoff labeled
-   "same cutoff as Rodrigues & Zhang (2026), adopted for comparability" (A1.8) --
-   an independent replication of their stability-classes ANALYSIS TYPE on our own
-   features, never a claim that our shift value is numerically their dB figure.
-3. `era-step` -- per-day per-stream (mic vs vibration) median level in GT-matched
-   modes across the recording era, with 2026-06-27 (no Betriebsdaten at all) shown
-   as an UN-MATCHED point flagged "no GT -- era-A anchor by MeasName only", and
-   2026-07-08 (080726) included ONLY behind the explicit `--include-080726` gate
-   (A1.2 -- gated on the D4.3 SCADA-timebase probe, `scripts/verify_data_facts.py
+   slow(<3 dB)/drifting(>=3 dB) classification is SECONDARY and LEVEL-COLUMN-ONLY:
+   each level column's own log10-domain shift is first converted to a genuine dB
+   figure (`_level_db_factor` -- x20 for `_log_rms`, stored log10 RMS AMPLITUDE;
+   x10 for `_band_`/`_octave_`, stored log10 mean Welch PSD POWER -- the standard
+   amplitude/power dB relationship, computed entirely from our own stored
+   features), THEN compared against a cutoff labeled "same cutoff as Rodrigues &
+   Zhang (2026), adopted for comparability" (A1.8) -- an independent replication
+   of their stability-classes ANALYSIS TYPE on our own features, never a claim
+   that our shift value is numerically their dB figure. Shape columns (raw
+   Hz/dimensionless units) keep their dot-interval row but are never classified
+   (`"n/a"` -- a dB cutoff is meaningless in their own units); for the `fusion`
+   variant, or any embedding variant (zero level columns), the dB classification
+   is skipped entirely (logged warning) since those columns' shifts are per-run
+   z-score / embedding units, never log10.
+3. `era-step` -- per-day, per-STREAM-VARIANT (mic streams under `--variant
+   audio`, vibration streams under `--variant vibration` -- `fusion` is refused,
+   exit 2: `fuse()`'s per-run z-score, A1.1, has no meaningful raw-scale level to
+   plot here; the mic-vs-vibration COMPOSITE view needs one run of EACH variant,
+   each its own CSV/PNG) median level in GT-matched modes across the recording
+   era, with 2026-06-27 (no Betriebsdaten at all) shown as an UN-MATCHED point
+   flagged "no GT -- era-A anchor by MeasName only", and 2026-07-08 (080726)
+   included ONLY behind the explicit `--include-080726` gate (A1.2 -- gated on
+   the D4.3 SCADA-timebase probe, `scripts/verify_data_facts.py
    scada-timebase`). Consistent with, and attributed alongside, the partner's own
    independently reported mic-only broadband level step at the same era boundary
    (Rodrigues & Zhang, 2026) -- our own number, computed only from our own caches.
@@ -142,10 +159,14 @@ logger = logging.getLogger(__name__)
 _ANALYSIS_DIR_NAME = "analysis-days"
 _STABILITY_CUTOFF_DB = 3.0
 """The A1.8 named, adopted-for-comparability cutoff ("same cutoff as Rodrigues &
-Zhang (2026), adopted for comparability"). Applied directly to THIS module's own
-shift value (own stored units -- log10 for level columns, raw units for shape
-columns), never against a partner-reported number (the firewall's binding test
-rule); the label is a comparability choice, not a unit-conversion claim."""
+Zhang (2026), adopted for comparability"), in dB. Applied to THIS module's own
+shift value AFTER converting a level column's own log10-domain shift to dB
+(`_level_db_factor` -- x20 for `_log_rms`, x10 for `_band_`/`_octave_`, the
+standard amplitude/power dB relationship), never against a partner-reported
+number (the firewall's binding test rule); the label is a comparability choice
+of CUTOFF, not a claim that our shift equals their reported figure. Shape
+columns, and every column under the `fusion`/embedding variants, never receive
+this classification at all (`"n/a"` -- see `_feature_stability_table`)."""
 _EXCLUDED_GT = ("unknown", "transition")
 """Duplicated from `rowii.state.modebank._EXCLUDED_GT` / `scripts/run_modebank.py`
 (spec A1.5, reused-in-spirit here per plan Task 8/9 self-review note): GT windows
@@ -349,8 +370,44 @@ def _resolve_out_root(out_arg: str | None, results_root: Path | None) -> Path:
 def _classify_shift(shift_abs: float, cutoff: float = _STABILITY_CUTOFF_DB) -> str:
     """"drifting" if `shift_abs >= cutoff` else "slow" -- A1.8: *cutoff* is a
     NAMED, adopted-for-comparability constant, never asserted against a
-    partner-reported number."""
+    partner-reported number. A pure comparison: the caller decides what
+    *shift_abs* means -- `feature-stability` passes a dB-converted level-column
+    shift (`_level_db_factor`), never the raw log10 difference directly."""
     return "drifting" if shift_abs >= cutoff else "slow"
+
+
+_LOG_RMS_DB_FACTOR = 20.0
+"""`*_log_rms` stores `log10(RMS AMPLITUDE)` (`rowii.anomaly.levelrecal`'s own
+VERIFIED-FACT module docstring) -- dB = 20*log10(amplitude ratio), the standard
+amplitude-domain dB relationship."""
+_BAND_OCTAVE_DB_FACTOR = 10.0
+"""`*_band_*`/`*_octave_*` store `log10(mean Welch PSD)`, a POWER quantity
+(`rowii.anomaly.levelrecal`'s own VERIFIED-FACT module docstring) -- dB =
+10*log10(power ratio), the standard power-domain dB relationship."""
+
+
+def _level_db_factor(feature_name: str) -> float:
+    """The log10-domain-shift-to-dB multiplier for ONE level column, keyed by
+    its own name token: `_LOG_RMS_DB_FACTOR` (20) for `*_log_rms` (stored log10
+    RMS amplitude), `_BAND_OCTAVE_DB_FACTOR` (10) for `*_band_*`/`*_octave_*`
+    (stored log10 mean Welch PSD power) -- the BLOCKER dB-unit-coherence fix
+    (A1.8): the 3 dB comparability cutoff is meaningless applied to a raw log10
+    shift without this conversion first.
+
+    Raises:
+        ValueError: *feature_name* carries neither token -- not a level column
+            at all (callers restrict to `rowii.anomaly.levelrecal.
+            level_columns` first; this is a caller-bug guard, not a real data
+            case).
+    """
+    if "_log_rms" in feature_name:
+        return _LOG_RMS_DB_FACTOR
+    if "_band_" in feature_name or "_octave_" in feature_name:
+        return _BAND_OCTAVE_DB_FACTOR
+    raise ValueError(
+        f"_level_db_factor: {feature_name!r} carries neither a _log_rms nor a "
+        f"_band_/_octave_ token -- not a level column"
+    )
 
 
 def _block_bootstrap_ci(
@@ -358,10 +415,15 @@ def _block_bootstrap_ci(
 ) -> tuple[float, float]:
     """95% percentile bootstrap CI on `median(values)`, resampling whole
     `segment_ids` BLOCKS with replacement (A1.11: the 12-min recording segment,
-    NEVER wall-clock/calendar time) -- a degenerate single-segment input still
-    returns a finite interval (every bootstrap draw resamples that one block
-    with replacement, so the resulting median distribution is non-degenerate
-    whenever the block itself holds >= 2 distinct values)."""
+    NEVER wall-clock/calendar time) -- a degenerate SINGLE-segment input still
+    returns a FINITE interval, but a zero-WIDTH (degenerate) one: with only one
+    block to draw from, every bootstrap replicate resamples that exact same
+    block (there is no second block it could ever pick instead), so
+    `median(values)` is identical on every draw regardless of how many DISTINCT
+    values the lone block itself holds -- resampling blocks, not the individual
+    values inside them, is what block bootstrap means. `n_segments < 2` is
+    therefore a degenerate CI by construction (`lo == hi`); the figure shows a
+    whisker-less dot for that (feature, mode, day)."""
     rng = np.random.default_rng(seed)
     seg_ids = np.unique(segment_ids)
     groups = [values[segment_ids == s] for s in seg_ids]
@@ -503,18 +565,22 @@ def _far_table_pooled_value(path: Path) -> float:
     return float(pooled.iloc[0]["realized_far"])
 
 
-def _discover_rotation_leaves(root: Path, variant: str, mode: str) -> dict[tuple[str, str], float]:
-    """Walk `root/<test_run>/<variant>-pooled/far_table_<mode>.csv`
-    (`scripts/run_step2.py`'s `_cross_day_pooled_out_dir` plain-leaf
-    convention -- no `-snorm`/`-lrecal` suffix), pairing each discovered leaf
-    with its own `notes.md` "fit pool:" line -> `{(fit_pool, test_run):
-    pooled_far}`. A leaf missing either file is silently skipped (not every
-    `<test_run>` subdirectory necessarily has this *variant*)."""
+def _discover_rotation_leaves(
+    root: Path, variant: str, mode: str, leaf_suffix: str = ""
+) -> dict[tuple[str, str], float]:
+    """Walk `root/<test_run>/<variant>-pooled<leaf_suffix>/far_table_<mode>.csv`
+    (`scripts/run_step2.py`'s `_cross_day_pooled_out_dir` leaf convention --
+    plain `<variant>-pooled` when *leaf_suffix* is `""`, the default; a
+    `--leaf-suffix` such as `-a0.05` instead discovers `<variant>-pooled-a0.05`
+    leaves), pairing each discovered leaf with its own `notes.md` "fit pool:"
+    line -> `{(fit_pool, test_run): pooled_far}`. A leaf missing either file is
+    silently skipped (not every `<test_run>` subdirectory necessarily has this
+    *variant*/*leaf_suffix* combination)."""
     far: dict[tuple[str, str], float] = {}
     if not root.is_dir():
         return far
     for test_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        leaf = test_dir / f"{variant}-pooled"
+        leaf = test_dir / f"{variant}-pooled{leaf_suffix}"
         far_path = leaf / f"far_table_{mode}.csv"
         notes_path = leaf / "notes.md"
         if not far_path.is_file() or not notes_path.is_file():
@@ -577,16 +643,22 @@ def _plot_flag_rate_heatmap(matrix: pd.DataFrame, mode: str, out_path: Path) -> 
 def _run_rotations_heatmap(args: argparse.Namespace) -> int:
     variant = str(args.variant)
     mode = str(args.mode)
+    leaf_suffix = str(args.leaf_suffix)
     root = Path(args.root) if args.root is not None else _default_cross_day_pooled_root()
 
-    far = _discover_rotation_leaves(root, variant, mode)
-    if not far:
+    far = _discover_rotation_leaves(root, variant, mode, leaf_suffix)
+    if len(far) < 2:
+        found = sorted(far)
         print(
-            f"rotations-heatmap: no far_table_{mode}.csv found under {root} for "
-            f"variant {variant!r} (expected leaf '<test_run>/{variant}-pooled/')",
+            f"rotations-heatmap: only {len(far)} rotation(s) discovered under "
+            f"{root} for variant {variant!r}, leaf "
+            f"'<test_run>/{variant}-pooled{leaf_suffix}/far_table_{mode}.csv' "
+            f"(need >= 2 to render a heatmap -- never rendering a 1-cell "
+            f"'matrix' silently); found: {found}. If the leaves you expect "
+            f"carry a different suffix (e.g. '-a0.05'), pass --leaf-suffix.",
             file=sys.stderr,
         )
-        return 1
+        return 2
 
     matrix = _flag_rate_matrix(far)
     out_root = _resolve_out_root(args.out, None)
@@ -613,14 +685,41 @@ _STABILITY_TOP_N_DEFAULT = 20
 
 
 def _feature_stability_table(
-    runs: Sequence[_RunFeatures], *, n_boot: int, seed: int, cutoff: float, min_mode_windows: int
+    runs: Sequence[_RunFeatures],
+    *,
+    n_boot: int,
+    seed: int,
+    cutoff: float,
+    min_mode_windows: int,
+    variant: str,
 ) -> pd.DataFrame:
     """Per (feature, mode, day) tidy table: that day's block-bootstrapped
     median + CI for *feature* restricted to GT mode *mode*, plus the
     (feature, mode)-level `shift_abs` (max day-median - min day-median across
-    the qualifying days) and its `_classify_shift` classification -- repeated
-    across that group's day-rows (tidy format, directly plottable/filterable).
-    Sorted by `shift_abs` descending (worst offenders first).
+    the qualifying days, OWN STORED UNITS -- log10 for level columns, raw for
+    shape columns) and a `shift_db` column (the BLOCKER dB-unit-coherence fix,
+    A1.8): for a LEVEL column (`rowii.anomaly.levelrecal.level_columns`) of a
+    genuine raw-scale *variant*, `shift_abs` converted to a real dB figure via
+    `_level_db_factor` (x20 `_log_rms` / x10 `_band_`/`_octave_`) -- THIS is
+    what `_classify_shift` compares against *cutoff*, never the raw `shift_abs`
+    directly. Repeated across that group's day-rows (tidy format, directly
+    plottable/filterable). Sorted by `shift_abs` descending (worst offenders
+    first, own-units magnitude -- unaffected by the dB fix, which only touches
+    the classification/`shift_db`, not the ranking).
+
+    `classification` is `"n/a"` (never "slow"/"drifting", `shift_db` is `NaN`)
+    for:
+    - every SHAPE column (own raw units, e.g. Hz or a dimensionless moment --
+      a dB cutoff is meaningless there) in any variant, and
+    - EVERY column, level-named or not, when *variant* is `"fusion"` (its
+      level-named columns are `fuse()`'s own per-run z-scores, A1.1 -- not
+      log10 values, so a dB conversion would be meaningless) or an embedding
+      variant (`level_columns` returns the empty set, e.g.
+      `audio-beats`/`audio-tfc`/`logmel` -- embedding units, not log10).
+    Either fusion/embedding skip case logs one `logger.warning` naming the
+    reason; the dot-interval rows themselves are still written in both cases
+    (own-units median + CI stay meaningful and clearly axis-labeled even
+    without a slow/drifting call).
 
     Only GT-bearing runs (`has_gt=True`) participate (A1.2); a mode needs >= 2
     qualifying days (each with >= *min_mode_windows* of that mode) to produce a
@@ -646,6 +745,23 @@ def _feature_stability_table(
                 f"mismatched columns"
             )
 
+    level_col_set = set(level_columns(feature_names))
+    skip_reason: str | None = None
+    if variant == "fusion":
+        skip_reason = (
+            "variant='fusion': fuse()'s per-run z-score (A1.1) makes every "
+            "level-named column a z-score, not a log10 value -- dB "
+            "classification skipped, every row reads 'n/a'"
+        )
+    elif not level_col_set:
+        skip_reason = (
+            f"variant={variant!r} has zero level column(s) (embedding "
+            f"variant) -- shifts are embedding units, not log10 -- dB "
+            f"classification skipped, every row reads 'n/a'"
+        )
+    if skip_reason is not None:
+        logger.warning("feature-stability: %s", skip_reason)
+
     modes: set[str] = set()
     for r in included:
         modes |= set(np.unique(r.gt_states).tolist())
@@ -669,7 +785,12 @@ def _feature_stability_table(
                 day_ci[r.run_name] = (lo, hi)
                 day_n[r.run_name] = int(idx.size)
             shift_abs = float(max(day_median.values()) - min(day_median.values()))
-            classification = _classify_shift(abs(shift_abs), cutoff)
+            if skip_reason is None and j in level_col_set:
+                shift_db: float = shift_abs * _level_db_factor(feature)
+                classification = _classify_shift(abs(shift_db), cutoff)
+            else:
+                shift_db = float("nan")
+                classification = "n/a"
             for run_name, median in day_median.items():
                 lo, hi = day_ci[run_name]
                 rows.append(
@@ -682,13 +803,14 @@ def _feature_stability_table(
                         "ci_lo": lo,
                         "ci_hi": hi,
                         "shift_abs": shift_abs,
+                        "shift_db": shift_db,
                         "classification": classification,
                     }
                 )
 
     columns = [
         "feature", "mode", "day", "n_windows", "median", "ci_lo", "ci_hi",
-        "shift_abs", "classification",
+        "shift_abs", "shift_db", "classification",
     ]
     table = pd.DataFrame(rows, columns=columns)
     if not table.empty:
@@ -821,6 +943,7 @@ def _run_feature_stability(args: argparse.Namespace) -> int:
             seed=int(args.seed),
             cutoff=float(args.cutoff_db),
             min_mode_windows=int(args.min_mode_windows),
+            variant=variant,
         )
     except ValueError as exc:
         print(f"feature-stability: {exc}", file=sys.stderr)
@@ -925,7 +1048,11 @@ def _era_step_table(runs_features: Sequence[_RunFeatures], gt_mode: str) -> pd.D
 
 
 def _plot_era_step(
-    table: pd.DataFrame, out_path: Path, run_order: Sequence[str], era_boundary_after: str | None
+    table: pd.DataFrame,
+    out_path: Path,
+    run_order: Sequence[str],
+    era_boundary_after: str | None,
+    variant: str,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8.5, 4.5))
     fig.patch.set_facecolor(_COLOR_SURFACE)
@@ -984,7 +1111,10 @@ def _plot_era_step(
     ax.set_xticklabels(
         present_runs, rotation=30, ha="right", fontsize=8, color=_COLOR_TEXT_SECONDARY
     )
-    ax.set_ylabel("median level (log10 units)", color=_COLOR_TEXT_MUTED, fontsize=9)
+    ax.set_ylabel(
+        f"median level (log10 units, {variant} -- raw-scale variant)",
+        color=_COLOR_TEXT_MUTED, fontsize=9,
+    )
     ax.set_title(
         "Per-day per-stream level (filled = GT-matched, hollow diamond = unmatched)",
         loc="left", fontsize=10.5, color="#0b0b0b",
@@ -1007,11 +1137,30 @@ def _plot_era_step(
 
 
 def _run_era_step(args: argparse.Namespace) -> int:
+    """era-step subcommand entrypoint. `--variant` is restricted to `audio`/
+    `vibration` (exit 2 otherwise) -- `fusion` is refused: `fuse()`'s per-run
+    z-score (A1.1) has no meaningful raw-scale level to plot here. ONE
+    invocation therefore plots ONLY that variant's own stream(s) (the mic pair
+    for `audio`, the vibration pair for `vibration`); the mic-vs-vibration
+    COMPOSITE view the module docstring describes needs one run of EACH
+    variant (`--variant audio` and `--variant vibration`, each its own
+    `results/analysis-days/era-step/<variant>.{csv,png}`) -- this subcommand
+    never overlays them into one figure itself."""
     run_names = _resolve_run_names(str(args.runs))
     if not run_names:
         print("era-step: --runs got an empty run-name list", file=sys.stderr)
         return 2
     variant = str(args.variant)
+    if variant not in ("audio", "vibration"):
+        print(
+            f"era-step: --variant must be 'audio' or 'vibration' (got "
+            f"{variant!r}) -- fusion's per-run z-scored features (fuse(), "
+            f"A1.1) have no meaningful raw-scale level to plot; run era-step "
+            f"once per stream variant (audio, then vibration) for the "
+            f"mic-vs-vibration composite view",
+            file=sys.stderr,
+        )
+        return 2
     gt_mode = str(args.gt_mode)
     include_080726 = bool(args.include_080726)
 
@@ -1058,7 +1207,9 @@ def _run_era_step(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = variant
     table.to_csv(out_dir / f"{stem}.csv", index=False)
-    _plot_era_step(table, out_dir / f"{stem}.png", kept_run_names, args.era_boundary_after)
+    _plot_era_step(
+        table, out_dir / f"{stem}.png", kept_run_names, args.era_boundary_after, variant
+    )
     print(
         f"era-step: wrote {out_dir / (stem + '.csv')} and .png "
         f"({len(kept_run_names)} day(s), gt_mode={gt_mode!r})"
@@ -1792,6 +1943,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", choices=("frozen", "recalibrate"), default="frozen",
         help="Which far_table_<mode>.csv to read (default: frozen).",
     )
+    p_heat.add_argument(
+        "--leaf-suffix", default="",
+        help=(
+            "Leaf directory suffix appended after '<variant>-pooled' (default: "
+            "'' -- the plain leaf; e.g. '-a0.05' discovers '<variant>-pooled-a0.05')."
+        ),
+    )
 
     p_stab = sub.add_parser(
         "feature-stability",
@@ -1807,8 +1965,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_stab.add_argument(
         "--cutoff-db", type=float, default=_STABILITY_CUTOFF_DB,
         help=(
-            f"slow/drifting classification cutoff (default {_STABILITY_CUTOFF_DB:g}, "
-            "the A1.8 named, adopted-for-comparability constant -- see module docstring)."
+            f"slow/drifting classification cutoff IN DB, applied to LEVEL "
+            f"columns only after the family-factor dB conversion (default "
+            f"{_STABILITY_CUTOFF_DB:g}, the A1.8 named, adopted-for-comparability "
+            f"constant -- see module docstring)."
         ),
     )
     p_stab.add_argument("--min-mode-windows", type=int, default=_STABILITY_MIN_MODE_WINDOWS_DEFAULT)
@@ -1825,7 +1985,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--runs", required=True, help="Comma-separated run names, chronological order."
     )
     p_era.add_argument(
-        "--variant", default="fusion", help="e.g. audio, vibration, fusion (default: fusion)."
+        "--variant", required=True,
+        help=(
+            "audio or vibration only -- fusion's per-run z-scored features "
+            "(fuse(), A1.1) have no meaningful raw-scale level to plot; run "
+            "era-step once per variant for the mic-vs-vibration composite view."
+        ),
     )
     p_era.add_argument(
         "--gt-mode", default="turbine",
