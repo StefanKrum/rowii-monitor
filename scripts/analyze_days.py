@@ -1,12 +1,15 @@
 """D3 explainability analysis suite (Package-8, spec `docs/superpowers/specs/
 2026-07-21-step2-package8-modebank-recal-explain.md` §3.D3 + Amendment A1.2/A1.8/
 A1.11, plan `docs/superpowers/plans/2026-07-21-step2-package8-modebank-explain.md`
-Task 8): publication-grade figures + underlying CSVs from EXISTING artifacts/warm
-caches -- no new sweeps, no partner JSON/number read by any code here.
+Tasks 8+9): publication-grade figures + underlying CSVs from EXISTING artifacts/
+warm caches -- no new sweeps, no partner JSON/number read by any code here.
 
-This module (Task 8) ships three of the suite's six subcommands (Task 9 adds
-`mode-signatures`/`tonal-table`/`pillar3-figure`/`digest` on top of the same
-`_run_features_and_gt` seam):
+This module ships all six of the D3 suite's analysis subcommands plus a
+markdown digest. Five of the six share ONE read seam (`_run_features_and_gt`/
+`_RunFeatures`) for everything that reads warm feature caches + GT;
+`pillar3-figure` instead reads existing `results/pillar3/**/event_eval.csv`
+artifacts directly (mirrors `rotations-heatmap`'s own direct-filesystem-read
+style), and `digest` only reads THIS module's own output tree:
 
 1. `rotations-heatmap` -- day x day pooled flag-rate heatmap, read straight from
    `results/step2/cross-day-pooled/<test_run>/<variant>-pooled/far_table_<mode>.csv`
@@ -31,14 +34,66 @@ This module (Task 8) ships three of the suite's six subcommands (Task 9 adds
    scada-timebase`). Consistent with, and attributed alongside, the partner's own
    independently reported mic-only broadband level step at the same era boundary
    (Rodrigues & Zhang, 2026) -- our own number, computed only from our own caches.
+4. `mode-signatures` (Task 9) -- per-GT-mode band/octave profile (median +
+   interquartile range) for ONE day at a time -- the "modes are separable"
+   picture on our own features, restricted to the `_band_`/`_octave_`
+   spectral-shape columns (narrower than `rowii.anomaly.levelrecal.
+   level_columns`, which also folds in the single-scalar `_log_rms` loudness
+   column -- not part of a "profile" shape). One PNG + CSV PER RUN (the
+   comparison this figure makes is WITHIN one day, across modes, unlike
+   feature-stability/era-step's ACROSS-day comparison). An independent,
+   per-day replication of the partner's reported within-day mode
+   separability (Rodrigues & Zhang, 2026), computed only from our own
+   caches.
+5. `tonal-table` (Task 9) -- per (run, GT mode, physical stream) the three
+   `rowii.signals.features.MACHINE_HZ` machine-tone band energies (shaft,
+   blade-pass, guide-vane-pass) contrasted against their own NEIGHBORING
+   octave column (nearest center by Hz, among the octave centers actually
+   present for that stream) -- `_tonal_contrast = band_energy -
+   octave_floor`, an SNR-like contrast defined ENTIRELY from our own
+   band/octave features, explicitly NOT the partner's exact metric (A1.8) --
+   it only shares the analysis TYPE (a machine-fingerprint table) with
+   Rodrigues & Zhang (2026). Own stored units throughout: log10 for the
+   audio/vibration variants (a genuine, if uncalibrated, level-ratio
+   reading); for `fusion`, whose `fuse()` step per-run z-scores every
+   column before concatenation (A1.1), the same subtraction is a
+   difference of two INDEPENDENTLY-scaled z-scores, not a log10-domain
+   ratio -- still an internally consistent RELATIVE reading, but not even
+   loosely decibel-equivalent the way the audio/vibration case is. This
+   module does not exclude fusion here (unlike D2's corrective
+   `--level-recal`, `tonal-table` is a descriptive figure, never an offset
+   applied to downstream detection) -- the caveat is real and stated once,
+   here.
+6. `pillar3-figure` (Task 9) -- event-level TPR-vs-alpha grouped bars per
+   representation, one panel per pillar-3 session, read straight from
+   existing `results/pillar3/<session>/<representation>-a<alpha>/
+   event_eval.csv` `row_type == "summary"` rows (`scripts/eval_events.py`'s
+   own tidy-CSV contract) -- a leaf whose directory name carries no
+   trailing `-a<alpha>` suffix (e.g. a `-frozen` leaf, outside the alpha
+   grid) is not part of this comparison and is silently skipped. Our own
+   numbers only; no partner attribution (like `rotations-heatmap`, this is
+   Stefan's own comparison-readability motivation, not a replicated
+   analysis type).
+
+`digest` (Task 9) writes `results/analysis-days/README.md`: one section per
+subcommand above, a 2-3 sentence plain-language reading of that chart type, a
+markdown link to every PNG this module has actually written so far under
+that subcommand's own directory, the A1.8 attribution line for every
+partner-inspired analysis type (`feature-stability`, `era-step`,
+`mode-signatures`, `tonal-table`), and a dedicated paragraph documenting the
+A1.1 finding: `fuse()`'s built-in per-run z-score is an implicit session
+normalization that plausibly explains fusion's own cross-day FAR advantage.
+English only (`--lang de` not built, spec D3 -- thesis language).
 
 Every subcommand writes a PNG (matplotlib, Agg backend) + its underlying CSV
-under `results/analysis-days/<subcommand>/`; every run is deterministic (seeded
-bootstrap). Colors are the dataviz skill's validated categorical/sequential steps
-(`references/palette.md`; duplicated here as plain hex, mirroring
-`scripts/analyze_step1.py`'s own precedent comment) -- not re-imported from that
-sibling script (script-sibling rule: a script never imports another script's
-internals; only `src/rowii/` modules are imported normally).
+under `results/analysis-days/<subcommand>/` (digest is the one exception: a
+single `README.md`, no CSV); every run is deterministic (seeded bootstrap
+where randomness is involved). Colors are the dataviz skill's validated
+categorical/sequential steps (`references/palette.md`; duplicated here as
+plain hex, mirroring `scripts/analyze_step1.py`'s own precedent comment) --
+not re-imported from that sibling script (script-sibling rule: a script
+never imports another script's internals; only `src/rowii/` modules are
+imported normally).
 """
 from __future__ import annotations
 
@@ -59,6 +114,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _SRC_DIR = _SCRIPTS_DIR.parent / "src"
@@ -78,6 +134,7 @@ from rowii.io.dataset import (  # noqa: E402
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import PreparedRun, prepare_run, stream_columns  # noqa: E402
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
+from rowii.signals.features import MACHINE_HZ  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -267,6 +324,10 @@ def _default_cross_day_pooled_root() -> Path:
     return load_config().results_root / "step2" / "cross-day-pooled"
 
 
+def _default_pillar3_root() -> Path:
+    return load_config().results_root / "pillar3"
+
+
 def _resolve_out_root(out_arg: str | None, results_root: Path | None) -> Path:
     """`--out` if given, else `<results_root>/analysis-days` -- *results_root*
     is looked up via `load_config()` when `None` (deferred so a caller that
@@ -341,6 +402,76 @@ def _era_step_row(
         stream: float(np.median(np.asarray(levels, dtype=np.float64)[mask]))
         for stream, levels in levels_by_stream.items()
     }
+
+
+def _tonal_contrast(band_energy: float, octave_floor: float) -> float:
+    """`band_energy - octave_floor` -- OUR OWN SNR-like contrast (Task 9,
+    spec D3.5): how far a machine-tone band's own energy sits above
+    (positive) or below (negative) its neighboring octave column's energy,
+    in whatever units the two inputs already share (own stored log10 units
+    for audio/vibration; per-run z-score units for fusion -- see module
+    docstring). Explicitly NOT the partner's exact tonal metric (A1.8) --
+    only the ANALYSIS TYPE (contrasting a narrowband tone against a nearby
+    broadband floor) is shared."""
+    return band_energy - octave_floor
+
+
+def _mode_profile(
+    features: np.ndarray, gt_states: np.ndarray, level_cols: Sequence[int]
+) -> pd.DataFrame:
+    """Tidy (mode, column, median, q25, q75, n_windows) table (Task 9, spec
+    D3.4): per GT mode present in *gt_states* (`unknown`/`transition`
+    excluded, `_EXCLUDED_GT`), per column INDEX in *level_cols*, that mode's
+    own median + interquartile range over *features*' matching rows -- the
+    "modes are separable" picture's underlying numbers. *column* is a bare
+    INTEGER index, not a name: this helper is feature-name-agnostic
+    (mirrors `rowii.anomaly.levelrecal.level_columns`'s own bare-index
+    contract) -- callers with `feature_names` in scope join it back for
+    display. A mode with zero matching rows contributes no row at all
+    (nothing to summarise)."""
+    x = np.asarray(features, dtype=np.float64)
+    gt = np.asarray(gt_states, dtype=object)
+    cols = list(level_cols)
+    modes: set[str] = set(gt.tolist())
+    modes -= set(_EXCLUDED_GT)
+
+    rows: list[dict[str, object]] = []
+    for mode in sorted(modes):
+        mask = gt == mode
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        sub = x[mask][:, cols]
+        median = np.median(sub, axis=0)
+        q25 = np.percentile(sub, 25, axis=0)
+        q75 = np.percentile(sub, 75, axis=0)
+        for k, col in enumerate(cols):
+            rows.append(
+                {
+                    "mode": mode,
+                    "column": int(col),
+                    "median": float(median[k]),
+                    "q25": float(q25[k]),
+                    "q75": float(q75[k]),
+                    "n_windows": n,
+                }
+            )
+    columns = ["mode", "column", "median", "q25", "q75", "n_windows"]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _tpr_by_alpha(event_table: pd.DataFrame) -> pd.DataFrame:
+    """(representation x alpha) `event_tpr` pivot from a tidy *event_table*
+    (Task 9, spec D3.6) -- columns `representation`/`alpha`/`event_tpr`, one
+    row per discovered pillar-3 leaf (mirrors `_flag_rate_matrix`'s own
+    plain-pivot contract; callers filter to one `session` first). `NaN`
+    where a (representation, alpha) combination was never discovered."""
+    reps = sorted(event_table["representation"].unique())
+    alphas = sorted(event_table["alpha"].unique())
+    matrix = pd.DataFrame(np.nan, index=reps, columns=alphas)
+    for _, row in event_table.iterrows():
+        matrix.loc[row["representation"], row["alpha"]] = row["event_tpr"]
+    return matrix
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +1067,699 @@ def _run_era_step(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand 4: mode-signatures (Task 9, spec D3.4)
+# ---------------------------------------------------------------------------
+
+_MODE_SIGNATURES_TOP_N_DEFAULT = 20
+
+
+def _band_octave_columns(feature_names: list[str]) -> list[int]:
+    """Indices carrying a `_band_` or `_octave_` name token -- the spectral
+    "profile" `mode-signatures` compares across GT modes. Narrower than
+    `rowii.anomaly.levelrecal.level_columns` (which also folds in the
+    single-scalar `_log_rms` loudness column, not part of a band/octave
+    profile shape)."""
+    return [i for i, n in enumerate(feature_names) if "_band_" in n or "_octave_" in n]
+
+
+def _plot_mode_signatures(
+    table: pd.DataFrame, out_path: Path, top_n: int = _MODE_SIGNATURES_TOP_N_DEFAULT
+) -> None:
+    """Dot-interval (errorbar) figure, ONE day's own `_mode_profile` table --
+    one row per (feature, mode), grouped by feature, colored by mode,
+    restricted to the top *top_n* features by cross-mode separation
+    (`max(median) - min(median)` over that feature's own mode rows;
+    legibility, mirrors `_plot_feature_stability`'s `top_n` cap). Whiskers
+    are the mode's own interquartile range (asymmetric q25/q75 bounds
+    around the median)."""
+    if table.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 3.0))
+        fig.patch.set_facecolor(_COLOR_SURFACE)
+        ax.set_facecolor(_COLOR_SURFACE)
+        ax.text(
+            0.5, 0.5, "no GT mode (excl. unknown/transition) had >= 1 window this day",
+            ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
+        )
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    separation = (
+        table.groupby("feature")["median"]
+        .agg(lambda s: float(s.max() - s.min()))
+        .sort_values(ascending=False)
+    )
+    top_features = list(separation.head(top_n).index)
+    modes = sorted(table["mode"].unique())
+    mode_color = {m: _CATEGORICAL_HEX[i % len(_CATEGORICAL_HEX)] for i, m in enumerate(modes)}
+    n_modes = max(len(modes), 1)
+
+    height = max(3.0, 0.42 * len(top_features) + 1.6)
+    fig, ax = plt.subplots(figsize=(8.5, height))
+    fig.patch.set_facecolor(_COLOR_SURFACE)
+    ax.set_facecolor(_COLOR_SURFACE)
+
+    row_span = 0.6
+    for row_i, feature in enumerate(top_features):
+        sub = table[table["feature"] == feature]
+        for k, mode in enumerate(modes):
+            r = sub[sub["mode"] == mode]
+            if r.empty:
+                continue
+            r0 = r.iloc[0]
+            color = mode_color[mode]
+            median = float(r0["median"])
+            lo_err = max(0.0, median - float(r0["q25"]))
+            hi_err = max(0.0, float(r0["q75"]) - median)
+            y = row_i + (k - (n_modes - 1) / 2) * (row_span / n_modes)
+            ax.errorbar(
+                median, y, xerr=[[lo_err], [hi_err]], fmt="o", color=color,
+                ecolor=color, elinewidth=1.5, capsize=3, markersize=5, zorder=3,
+            )
+
+    ax.set_yticks(range(len(top_features)))
+    ax.set_yticklabels(top_features, fontsize=7.5, color=_COLOR_TEXT_SECONDARY)
+    ax.invert_yaxis()
+    ax.set_xlabel(
+        "feature value (own stored units: log10 for level columns -- not a "
+        "calibrated acoustic-dB conversion)",
+        color=_COLOR_TEXT_MUTED, fontsize=8,
+    )
+    ax.set_title(
+        f"Mode signatures -- top {len(top_features)} band/octave feature(s) by "
+        "cross-mode separation (dot = mode median, whisker = IQR)",
+        loc="left", fontsize=10, color="#0b0b0b",
+    )
+    handles = [
+        Line2D([0], [0], marker="o", linestyle="", color=mode_color[m], label=m) for m in modes
+    ]
+    ax.legend(
+        handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.12),
+        ncol=min(len(modes), 4), frameon=False, fontsize=8,
+    )
+    ax.grid(axis="x", color=_COLOR_GRIDLINE, linewidth=1.0, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(_COLOR_STEM)
+    ax.tick_params(axis="both", colors=_COLOR_TEXT_MUTED, length=0)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+
+
+def _run_mode_signatures(args: argparse.Namespace) -> int:
+    run_names = _resolve_run_names(str(args.runs))
+    if not run_names:
+        print("mode-signatures: --runs got an empty run-name list", file=sys.stderr)
+        return 2
+    variant = str(args.variant)
+
+    cfg = load_config()
+    index = discover(cfg.data_root)
+    unknown = _unknown_run_names(run_names, index)
+    if unknown:
+        available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+        print(
+            f"mode-signatures: unknown run name(s): {', '.join(unknown)}; "
+            f"available runs: {available}",
+            file=sys.stderr,
+        )
+        return 2
+
+    out_root = _resolve_out_root(args.out, cfg.results_root)
+    out_dir = out_root / "mode-signatures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for name in run_names:
+        try:
+            rf = _run_features_and_gt(name, variant, cfg, index, use_cache=not args.no_cache)
+        except RuntimeError as exc:
+            print(f"mode-signatures: prepare_run failed for {name!r} ({exc})", file=sys.stderr)
+            return 2
+        if not rf.has_gt:
+            logger.warning(
+                "mode-signatures: run %r has no GT (Betriebsdaten) coverage at "
+                "all -- skipped (A1.2: GT-bearing days only)", name,
+            )
+            continue
+        cols = _band_octave_columns(rf.feature_names)
+        if not cols:
+            logger.warning(
+                "mode-signatures: run %r / variant %r has zero band/octave "
+                "column(s) -- skipped", name, variant,
+            )
+            continue
+        table = _mode_profile(rf.features, rf.gt_states, cols)
+        if table.empty:
+            logger.warning(
+                "mode-signatures: run %r has zero non-excluded GT mode with "
+                ">= 1 window -- skipped", name,
+            )
+            continue
+        table = table.copy()
+        table["feature"] = [rf.feature_names[int(c)] for c in table["column"]]
+        table = table[["mode", "feature", "column", "median", "q25", "q75", "n_windows"]]
+        table.to_csv(out_dir / f"{name}.csv", index=False)
+        _plot_mode_signatures(table, out_dir / f"{name}.png", top_n=int(args.top_n))
+        written += 1
+
+    if written == 0:
+        print("mode-signatures: no run produced a profile (see warnings above)", file=sys.stderr)
+        return 1
+    print(f"mode-signatures: wrote {written} run(s) under {out_dir}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand 5: tonal-table (Task 9, spec D3.5)
+# ---------------------------------------------------------------------------
+
+_OCTAVE_SUFFIX_RE = re.compile(r"_octave_(\d+)$")
+
+
+def _stream_octave_centers(
+    feature_names: list[str], stream_cols: np.ndarray
+) -> dict[float, list[int]]:
+    """`{octave_center_hz: [column indices]}` for *stream_cols* (already one
+    run's one stream's own column indices) -- keyed by the center parsed
+    straight from each column's own `_octave_<hz>` name suffix
+    (`features.py`'s `AudioFeaturizer`/`VibFeaturizer` naming: `int(fc)`,
+    e.g. `_octave_31` for the 31.5 Hz band) -- so the set of centers
+    reflects whatever THIS run/stream actually produced (Nyquist truncation
+    aware), never a hardcoded global list."""
+    out: dict[float, list[int]] = {}
+    for c in stream_cols:
+        match = _OCTAVE_SUFFIX_RE.search(feature_names[int(c)])
+        if match is None:
+            continue
+        out.setdefault(float(match.group(1)), []).append(int(c))
+    return out
+
+
+def _nearest_octave_hz(target_hz: float, available_hz: Sequence[float]) -> float:
+    """The octave CENTER in *available_hz* nearest to *target_hz* (absolute
+    Hz distance; an exact tie keeps the smaller center -- deterministic).
+
+    Raises:
+        ValueError: *available_hz* is empty.
+    """
+    if not available_hz:
+        raise ValueError("_nearest_octave_hz: available_hz is empty")
+    return min(available_hz, key=lambda hz: (abs(hz - target_hz), hz))
+
+
+def _stream_machine_band_columns(
+    feature_names: list[str], stream_cols: np.ndarray, band_name: str
+) -> list[int]:
+    """Indices of *stream_cols* whose name ends `_band_<band_name>` -- one
+    `MACHINE_HZ` machine-tone column per live channel of that stream."""
+    suffix = f"_band_{band_name}"
+    return [int(c) for c in stream_cols if feature_names[int(c)].endswith(suffix)]
+
+
+def _tonal_table(runs_features: Sequence[_RunFeatures]) -> pd.DataFrame:
+    """Tidy (run, mode, stream, band, band_hz, octave_floor_hz, band_energy,
+    octave_floor, tonal_contrast, n_windows) table: per GT-bearing run, per
+    GT mode (`unknown`/`transition` excluded), per physical stream present,
+    per `rowii.signals.features.MACHINE_HZ` band -- the tone's own median
+    column energy (averaged across that stream's own live channels)
+    contrasted (`_tonal_contrast`) against its NEIGHBORING octave column's
+    median energy (`_nearest_octave_hz`, chosen from the octave centers
+    ACTUALLY present for that stream). A (stream, band) combination absent
+    from a run (no matching column at all -- e.g. the band's upper edge
+    exceeded that stream's Nyquist, or `VibFeaturizer` dropped every live
+    channel) is silently omitted from that run's rows."""
+    rows: list[dict[str, object]] = []
+    for rf in runs_features:
+        if not rf.has_gt:
+            continue
+        modes: set[str] = set(rf.gt_states.tolist())
+        modes -= set(_EXCLUDED_GT)
+        if not modes:
+            continue
+        for stream in _ALL_STREAMS:
+            try:
+                stream_cols = stream_columns(rf.feature_names, stream)
+            except ValueError:
+                continue
+            octave_centers = _stream_octave_centers(rf.feature_names, stream_cols)
+            if not octave_centers:
+                continue
+            for band_name, band_hz in MACHINE_HZ.items():
+                band_cols = _stream_machine_band_columns(rf.feature_names, stream_cols, band_name)
+                if not band_cols:
+                    continue
+                floor_hz = _nearest_octave_hz(band_hz, list(octave_centers))
+                floor_cols = octave_centers[floor_hz]
+                band_series = rf.features[:, band_cols].mean(axis=1)
+                floor_series = rf.features[:, floor_cols].mean(axis=1)
+                for mode in sorted(modes):
+                    mask = rf.gt_states == mode
+                    n = int(mask.sum())
+                    if n == 0:
+                        continue
+                    band_energy = float(np.median(band_series[mask]))
+                    octave_floor = float(np.median(floor_series[mask]))
+                    rows.append(
+                        {
+                            "run": rf.run_name,
+                            "mode": mode,
+                            "stream": stream,
+                            "band": band_name,
+                            "band_hz": band_hz,
+                            "octave_floor_hz": floor_hz,
+                            "band_energy": band_energy,
+                            "octave_floor": octave_floor,
+                            "tonal_contrast": _tonal_contrast(band_energy, octave_floor),
+                            "n_windows": n,
+                        }
+                    )
+    columns = [
+        "run", "mode", "stream", "band", "band_hz", "octave_floor_hz",
+        "band_energy", "octave_floor", "tonal_contrast", "n_windows",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _plot_tonal_table(table: pd.DataFrame, out_path: Path) -> None:
+    """Heatmap, (run/mode x stream/band) -> `tonal_contrast` (own stored
+    units; see module docstring's fusion z-score caveat), annotated with the
+    numeric value per cell (mirrors `_plot_flag_rate_heatmap`'s layout, but
+    SIGNED: `vmin`/`vmax` are the table's own min/max rather than a
+    zero-anchored non-negative range)."""
+    if table.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 3.0))
+        fig.patch.set_facecolor(_COLOR_SURFACE)
+        ax.set_facecolor(_COLOR_SURFACE)
+        ax.text(
+            0.5, 0.5, "no (run, mode, stream, band) combination available",
+            ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
+        )
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    pivot = table.copy()
+    pivot["row"] = pivot["run"].astype(str) + " / " + pivot["mode"].astype(str)
+    pivot["col"] = pivot["stream"].astype(str) + " " + pivot["band"].astype(str)
+    rows = sorted(pivot["row"].unique())
+    cols = sorted(pivot["col"].unique())
+    matrix = pd.DataFrame(np.nan, index=rows, columns=cols)
+    for _, r in pivot.iterrows():
+        matrix.loc[r["row"], r["col"]] = r["tonal_contrast"]
+
+    values = matrix.to_numpy(dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    vmin, vmax = (float(finite.min()), float(finite.max())) if finite.size else (-1.0, 1.0)
+    if vmin == vmax:
+        vmin, vmax = vmin - 1.0, vmax + 1.0
+
+    width = max(7.0, 0.9 * matrix.shape[1] + 3.0)
+    height = max(3.0, 0.5 * matrix.shape[0] + 2.0)
+    fig, ax = plt.subplots(figsize=(width, height))
+    fig.patch.set_facecolor(_COLOR_SURFACE)
+    ax.set_facecolor(_COLOR_SURFACE)
+
+    im = ax.imshow(values, cmap=_sequential_blue_cmap(), vmin=vmin, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(matrix.shape[1]))
+    ax.set_xticklabels(
+        matrix.columns, rotation=45, ha="right", fontsize=7.5, color=_COLOR_TEXT_SECONDARY
+    )
+    ax.set_yticks(range(matrix.shape[0]))
+    ax.set_yticklabels(matrix.index, fontsize=7.5, color=_COLOR_TEXT_SECONDARY)
+    ax.set_xlabel("stream / machine band", color=_COLOR_TEXT_MUTED, fontsize=9)
+    ax.set_ylabel("run / GT mode", color=_COLOR_TEXT_MUTED, fontsize=9)
+    ax.set_title(
+        "Tonal contrast -- machine band vs. neighboring octave floor "
+        "(own units, our own SNR-like definition -- NOT the partner's metric)",
+        loc="left", fontsize=10, color="#0b0b0b",
+    )
+
+    span = vmax - vmin
+    for i in range(values.shape[0]):
+        for j in range(values.shape[1]):
+            v = values[i, j]
+            if not np.isfinite(v):
+                continue
+            frac = (v - vmin) / span if span > 0 else 0.5
+            text_color = "#ffffff" if frac > 0.6 else _COLOR_TEXT_SECONDARY
+            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7, color=text_color)
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label(
+        "tonal contrast (band - neighboring octave floor)", color=_COLOR_TEXT_MUTED, fontsize=8
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+
+
+def _run_tonal_table(args: argparse.Namespace) -> int:
+    run_names = _resolve_run_names(str(args.runs))
+    if not run_names:
+        print("tonal-table: --runs got an empty run-name list", file=sys.stderr)
+        return 2
+    variant = str(args.variant)
+
+    cfg = load_config()
+    index = discover(cfg.data_root)
+    unknown = _unknown_run_names(run_names, index)
+    if unknown:
+        available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+        print(
+            f"tonal-table: unknown run name(s): {', '.join(unknown)}; "
+            f"available runs: {available}",
+            file=sys.stderr,
+        )
+        return 2
+
+    runs_features: list[_RunFeatures] = []
+    for name in run_names:
+        try:
+            rf = _run_features_and_gt(name, variant, cfg, index, use_cache=not args.no_cache)
+        except RuntimeError as exc:
+            print(f"tonal-table: prepare_run failed for {name!r} ({exc})", file=sys.stderr)
+            return 2
+        if not rf.has_gt:
+            logger.warning(
+                "tonal-table: run %r has no GT (Betriebsdaten) coverage at all "
+                "-- excluded (A1.2: GT-bearing days only)", name,
+            )
+            continue
+        runs_features.append(rf)
+
+    table = _tonal_table(runs_features)
+    if table.empty:
+        print(
+            "tonal-table: no (run, mode, stream, band) combination could be "
+            "computed (see warnings above)",
+            file=sys.stderr,
+        )
+        return 1
+
+    out_root = _resolve_out_root(args.out, cfg.results_root)
+    out_dir = out_root / "tonal-table"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = variant
+    table.to_csv(out_dir / f"{stem}.csv", index=False)
+    _plot_tonal_table(table, out_dir / f"{stem}.png")
+    print(
+        f"tonal-table: wrote {out_dir / (stem + '.csv')} and .png "
+        f"({len(runs_features)} GT-bearing day(s), {len(table)} row(s))"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand 6: pillar3-figure (Task 9, spec D3.6)
+# ---------------------------------------------------------------------------
+
+_PILLAR3_LEAF_RE = re.compile(r"^(?P<rep>.+)-a(?P<alpha>\d+\.\d+)$")
+_PILLAR3_COLUMNS: tuple[str, ...] = (
+    "session", "representation", "alpha", "n_events", "n_detected",
+    "event_tpr", "realized_window_far",
+)
+
+
+def _discover_pillar3_leaves(root: Path) -> pd.DataFrame:
+    """Walk `root/<session>/<representation>-a<alpha>/event_eval.csv`
+    (`scripts/eval_events.py`'s own tidy-CSV contract: ONE `row_type ==
+    "summary"` row per leaf, columns `n_events`/`n_detected`/`event_tpr`/
+    `false_alarm_windows`/`false_alarm_rate_per_hour`/`realized_window_far`/
+    `tolerance_s`, verified against the real 080726 pillar-3 artifacts) into
+    a tidy `_PILLAR3_COLUMNS` table -- one row per (session, representation,
+    alpha). A leaf directory whose name carries no trailing `-a<alpha>`
+    suffix (e.g. a `-frozen` leaf, outside the alpha grid this figure
+    compares) is silently skipped, as is any leaf missing `event_eval.csv`
+    or a `summary` row."""
+    rows: list[dict[str, object]] = []
+    if not root.is_dir():
+        return pd.DataFrame(rows, columns=list(_PILLAR3_COLUMNS))
+    for session_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        for leaf_dir in sorted(p for p in session_dir.iterdir() if p.is_dir()):
+            match = _PILLAR3_LEAF_RE.match(leaf_dir.name)
+            if match is None:
+                continue
+            csv_path = leaf_dir / "event_eval.csv"
+            if not csv_path.is_file():
+                continue
+            table = pd.read_csv(csv_path)
+            summary = table[table["row_type"] == "summary"]
+            if summary.empty:
+                logger.warning("pillar3-figure: %s has no 'summary' row -- skipped", csv_path)
+                continue
+            r = summary.iloc[0]
+            rows.append(
+                {
+                    "session": session_dir.name,
+                    "representation": match.group("rep"),
+                    "alpha": float(match.group("alpha")),
+                    "n_events": float(r["n_events"]),
+                    "n_detected": float(r["n_detected"]),
+                    "event_tpr": float(r["event_tpr"]),
+                    "realized_window_far": float(r["realized_window_far"]),
+                }
+            )
+    return pd.DataFrame(rows, columns=list(_PILLAR3_COLUMNS))
+
+
+def _plot_pillar3_figure(event_table: pd.DataFrame, out_path: Path) -> None:
+    """One grouped-bar panel per pillar-3 session (`_tpr_by_alpha`'s own
+    (representation x alpha) pivot), bars grouped by representation and
+    coloured by alpha, sharing ONE alpha-color legend across every panel. A
+    (representation, alpha) combination never discovered for a session draws
+    no bar at all (not a zero-height bar -- a missing evaluation is not the
+    same claim as a measured zero TPR)."""
+    if event_table.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 3.0))
+        fig.patch.set_facecolor(_COLOR_SURFACE)
+        ax.set_facecolor(_COLOR_SURFACE)
+        ax.text(
+            0.5, 0.5, "no pillar-3 event_eval.csv summary row discovered",
+            ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
+        )
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    sessions = sorted(event_table["session"].unique())
+    all_alphas = sorted(event_table["alpha"].unique())
+    alpha_color = {
+        a: _CATEGORICAL_HEX[i % len(_CATEGORICAL_HEX)] for i, a in enumerate(all_alphas)
+    }
+
+    fig, axes_2d = plt.subplots(
+        1, len(sessions), figsize=(4.2 * len(sessions) + 1.5, 4.5), sharey=True, squeeze=False
+    )
+    fig.patch.set_facecolor(_COLOR_SURFACE)
+    axes = list(axes_2d[0])
+
+    for ax, session in zip(axes, sessions, strict=True):
+        ax.set_facecolor(_COLOR_SURFACE)
+        sub = event_table[event_table["session"] == session]
+        matrix = _tpr_by_alpha(sub)
+        reps = list(matrix.index)
+        alphas = list(matrix.columns)
+        n_alpha = max(len(alphas), 1)
+        width = 0.8 / n_alpha
+        x = np.arange(len(reps))
+        for i, alpha in enumerate(alphas):
+            color = alpha_color[alpha]
+            offset = (i - (n_alpha - 1) / 2) * width
+            for j, rep in enumerate(reps):
+                v = matrix.loc[rep, alpha]
+                if not np.isfinite(v):
+                    continue
+                ax.bar(float(x[j] + offset), float(v), width=width, color=color, zorder=3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(reps, rotation=45, ha="right", fontsize=8, color=_COLOR_TEXT_SECONDARY)
+        ax.set_title(str(session), loc="left", fontsize=10, color="#0b0b0b")
+        ax.set_ylim(0.0, 1.05)
+        ax.grid(axis="y", color=_COLOR_GRIDLINE, linewidth=1.0, zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(_COLOR_STEM)
+        ax.spines["left"].set_color(_COLOR_STEM)
+        ax.tick_params(axis="both", colors=_COLOR_TEXT_MUTED, length=0)
+
+    axes[0].set_ylabel("event TPR", color=_COLOR_TEXT_MUTED, fontsize=9)
+    handles = [Patch(facecolor=alpha_color[a], label=f"alpha={a:g}") for a in all_alphas]
+    fig.legend(
+        handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.02),
+        ncol=min(len(all_alphas), 6), frameon=False, fontsize=8,
+    )
+    fig.suptitle(
+        "Pillar-3 event TPR by alpha, per representation (080726 strike sessions)",
+        fontsize=11, color="#0b0b0b", x=0.02, ha="left",
+    )
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 0.95))
+    fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+
+
+def _run_pillar3_figure(args: argparse.Namespace) -> int:
+    root = Path(args.root) if args.root is not None else _default_pillar3_root()
+    table = _discover_pillar3_leaves(root)
+    if table.empty:
+        print(
+            f"pillar3-figure: no '<representation>-a<alpha>/event_eval.csv' "
+            f"leaf found under {root}",
+            file=sys.stderr,
+        )
+        return 1
+
+    out_root = _resolve_out_root(args.out, None)
+    out_dir = out_root / "pillar3-figure"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out_dir / "pillar3.csv", index=False)
+    _plot_pillar3_figure(table, out_dir / "pillar3.png")
+    print(
+        f"pillar3-figure: wrote {out_dir / 'pillar3.csv'} and .png "
+        f"({len(table)} (session, representation, alpha) row(s))"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# digest (Task 9, spec D3 closing paragraph)
+# ---------------------------------------------------------------------------
+
+_FUSION_ZSCORE_FINDING = (
+    "**Fusion's built-in per-run z-score (A1.1 finding).** `fuse()` z-scores "
+    "each stream per run before concatenating (`rowii.signals.features.fuse`), "
+    "so every fusion-variant feature column is already a dimensionless "
+    "per-run z-score by construction. This is an implicit session "
+    "normalization baked into the fusion representation itself, and it "
+    "plausibly explains fusion's own cross-day FAR advantage over the "
+    "raw-scale audio/vibration variants in the P7 rotations -- an "
+    "accounting, not a claim that fusion 'solves' drift; the level-recal "
+    "(D2) comparisons and the rotations-heatmap figure above test that "
+    "hypothesis directly rather than assume it."
+)
+
+_FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
+    "rotations-heatmap": (
+        "Each cell is one held-out rotation's pooled realized flag rate "
+        "(darker blue = more windows flagged): read a row to see how one "
+        "fit pool behaves across every held-out test day, and a column to "
+        "see how one test day is treated by every fit pool. A plain "
+        "readability replacement for the underlying far_table_*.csv files, "
+        "not a new metric.",
+        None,
+    ),
+    "feature-stability": (
+        "One dot-and-whisker row per (feature, GT mode) pair still standing "
+        "after ranking by cross-day shift: the dot is that day's median "
+        "feature value (own stored units), the whisker its segment-block "
+        "bootstrap 95% CI, and the colour is the day. The slow/drifting "
+        "split in the CSV uses the named 3.0 cutoff purely for "
+        "comparability with Rodrigues & Zhang (2026)'s own stability-classes "
+        "analysis; the continuous shift distribution here is the primary "
+        "reading.",
+        "Rodrigues & Zhang (2026)",
+    ),
+    "era-step": (
+        "One line per physical stream (mic vs. vibration), one point per "
+        "day, tracing that stream's own median level across the recording "
+        "era; a hollow diamond marks a day with no GT match for the "
+        "requested mode (e.g. 2026-06-27, which has no Betriebsdaten at "
+        "all). Consistent with -- and independently computed alongside -- "
+        "Rodrigues & Zhang (2026)'s own reported mic-only broadband level "
+        "step at the same era boundary; this figure never reads their "
+        "number, only ours.",
+        "Rodrigues & Zhang (2026)",
+    ),
+    "mode-signatures": (
+        "One row per (band/octave feature, GT mode) on a single day, dot = "
+        "that mode's own median, whisker = its interquartile range: modes "
+        "whose whiskers do not overlap are separable on that feature alone. "
+        "An independent, per-day replication of Rodrigues & Zhang (2026)'s "
+        "reported within-day mode separability, computed only from our own "
+        "features and caches.",
+        "Rodrigues & Zhang (2026)",
+    ),
+    "tonal-table": (
+        "A (run/mode x stream/band) heatmap of the shaft, blade-pass, and "
+        "guide-vane machine-tone energies relative to their own "
+        "neighbouring octave-band floor -- positive means the tone reads "
+        "above its local background, negative means it does not. An "
+        "SNR-like contrast defined entirely from our own band/octave "
+        "features (see the module docstring), NOT the partner's exact "
+        "metric -- it only shares the analysis TYPE with Rodrigues & Zhang "
+        "(2026)'s own machine-fingerprint table.",
+        "Rodrigues & Zhang (2026)",
+    ),
+    "pillar3-figure": (
+        "Grouped bars of event-level TPR by alpha for every representation "
+        "evaluated on the 080726 strike sessions, one panel per session; "
+        "taller bars mean more of the induced strike/sweep events were "
+        "detected at that operating point. Read straight from our own "
+        "results/pillar3/**/event_eval.csv summary rows -- no partner "
+        "number involved.",
+        None,
+    ),
+}
+
+
+def _render_digest(out_root: Path) -> str:
+    """The `results/analysis-days/README.md` markdown text: a short intro,
+    the A1.1 fusion-z-score finding, then one section per `_FIGURE_READINGS`
+    entry (its plain-language reading, an A1.8 attribution line when that
+    analysis type is partner-inspired, and a markdown link to every PNG
+    THIS module has actually written so far under `out_root/<name>/`)."""
+    lines: list[str] = [
+        "# Package-8 explainability digest (D3)",
+        "",
+        "Publication-grade figures + CSVs from `scripts/analyze_days.py`, "
+        "read straight from existing artifacts/warm caches -- no new sweeps. "
+        "English only (`--lang de` not built, spec D3). Every number below "
+        "is computed from our own caches/artifacts; no partner JSON or "
+        "number is read by any code in this repository.",
+        "",
+        _FUSION_ZSCORE_FINDING,
+        "",
+    ]
+    for name, (reading, attribution) in _FIGURE_READINGS.items():
+        lines.append(f"## {name}")
+        lines.append("")
+        lines.append(reading)
+        if attribution is not None:
+            lines.append("")
+            lines.append(
+                f"*Analysis type inspired by {attribution}; all numbers on this "
+                "page are computed from our own artifacts (spec A1.8).*"
+            )
+        lines.append("")
+        figure_dir = out_root / name
+        pngs = sorted(figure_dir.glob("*.png")) if figure_dir.is_dir() else []
+        if pngs:
+            lines.append("Figures:")
+            lines.append("")
+            for png in pngs:
+                lines.append(f"- [{png.name}]({name}/{png.name})")
+        else:
+            lines.append("_No figures discovered yet under this subcommand's directory._")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _run_digest(args: argparse.Namespace) -> int:
+    out_root = _resolve_out_root(args.out, None)
+    out_root.mkdir(parents=True, exist_ok=True)
+    text = _render_digest(out_root)
+    (out_root / "README.md").write_text(text)
+    print(f"digest: wrote {out_root / 'README.md'}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -945,7 +1769,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "D3 explainability analysis suite (Package-8): publication-grade "
             "figures + underlying CSVs from existing artifacts/warm caches -- "
-            "rotations-heatmap, feature-stability, era-step (module docstring)."
+            "rotations-heatmap, feature-stability, era-step, mode-signatures, "
+            "tonal-table, pillar3-figure, digest (module docstring)."
         )
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1026,6 +1851,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable rowii.pipeline.prepare_run's on-disk feature cache.",
     )
 
+    p_modesig = sub.add_parser(
+        "mode-signatures",
+        help="Per-GT-mode band/octave profile (median + IQR), one PNG+CSV per day.",
+    )
+    p_modesig.add_argument("--runs", required=True, help="Comma-separated run names.")
+    p_modesig.add_argument("--variant", required=True, help="e.g. audio, vibration, fusion.")
+    p_modesig.add_argument(
+        "--out", default=None, help="Output root (default: <results_root>/analysis-days)."
+    )
+    p_modesig.add_argument("--top-n", type=int, default=_MODE_SIGNATURES_TOP_N_DEFAULT)
+    p_modesig.add_argument(
+        "--no-cache", action="store_true",
+        help="Disable rowii.pipeline.prepare_run's on-disk feature cache.",
+    )
+
+    p_tonal = sub.add_parser(
+        "tonal-table",
+        help="Per mode x day machine-tone band energy relative to its neighboring octave floor.",
+    )
+    p_tonal.add_argument("--runs", required=True, help="Comma-separated run names.")
+    p_tonal.add_argument("--variant", required=True, help="e.g. audio, vibration, fusion.")
+    p_tonal.add_argument(
+        "--out", default=None, help="Output root (default: <results_root>/analysis-days)."
+    )
+    p_tonal.add_argument(
+        "--no-cache", action="store_true",
+        help="Disable rowii.pipeline.prepare_run's on-disk feature cache.",
+    )
+
+    p_pillar3 = sub.add_parser(
+        "pillar3-figure",
+        help="TPR-vs-alpha grouped bars per representation, both 080726 pillar-3 sessions.",
+    )
+    p_pillar3.add_argument(
+        "--root", default=None, help="pillar3 root to scan (default: <results_root>/pillar3)."
+    )
+    p_pillar3.add_argument(
+        "--out", default=None, help="Output root (default: <results_root>/analysis-days)."
+    )
+
+    p_digest = sub.add_parser(
+        "digest",
+        help="Write results/analysis-days/README.md linking every figure with a reading.",
+    )
+    p_digest.add_argument(
+        "--out", default=None,
+        help=(
+            "Analysis-days root to scan + write README.md into "
+            "(default: <results_root>/analysis-days)."
+        ),
+    )
+
     return parser
 
 
@@ -1039,6 +1916,14 @@ def main(argv: list[str] | None = None) -> int:
         return _run_feature_stability(args)
     if args.command == "era-step":
         return _run_era_step(args)
+    if args.command == "mode-signatures":
+        return _run_mode_signatures(args)
+    if args.command == "tonal-table":
+        return _run_tonal_table(args)
+    if args.command == "pillar3-figure":
+        return _run_pillar3_figure(args)
+    if args.command == "digest":
+        return _run_digest(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 
