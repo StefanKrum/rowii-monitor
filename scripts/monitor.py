@@ -166,6 +166,12 @@ the snapshot's stored `norm_minutes` is the pool-global sentinel (0.0) -- the D3
 default ("first `--norm-minutes` (default 20)"); a first-N snapshot's stored value
 is used verbatim instead."""
 
+_DEFAULT_EXCLUDE_TOLERANCE_S = 5.0
+"""`--exclude-calibration-events` default interval padding in seconds -- the same
+value `scripts/eval_events.py` uses as its default matching tolerance, so the set
+of windows banned from calibration is (by default) exactly the set the event
+evaluation could credit as a detection."""
+
 _ALARM_COLUMNS: tuple[str, ...] = (
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
     "threshold_source",
@@ -267,6 +273,25 @@ def build_parser() -> argparse.ArgumentParser:
              "falls back to 20 min). Requires a snapshot that stores session stats "
              "(format v2) -- a v1/no-stats snapshot is refused (exit 2). The "
              "detector always consumes RAW features; only scoring is normalized.",
+    )
+    parser.add_argument(
+        "--exclude-calibration-events", type=Path, default=None,
+        help="CSV of tz-aware event intervals (columns start_utc,end_utc; '#' "
+             "comment lines skipped -- the docs/groundtruth contract) whose "
+             "windows are BANNED from the calibration side and moved to the "
+             "scoring side instead (spec A2.3.3: an induced-event day must "
+             "calibrate on event-free windows -- without this, event minutes "
+             "landing in calibration segments are consumed, never alarmed, and "
+             "contaminate the thresholds they feed). Applies to recalibrate and "
+             "rolling modes; frozen mode draws no calibration from the monitored "
+             "run, so there the flag only warns.",
+    )
+    parser.add_argument(
+        "--exclude-tolerance-s", type=float, default=None,
+        help=f"Padding in seconds applied to BOTH ends of every excluded event "
+             f"interval (default {_DEFAULT_EXCLUDE_TOLERANCE_S:g}, mirroring "
+             f"eval_events' matching tolerance). Only valid together with "
+             f"--exclude-calibration-events.",
     )
     parser.add_argument(
         "--no-cache", action="store_true",
@@ -449,6 +474,87 @@ def _frozen_verdicts(
     )
 
 
+def _load_exclusion_intervals(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Parse an `--exclude-calibration-events` CSV into `(starts_ns, ends_ns)`
+    int64 UTC-epoch arrays -- the SAME file contract as `scripts/eval_events.py`'s
+    `--events` input (`start_utc`/`end_utc` tz-aware ISO-8601, `#` comment lines
+    skipped), so one ground-truth file drives both the calibration ban here and
+    the detection credit there.
+
+    Raises:
+        ValueError: missing columns, no rows, naive (or unparseable) timestamps,
+            or an interval whose end is not after its start -- the caller turns
+            this into the CLI's exit-2 message.
+    """
+    frame = pd.read_csv(path, comment="#")
+    missing = [c for c in ("start_utc", "end_utc") if c not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"exclusion events file {path} is missing required column(s) {missing} "
+            f"-- got columns {list(frame.columns)}"
+        )
+    if frame.empty:
+        raise ValueError(f"exclusion events file {path} contains no event rows")
+    bounds: list[np.ndarray] = []
+    for col in ("start_utc", "end_utc"):
+        parsed = pd.to_datetime(frame[col])
+        if getattr(parsed.dt, "tz", None) is None:
+            raise ValueError(
+                f"exclusion events file {path} column {col!r} has naive "
+                f"timestamps -- tz-aware ISO-8601 required (the eval_events "
+                f"contract; a naive reading silently guesses the timebase, the "
+                f"exact failure mode the 080726 ground-truth correction fixed)"
+            )
+        # as_unit("ns") before the int64 view: pandas >= 2 may parse second-
+        # resolution strings into datetime64[s], whose int64 view is epoch
+        # SECONDS -- a silent 1e9 scale error.
+        bounds.append(
+            parsed.dt.tz_convert("UTC").dt.as_unit("ns").astype("int64").to_numpy()
+        )
+    starts_ns, ends_ns = bounds
+    if bool((ends_ns <= starts_ns).any()):
+        raise ValueError(
+            f"exclusion events file {path} has interval(s) with end_utc <= start_utc"
+        )
+    return starts_ns, ends_ns
+
+
+def _exclusion_mask(
+    grid: WindowGrid, starts_ns: np.ndarray, ends_ns: np.ndarray, tolerance_s: float
+) -> np.ndarray:
+    """(W,) bool -- True where a grid window's `[start, end)` span overlaps any
+    event interval expanded by *tolerance_s* on both ends (half-open overlap
+    test, mirroring `evaluate_events`' inclusive-start/exclusive-end reading)."""
+    tol_ns = int(round(tolerance_s * 1e9))
+    w_start = grid.t0_ns + np.arange(grid.n_windows, dtype=np.int64) * grid.window_ns
+    w_end = w_start + grid.window_ns
+    mask = np.zeros(grid.n_windows, dtype=bool)
+    for s, e in zip(starts_ns.tolist(), ends_ns.tolist(), strict=True):
+        mask |= (w_start < e + tol_ns) & (w_end > s - tol_ns)
+    return mask
+
+
+def _apply_calibration_exclusion(
+    cal_windows: np.ndarray, scoring_windows: np.ndarray, exclusion_mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Spec A2.3.3: calibration-side windows inside excluded event intervals are
+    moved to the SCORING side -- they must never feed a threshold (an induced
+    event calibrated into the conformal set both inflates the threshold and, via
+    the A1.3 consumed-never-alarmed rule, becomes structurally undetectable),
+    but they remain fully evaluable against the event-free thresholds. Scoring-
+    side event windows are untouched (already scored). Returns the adjusted
+    `(cal_windows, scoring_windows, n_moved)`."""
+    in_events = exclusion_mask[cal_windows]
+    excluded = cal_windows[in_events]
+    if excluded.size == 0:
+        return cal_windows, scoring_windows, 0
+    return (
+        cal_windows[~in_events],
+        np.sort(np.concatenate([scoring_windows, excluded])),
+        int(excluded.size),
+    )
+
+
 def _recalibrate_verdicts(
     prepared: PreparedRun,
     snapshot: MonitorSnapshot,
@@ -457,6 +563,7 @@ def _recalibrate_verdicts(
     *,
     scoring_features: np.ndarray | None = None,
     session_stats: SessionStats | None = None,
+    exclusion_mask: np.ndarray | None = None,
 ) -> _Verdicts:
     """Recalibrate mode (DEFAULT, spec D2 + A1.3): top split of the new run's valid
     windows at the snapshot's own `(calibration_frac, seed)`; per snapshot-known
@@ -478,6 +585,17 @@ def _recalibrate_verdicts(
         prepared.segment_ids, prepared.valid_mask, snapshot.calibration_frac, snapshot.seed
     )
     cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
+    if exclusion_mask is not None:
+        cal_windows, scoring_windows, n_excluded = _apply_calibration_exclusion(
+            cal_windows, scoring_windows, exclusion_mask
+        )
+        if n_excluded:
+            logger.info(
+                "monitor: %d calibration-side window(s) overlap excluded event "
+                "intervals -- moved to the scoring side (spec A2.3.3: event "
+                "windows must never calibrate)",
+                n_excluded,
+            )
 
     state_rows: list[_StateRow] = []
     for label in sorted(snapshot.thresholds):
@@ -595,6 +713,7 @@ def _rolling_verdicts(
     rolling_minutes: float,
     scoring_features: np.ndarray | None = None,
     session_stats: SessionStats | None = None,
+    exclusion_mask: np.ndarray | None = None,
 ) -> _Verdicts:
     """Rolling mode (spec D7 as amended by A3.2): the SAME top split and roles as
     recalibrate mode (calibration side consumed and never alarmed, scoring side
@@ -625,6 +744,18 @@ def _rolling_verdicts(
         prepared.segment_ids, prepared.valid_mask, snapshot.calibration_frac, snapshot.seed
     )
     cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
+    if exclusion_mask is not None:
+        cal_windows, scoring_windows, n_excluded = _apply_calibration_exclusion(
+            cal_windows, scoring_windows, exclusion_mask
+        )
+        if n_excluded:
+            logger.info(
+                "monitor: %d calibration-side window(s) overlap excluded event "
+                "intervals -- moved to the scoring side (spec A2.3.3: event "
+                "windows must never calibrate; their rolling thresholds come from "
+                "event-free trailing sets, or the flagged fit-day fallback)",
+                n_excluded,
+            )
     m_ns = int(round(rolling_minutes * 60.0 * 1e9))
     floor = _rolling_floor(alpha)
 
@@ -900,6 +1031,7 @@ def _notes_markdown(
     session_stats: SessionStats | None = None,
     run_stats: SessionStats | None = None,
     rolling_minutes: float | None = None,
+    exclusion_note: str | None = None,
 ) -> str:
     n_windows = int(prepared.features.shape[0])
     n_valid = int(prepared.valid_mask.sum())
@@ -931,6 +1063,8 @@ def _notes_markdown(
         f"- fit split: calibration_frac={snapshot.calibration_frac}, "
         f"seed={snapshot.seed}, min_ref={snapshot.min_ref}",
     ]
+    if exclusion_note is not None:
+        lines.append(exclusion_note)
     if snapshot.checkpoints:
         lines.append("- checkpoints:")
         lines.extend(
@@ -1204,6 +1338,45 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         scoring_features = apply_session_norm(prepared.features, run_stats)
 
+    exclusion_mask: np.ndarray | None = None
+    exclusion_note: str | None = None
+    if args.exclude_tolerance_s is not None and args.exclude_calibration_events is None:
+        print(
+            "monitor: --exclude-tolerance-s is only valid together with "
+            "--exclude-calibration-events",
+            file=sys.stderr,
+        )
+        return 2
+    if args.exclude_calibration_events is not None:
+        try:
+            starts_ns, ends_ns = _load_exclusion_intervals(args.exclude_calibration_events)
+        except ValueError as exc:
+            print(f"monitor: {exc}", file=sys.stderr)
+            return 2
+        if args.thresholds == "frozen":
+            logger.warning(
+                "monitor: --exclude-calibration-events has no effect in frozen "
+                "mode -- frozen draws no calibration from the monitored run "
+                "(thresholds are applied exactly as stored), so there is nothing "
+                "to exclude",
+            )
+        else:
+            exclude_tolerance_s = (
+                args.exclude_tolerance_s
+                if args.exclude_tolerance_s is not None
+                else _DEFAULT_EXCLUDE_TOLERANCE_S
+            )
+            exclusion_mask = _exclusion_mask(
+                prepared.grid, starts_ns, ends_ns, exclude_tolerance_s
+            )
+            exclusion_note = (
+                f"- calibration exclusion (spec A2.3.3): {int(exclusion_mask.sum())} "
+                f"window(s) inside {len(starts_ns)} event interval(s) from "
+                f"`{args.exclude_calibration_events}` (excluded with a "
+                f"±{exclude_tolerance_s:g} s pad) are banned from the calibration "
+                f"side and scored against the event-free thresholds instead"
+            )
+
     rolling_minutes: float | None = None
     if args.thresholds == "frozen":
         if args.alpha is not None:
@@ -1227,12 +1400,14 @@ def main(argv: list[str] | None = None) -> int:
         verdicts = _rolling_verdicts(
             prepared, snapshot, labels, alpha_used, rolling_minutes=rolling_minutes,
             scoring_features=scoring_features, session_stats=session_stats,
+            exclusion_mask=exclusion_mask,
         )
     else:
         alpha_used = args.alpha if args.alpha is not None else snapshot.alpha
         verdicts = _recalibrate_verdicts(
             prepared, snapshot, labels, alpha_used,
             scoring_features=scoring_features, session_stats=session_stats,
+            exclusion_mask=exclusion_mask,
         )
 
     _assert_roles_complete(verdicts.role, prepared.valid_mask)
@@ -1256,7 +1431,7 @@ def main(argv: list[str] | None = None) -> int:
             args.run, args.snapshot, snapshot, args.thresholds, alpha_used,
             verdicts, prepared,
             session_stats=session_stats, run_stats=run_stats,
-            rolling_minutes=rolling_minutes,
+            rolling_minutes=rolling_minutes, exclusion_note=exclusion_note,
         )
     )
 

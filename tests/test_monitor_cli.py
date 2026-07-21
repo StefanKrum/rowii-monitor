@@ -1265,3 +1265,208 @@ def test_rolling_minutes_overflow_guard_exits_2(
     )
     assert exit_code == 2
     assert "decade" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# 10. --exclude-calibration-events (spec A2.3.3): induced-event intervals are
+#     BANNED from the calibration side and rescued into the scoring side, so
+#     strike days calibrate on strike-free windows and every event is evaluable.
+# ---------------------------------------------------------------------------
+
+
+def _anomalous_calibration_prepared() -> PreparedRun:
+    """The two-state fixture with an injected anomalous burst at windows 5..9
+    (inside calibration-side segment 0 -- module docstring split): raw value
+    (30, 14) is DIRECTIONALLY off the 20-blob's (1, 1) axis, so its cosine kNN
+    score (~6e-2) sits orders of magnitude above the blob's internal spread
+    (~5e-5) -- an alarm is guaranteed once the window is actually scored --
+    while its standardized position labels it as the 20-blob state."""
+    base = _two_state_prepared(_MON_T0_NS, seed=1)
+    feats = base.features.copy()
+    feats[5:10] = (30.0, 14.0)
+    return replace(base, features=feats)
+
+
+def _write_events_csv(path: Path, rows: list[tuple[str, str]]) -> Path:
+    lines = ["# provenance comment line (must be skipped)", "start_utc,end_utc,kind"]
+    lines += [f"{s},{e},induced-strike" for s, e in rows]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+_EVENT_5S_10S = ("1970-01-01T00:15:05+00:00", "1970-01-01T00:15:10+00:00")
+"""Covers exactly windows 5..9 of the fixture grid (t0 = 00:15:00 UTC, 1-s
+windows) at --exclude-tolerance-s 0."""
+
+
+def test_exclude_calibration_events_rescues_and_alarms_event_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _anomalous_calibration_prepared()
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    ev = _write_events_csv(tmp_path / "events.csv", [_EVENT_5S_10S])
+
+    base_dir, excl_dir = tmp_path / "out-base", tmp_path / "out-excl"
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(base_dir)]
+    ) == 0
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--exclude-calibration-events", str(ev), "--exclude-tolerance-s", "0",
+            "--out", str(excl_dir),
+        ]
+    ) == 0
+
+    base = pd.read_parquet(base_dir / "alarms.parquet", engine="pyarrow")
+    excl = pd.read_parquet(excl_dir / "alarms.parquet", engine="pyarrow")
+    burst = base["window"].isin(range(5, 10))
+
+    # Without exclusion the burst is CONSUMED into calibration: never alarmed
+    # (A1.3), and it silently inflates the state's threshold.
+    assert (base.loc[burst, "role"] == "consumed_for_calibration").all()
+    assert not base.loc[burst, "alarm"].any()
+
+    # With exclusion the same windows are scored against a strike-free
+    # threshold -- and this burst is a guaranteed outlier.
+    burst_x = excl["window"].isin(range(5, 10))
+    assert (excl.loc[burst_x, "role"] == "scored").all()
+    assert excl.loc[burst_x, "p_value"].notna().all()
+    assert excl.loc[burst_x, "alarm"].all()
+
+    # Exactly the five burst windows moved sides; nothing else changed roles.
+    assert (base["role"] == "consumed_for_calibration").sum() - 5 == (
+        excl["role"] == "consumed_for_calibration"
+    ).sum()
+    assert (excl["role"] == "scored").sum() == (base["role"] == "scored").sum() + 5
+
+    notes = (excl_dir / "monitor_notes.md").read_text()
+    assert "exclude" in notes.lower()
+    assert "events.csv" in notes
+
+
+def test_exclude_events_covering_all_of_a_states_calibration_goes_no_conformal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    # The 0-blob's calibration-side segments are 0 and 8 (module docstring
+    # split; even segments carry the 0-blob) -- cover both fully.
+    ev = _write_events_csv(
+        tmp_path / "events.csv",
+        [
+            ("1970-01-01T00:15:00+00:00", "1970-01-01T00:15:30+00:00"),
+            ("1970-01-01T00:19:00+00:00", "1970-01-01T00:19:30+00:00"),
+        ],
+    )
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--exclude-calibration-events", str(ev), "--exclude-tolerance-s", "0",
+            "--out", str(out_dir),
+        ]
+    ) == 0
+
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    zero_state = int(alarms.loc[alarms["window"] == 0, "state"].iloc[0])
+    zero_rows = alarms["state"] == zero_state
+    # Every calibration window of the 0-blob state was excluded -> A1.3's
+    # no-conformal path for ALL its windows (rescued ones included).
+    assert (alarms.loc[zero_rows, "role"] == "no_conformal_data").all()
+    # The other state still calibrates and scores normally.
+    other_rows = alarms["state"] != zero_state
+    assert set(alarms.loc[other_rows, "role"]) == {"scored", "consumed_for_calibration"}
+
+
+def test_exclude_events_naive_timestamps_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    ev = _write_events_csv(
+        tmp_path / "events.csv", [("1970-01-01T00:15:05", "1970-01-01T00:15:10")]
+    )
+    out_dir = tmp_path / "out"
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--exclude-calibration-events", str(ev), "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "tz-aware" in err
+    assert not out_dir.exists()
+
+
+def test_exclude_events_frozen_mode_warns_and_has_no_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    ev = _write_events_csv(tmp_path / "events.csv", [_EVENT_5S_10S])
+
+    plain_dir, excl_dir = tmp_path / "out-plain", tmp_path / "out-excl"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "frozen", "--out", str(plain_dir),
+        ]
+    ) == 0
+    with caplog.at_level(logging.WARNING):
+        assert monitor.main(
+            [
+                "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+                "--thresholds", "frozen",
+                "--exclude-calibration-events", str(ev), "--out", str(excl_dir),
+            ]
+        ) == 0
+    assert any(
+        "frozen" in r.message and "exclude" in r.message.lower() for r in caplog.records
+    )
+    plain = pd.read_parquet(plain_dir / "alarms.parquet", engine="pyarrow")
+    excl = pd.read_parquet(excl_dir / "alarms.parquet", engine="pyarrow")
+    pd.testing.assert_frame_equal(excl, plain)
+
+
+def test_exclude_events_rolling_mode_scores_rescued_windows_via_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _anomalous_calibration_prepared()
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    ev = _write_events_csv(tmp_path / "events.csv", [_EVENT_5S_10S])
+
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--rolling-minutes", "2", "--alpha", "0.05",
+            "--exclude-calibration-events", str(ev), "--exclude-tolerance-s", "0",
+            "--out", str(out_dir),
+        ]
+    ) == 0
+
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    burst = alarms["window"].isin(range(5, 10))
+    # Rescued into scoring; no trailing same-state calibration exists that
+    # early in the run, so the fit-day fallback threshold applies -- and the
+    # burst is an outlier against it.
+    assert (alarms.loc[burst, "role"] == "scored").all()
+    assert (alarms.loc[burst, "threshold_source"] == "fit_day_fallback").all()
+    assert alarms.loc[burst, "alarm"].all()
