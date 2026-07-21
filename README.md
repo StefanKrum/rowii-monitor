@@ -1441,3 +1441,112 @@ onto the snapshot's feature contract), DAQ stream-set grid skew between
 audio-beats and logmel caches (distill now pairs by integer window shift), and
 event-contaminated calibration on induced-event days (monitor now supports
 `--exclude-calibration-events`; found by the final whole-branch review).
+
+## Step 2 package-8 evidence (2026-07-21): mode-model-bank, level-recal, explainable results
+
+Stefan's per-mode model-bank idea as a real Step-1 alternative, an independent
+test of the partner-inspired level-only recalibration, an explainability figure
+suite computed from our own artifacts, and three data verifications. Full
+figures + plain-language digest: `results/analysis-days/README.md`.
+
+### D4 — data verifications (gates, all passed)
+
+- **SCADA timebase (080726): UTC, synchronous to +2 s.** The Betriebsdaten
+  power changeover sits at 13:05:30 UTC vs our audio-UTC state-timeline
+  reference 13:05:28 — every 080726 GT-matched analysis is un-gated. (Speed is
+  structurally blind to pump->phase-shifter, as documented.)
+- **`RAWTurbineVib__3` ch0: std exactly 0.0 on EVERY day through 01.07, live
+  (std 3.1–3.5) on 08.07** — the channel was cabled between eras B and C; the
+  documented cause of the 243-vs-231 column drift the P7 monitor projection
+  handles and the bank's contract guard refuses.
+- Gen-mic channel profile at the ST strikes recorded (channel-anonymous; no
+  azimuth claim — the sensor-drawing mapping is not delivered).
+
+### D1 — the mode-model bank beats the pooled clusterer almost everywhere
+
+Six held-out rotations x 3 families x 3 representations; ARI on the identical
+{unknown, transition}-masked windows for BOTH arms; the bank is SUPERVISED
+(SCADA labels at commissioning time) vs the unsupervised KMeans+HMM — an
+information advantage, stated as such, not a method win. Mean ARI:
+
+| representation | bank gaussian | bank knn | bank gmm | P7 pooled clusterer |
+|---|---|---|---|---|
+| audio-beats | 0.471 | **0.883** | 0.755 | 0.606 |
+| vibration | **0.827** | 0.688 | 0.644 | 0.614 |
+| fusion | 0.454 | 0.408 | 0.454 | 0.361 |
+
+Where it matters most — the cross-config era-A days the clusterer failed on —
+the bank holds: 250526-tu best-family ARI 0.83–0.98 vs the clusterer's
+0.05–0.06; 250526-pu-morning 1.00 vs 0.00 (fusion) / 1.00 vs 1.00 (vibration).
+`--smooth` (duration-filter only) adds small consistent gains (up to +0.07).
+The chain probe converts label quality into alarm quality: bank-gaussian
+per-mode references drop the frozen pooled FAR on B1->290626-tu to **0.011 vs
+0.075** for the P7 detected-state chain under split-parity. Era-C zero-shot
+mode-ID readout (A1.7, audio-beats): knn accuracy **0.918** / ARI 0.71 on
+080726-pu_strikes with a 19.5% `no_mode_fits` rate — the rejection signal
+fires on era drift, exactly the "nothing fits" behavior the bank was built to
+expose (gaussian degrades to 0.41 accuracy: Mahalanobis is era-shift-fragile).
+
+### D2 — level-only recalibration: falsified on our pipeline, with the reason
+
+The quad `raw-frozen | level-recal-frozen | session-norm-frozen | recalibrate`
+on identical cells, six rotations, audio + vibration (fusion excluded by
+design — its `fuse()` per-run z-score is ITSELF an implicit level
+normalization, the A1.1 finding that plausibly explains fusion's cross-day FAR
+advantage all along):
+
+- **audio: level-recal is a no-op** (e.g. 290626-tu 0.481 -> 0.483; both
+  250526 cells unchanged). Structural reason: our kNN scoring is cosine on
+  L2-normalized rows — largely level-invariant by construction, so there is
+  no level lever left to pull. The partner's 100%->2% recovery lives on
+  level-sensitive one-class envelopes; our architecture had already removed
+  that failure mode at the metric level.
+- **vibration: level-recal BACKFIRES** (0.112 -> 0.800, 0.013 -> 0.929,
+  0.010 -> 1.000): the label-free first-20-min offsets conflate the prefix's
+  MODE MIX with a session gain — vibration levels are strongly
+  mode-dependent, so the "session offset" is really a mode offset. The same
+  confound that falsified session-norm in P7, now reproduced level-only.
+- **Positive finding instead: raw-frozen VIBRATION survives the era boundary**
+  (250526 cells 0.122 / 0.010 at alpha=0.05) — microphones step, vibration
+  doesn't, independently reproduced in our pipeline. On the 080726 strike day
+  the same raw-frozen vibration snapshot detects **11/13 pump-operation
+  strikes at window-FAR 0.041, zero-shot across eras** (audio frozen is
+  trivially broken there, FAR 0.69–1.0; level-recal wrecks the vibration arm
+  to FAR 0.513; the recalibrate+level-recal control is redundant as
+  predicted, 0.92 TPR @ 0.063). Standstill stays out of reach for an
+  operation-pool frozen vibration snapshot (TPR 0.08) — the pool contains
+  almost no standstill.
+
+### D3 — the explainability suite (what the tables never showed)
+
+`scripts/analyze_days.py` renders, from our own caches/artifacts: day x day
+FAR heatmaps (frozen/recalibrate/level-recal leaves), per-feature cross-day
+stability with segment-block bootstrap CIs (shifts converted to dB with the
+per-family factor — x20 amplitude, x10 power — before the 3 dB comparability
+cutoff), the era-step figure (audio levels step at the 2026-06-29 MeasName
+boundary, vibration flat — our independent account of WHY frozen thresholds
+failed, consistent with Rodrigues & Zhang 2026), per-mode band/octave
+signatures, a tone-vs-nearest-tone-free-octave contrast table, and the
+pillar-3 TPR bars. Every partner-inspired analysis type carries its
+attribution; every number is computed from our artifacts.
+
+### Verdicts
+
+1. **Bank**: with commissioning-time SCADA labels, the per-mode bank is the
+   better Step-1 on held-out days — especially across config eras — and its
+   rejection rate doubles as an era-drift flag. The unsupervised clusterer
+   remains the no-SCADA fallback; both stay in the thesis with the trade-off
+   stated.
+2. **Level-recal**: not adopted. No-op on cosine-scored audio, harmful under
+   mode-mix on vibration; daily recalibration remains the transfer mechanism.
+   The attempt yields two keepers: the fusion-self-normalization finding and
+   the vibration-frozen era-robustness result.
+3. **Explainability**: the heatmaps/era-step/stability figures replace the
+   FAR tables as the primary communication artifacts.
+
+Honesty: bank numbers are supervised-vs-unsupervised comparisons (information
+advantage, tagged in every artifact); 080726 bank readout is era-C zero-shot
+with the contract guard refusing the drifted fusion/vibration columns (by
+design — audio-beats is the drift-free representation there); no partner
+number enters any computation; ST vibration-frozen failure and the level-recal
+falsification are reported as measured.
