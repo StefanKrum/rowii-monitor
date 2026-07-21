@@ -197,6 +197,25 @@ def build_pool(
             f"build_pool: runs disagree on feature dimensionality ({feature_dims}) "
             f"-- a pool must stack ONE variant's features across runs"
         )
+    # Equal width is not enough: channel-availability drift between days can
+    # produce same-width runs whose columns MEAN different channels (the 080726
+    # TurbineVib-ch0 case that forced the monitor's snapshot-contract
+    # projection). Names must match exactly, order included -- stacking is
+    # positional.
+    first_name, first_run = next(iter(prepared.items()))
+    for run_name, run in prepared.items():
+        if list(run.feature_names) != list(first_run.feature_names):
+            diverging = [
+                (a, b)
+                for a, b in zip(first_run.feature_names, run.feature_names, strict=True)
+                if a != b
+            ]
+            raise ValueError(
+                f"build_pool: run {run_name!r} disagrees with run {first_name!r} "
+                f"on feature names/order (first divergence(s): {diverging[:3]}) "
+                f"-- a pool stacks columns positionally, so every member must "
+                f"share ONE column contract"
+            )
 
     members: list[PoolMember] = []
     provenance: dict[str, dict[str, int]] = {}

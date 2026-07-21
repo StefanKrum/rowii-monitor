@@ -324,6 +324,26 @@ def test_feature_dim_mismatch_raises() -> None:
         build_pool(prepared, "calibration", _CFG)
 
 
+def test_feature_name_mismatch_at_equal_width_raises() -> None:
+    """Whole-branch-review finding 5: equal-WIDTH runs whose feature names (or
+    name order) diverge -- channel-availability drift between pool members is
+    real (the monitor's own 080726 TurbineVib-ch0 projection case) -- must
+    refuse loudly instead of silently stacking misaligned columns."""
+    import dataclasses as _dc
+
+    base_a = _pool_run(6, 10, seed=0, n_features=3)
+    base_b = _pool_run(6, 10, seed=1, n_features=3)
+    renamed = _dc.replace(base_b, feature_names=["f0", "g1", "f2"])
+    prepared = {"run-a": base_a, "run-b": renamed}
+
+    with pytest.raises(ValueError, match="feature name"):
+        build_pool(prepared, "calibration", _CFG)
+
+    reordered = _dc.replace(base_b, feature_names=["f1", "f0", "f2"])
+    with pytest.raises(ValueError, match="feature name"):
+        build_pool({"run-a": base_a, "run-b": reordered}, "calibration", _CFG)
+
+
 # ---------------------------------------------------------------------------
 # 12+13. coverage_table: schema + counts, int labels and composite string labels
 # ---------------------------------------------------------------------------
