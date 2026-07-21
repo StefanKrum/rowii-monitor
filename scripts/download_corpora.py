@@ -12,14 +12,16 @@ Downloads never run in tests (`tests/test_download_corpora.py` monkeypatches
 `urllib.request.urlopen`; its dry-run tests assert it is never even called).
 
 sha256 policy: `_download_file` treats a declared hash two ways. A REAL
-declared hash (every `_CORPUS_FILES` entry below, since the first verified
-full download on 2026-07-16 measured and transcribed them) is VERIFIED
+declared hash (the package-4 `_CORPUS_FILES` entries below -- mimii, cwru,
+paderborn K001/K002 -- measured and transcribed after the first verified
+full download on 2026-07-16) is VERIFIED
 against the freshly streamed file's computed hash -- on mismatch the corrupt
 file is removed from disk, `ChecksumMismatchError` is raised, that corpus's
 `MANIFEST.json` is never written, and `main` exits 1 with a message naming
 the file (never a silent accept, never a traceback). The `_SHA256_TBD`
-sentinel (the one sanctioned placeholder, for FUTURE table additions that
-have not yet been downloaded once) is never "verified" against anything --
+sentinel (the one sanctioned placeholder, for table additions that have not
+yet been downloaded once -- currently the package-7 K003-K006 rows, spec
+D5/A3.10) is never "verified" against anything --
 there is nothing yet to verify -- instead the computed hash is logged and
 written into that corpus's `MANIFEST.json`, which is how a real sha256 first
 becomes known, for a human to transcribe back into `_CORPUS_FILES` afterward
@@ -36,8 +38,11 @@ payload bytes fetched -- see the completion report for full detail):
     Normal Baseline Data (4 loads) + a small 0.007"-fault-diameter subset of
     12k Drive End Bearing Fault Data (one file per fault location).
   - paderborn: Paderborn KAt-DataCenter
-    (groups.uni-paderborn.de/kat/BearingDataCenter), healthy bearings
-    K001-K002 (of the full K001-K006 healthy set -- spec D2's named subset).
+    (groups.uni-paderborn.de/kat/BearingDataCenter), the full healthy set
+    K001-K006: K001-K002 since package-4 spec D2 (its named subset, verified
+    2026-07-16); K003-K006 added by package-7 spec D5/A3.10 (same
+    BearingDataCenter URL scheme -- NOT Zenodo -- sentinel-hashed until
+    their first verified download).
 
 Extraction: MIMII's zip is extracted via `zipfile` into
 `<dest>/mimii/pump_0db/`. Paderborn's `.rar` files are extracted via `unar`
@@ -162,6 +167,43 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
             url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K002.rar",
             filename="K002.rar",
             sha256="1040da8b74d169c4e8c8545afa335d7a3a320bcaf36a471250c3e434bc4caffd",
+            license=_PADERBORN_LICENSE,
+        ),
+        # Healthy bearings K003-K006 (package-7 spec D5/A3.10): the REMAINING
+        # Paderborn healthy set, same BearingDataCenter URL scheme as
+        # K001/K002 above (NOT Zenodo -- only MIMII is Zenodo, A3.10). sha256
+        # is the `_SHA256_TBD` sentinel and byte sizes are unrecorded until
+        # each file's first verified download (the execution task's live-HEAD
+        # + compute-and-transcribe procedure -- this module's own docstring
+        # policy). No downstream change is needed for these:
+        # `_extract_paderborn_rars` iterates this tuple (so the new rars are
+        # extracted to `K003/`..`K006/` automatically), and
+        # `rowii.tfc.corpora.iter_windows_paderborn_dir` walks the paderborn
+        # dir RECURSIVELY (`root.rglob("*.mat")`), picking the new extraction
+        # dirs up with no loader change (verified 2026-07-21; pinned by
+        # tests/test_download_corpora.py's synthetic-K003-tree test).
+        _CorpusFile(
+            url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K003.rar",
+            filename="K003.rar",
+            sha256=_SHA256_TBD,
+            license=_PADERBORN_LICENSE,
+        ),
+        _CorpusFile(
+            url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K004.rar",
+            filename="K004.rar",
+            sha256=_SHA256_TBD,
+            license=_PADERBORN_LICENSE,
+        ),
+        _CorpusFile(
+            url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K005.rar",
+            filename="K005.rar",
+            sha256=_SHA256_TBD,
+            license=_PADERBORN_LICENSE,
+        ),
+        _CorpusFile(
+            url="https://groups.uni-paderborn.de/kat/BearingDataCenter/K006.rar",
+            filename="K006.rar",
+            sha256=_SHA256_TBD,
             license=_PADERBORN_LICENSE,
         ),
     ),
