@@ -524,27 +524,49 @@ _POOL_WINDOW_VALUES: dict[str, list[float]] = {
 the sequential run-concatenation order."""
 
 
-def _patch_pool_environment(monkeypatch, *, windows_per_run, calls):
+def _patch_pool_environment(monkeypatch, src_dir: Path, *, windows_per_run, calls):
     """Monkeypatch `pretrain_tfc.load_config` / `.discover` /
     `.iter_target_windows` (module-level names, the adapt_beats/warm_cache
     monkeypatchability precedent) with a synthetic pool: `discover` knows
-    exactly *windows_per_run*'s run names; the fake iterator yields
-    8000-sample float32 windows with that run's constant values and asserts
-    the D4 contract `target_hz=8000`. *calls* counts invocations of both.
+    exactly *windows_per_run*'s run names, each carrying ONE real (stat-able)
+    dummy mic burst file under *src_dir* -- the T6-review file-signature
+    fingerprint stats these, so content-staleness tests can mutate them; the
+    fake iterator yields 8000-sample float32 windows with that run's constant
+    values and asserts the D4 contract `target_hz=8000` while recording every
+    extra kwarg into `calls["iter_kwargs"]` (the seed-pinning tripwire).
+    *calls* counts invocations of both.
     """
     monkeypatch.setattr(
         pretrain_tfc, "load_config",
         lambda env=None: SimpleNamespace(data_root=Path("/pool-env-unused")),
     )
 
+    def _run_with_file(name: str) -> SimpleNamespace:
+        run_dir = src_dir / name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        burst_path = run_dir / (
+            f"{pretrain_tfc._POOL_SIGNATURE_STREAM}_2026-07-08_06-00-00_000000.dat"
+        )
+        if not burst_path.exists():
+            burst_path.write_bytes(name.encode() * 4)
+        return SimpleNamespace(
+            name=name,
+            files={
+                pretrain_tfc._POOL_SIGNATURE_STREAM: [
+                    SimpleNamespace(path=burst_path)
+                ]
+            },
+        )
+
     def fake_discover(data_root):
         calls["discover"] += 1
         return SimpleNamespace(
-            runs=[SimpleNamespace(name=name) for name in windows_per_run]
+            runs=[_run_with_file(name) for name in windows_per_run]
         )
 
     def fake_iter_target_windows(run, cfg, *, target_hz, **kwargs):
         calls["iter"] += 1
+        calls.setdefault("iter_kwargs", []).append(dict(kwargs))
         assert target_hz == 8000, "pshp-pool must request TF-C's own 8 kHz rate"
         values = windows_per_run[run.name]
         return iter([np.full(8000, v, dtype=np.float32) for v in values])
@@ -626,7 +648,10 @@ def test_checkpoint_names_and_manifest_dirs_gain_pool_keys(tmp_path):
 
 def test_pshp_pool_end_to_end_materializes_npz_and_checkpoint(tmp_path, monkeypatch):
     calls = {"iter": 0, "discover": 0}
-    _patch_pool_environment(monkeypatch, windows_per_run=_POOL_WINDOW_VALUES, calls=calls)
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
     out_dir = tmp_path / "out"
 
     exit_code = pretrain_tfc.main(
@@ -637,7 +662,8 @@ def test_pshp_pool_end_to_end_materializes_npz_and_checkpoint(tmp_path, monkeypa
     )
 
     assert exit_code == 0
-    assert calls == {"iter": 2, "discover": 1}
+    assert calls["iter"] == 2
+    assert calls["discover"] == 1
 
     npz_path = out_dir / "pshp_pool_windows.npz"
     assert npz_path.is_file()
@@ -653,7 +679,26 @@ def test_pshp_pool_end_to_end_materializes_npz_and_checkpoint(tmp_path, monkeypa
         assert npz["per_run_counts"].tolist() == [3, 2]
         fingerprint = str(npz["fingerprint"])
 
-    assert fingerprint == pretrain_tfc._pool_fingerprint(["runA", "runB"], [3, 2], 8000)
+    src_dir = tmp_path / "pool-src"
+    expected_runs = [
+        SimpleNamespace(
+            name=name,
+            files={
+                pretrain_tfc._POOL_SIGNATURE_STREAM: [
+                    SimpleNamespace(
+                        path=src_dir / name / (
+                            f"{pretrain_tfc._POOL_SIGNATURE_STREAM}"
+                            "_2026-07-08_06-00-00_000000.dat"
+                        )
+                    )
+                ]
+            },
+        )
+        for name in ("runA", "runB")
+    ]
+    assert fingerprint == pretrain_tfc._pool_fingerprint(
+        ["runA", "runB"], 8000, pretrain_tfc._pool_file_signatures(expected_runs)
+    )
     assert len(fingerprint) == 64
 
     checkpoint_path = out_dir / "tfc_audio_pshp.pt"
@@ -681,7 +726,10 @@ def test_pshp_pool_end_to_end_materializes_npz_and_checkpoint(tmp_path, monkeypa
 
 def test_pshp_pool_second_invocation_reuses_npz_cache(tmp_path, monkeypatch, caplog):
     calls = {"iter": 0, "discover": 0}
-    _patch_pool_environment(monkeypatch, windows_per_run=_POOL_WINDOW_VALUES, calls=calls)
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
     _stub_train(monkeypatch)
     out_dir = tmp_path / "out"
     argv = [
@@ -699,7 +747,10 @@ def test_pshp_pool_second_invocation_reuses_npz_cache(tmp_path, monkeypatch, cap
         assert pretrain_tfc.main([*argv, "--out-name", "tfc_audio_pshp_scratch.pt"]) == 0
 
     assert calls["iter"] == 2  # iter_target_windows NOT called again on a HIT
-    assert calls["discover"] == 1  # the data layout is never re-touched either
+    # T6-review hardening: discovery + the stat-only file-signature pass DO run
+    # on every invocation (freshness validation against the live corpus); only
+    # window extraction is skipped on a HIT.
+    assert calls["discover"] == 2
     assert any("cache hit" in record.message.lower() for record in caplog.records)
     # --out-name override: the scratch control shares the npz, not the filename
     assert (out_dir / "tfc_audio_pshp_scratch.pt").is_file()
@@ -708,7 +759,10 @@ def test_pshp_pool_second_invocation_reuses_npz_cache(tmp_path, monkeypatch, cap
 
 def test_pshp_pool_different_pool_list_rematerializes(tmp_path, monkeypatch):
     calls = {"iter": 0, "discover": 0}
-    _patch_pool_environment(monkeypatch, windows_per_run=_POOL_WINDOW_VALUES, calls=calls)
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
     _stub_train(monkeypatch)
     out_dir = tmp_path / "out"
     base = ["--corpus", "pshp-pool", "--epochs", "1", "--batch-size", "4", "--out", str(out_dir)]
@@ -730,7 +784,9 @@ def test_pshp_pool_different_pool_list_rematerializes(tmp_path, monkeypatch):
 
 def test_pshp_pool_unknown_run_exits_2(tmp_path, monkeypatch, capsys):
     calls = {"iter": 0, "discover": 0}
-    _patch_pool_environment(monkeypatch, windows_per_run={"runA": [1.0]}, calls=calls)
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run={"runA": [1.0]}, calls=calls
+    )
     out_dir = tmp_path / "out"
 
     exit_code = pretrain_tfc.main(
@@ -816,7 +872,10 @@ def test_train_applies_continue_from_init_before_training():
 
 def test_continue_from_cli_loads_source_state_and_records_lineage(tmp_path, monkeypatch):
     calls = {"iter": 0, "discover": 0}
-    _patch_pool_environment(monkeypatch, windows_per_run=_POOL_WINDOW_VALUES, calls=calls)
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
     captured = {}
     _stub_train(monkeypatch, captured)
     source_path = tmp_path / "src" / "tfc_audio.pt"
@@ -865,3 +924,188 @@ def test_continue_from_missing_file_exits_2(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "continue-from" in err
     assert "missing.pt" in err
+
+
+# ---------------------------------------------------------------------------
+# 10. T6-review hardening: content staleness, seed tripwire, continue-from
+#     failure modes, npz self-healing, lineage completeness
+# ---------------------------------------------------------------------------
+
+
+def test_pshp_pool_content_change_without_count_change_rematerializes(
+    tmp_path, monkeypatch
+):
+    """The T6 review proved a counts-only fingerprint served STALE windows after
+    a same-structure re-ingest. With file signatures, mutating a source file's
+    bytes+mtime must MISS and re-materialize."""
+    import os
+    import time
+
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
+    _stub_train(monkeypatch)
+    out_dir = tmp_path / "out"
+    argv = [
+        "--corpus", "pshp-pool", "--pool-runs", "runA,runB",
+        "--epochs", "1", "--batch-size", "4", "--out", str(out_dir),
+    ]
+    assert pretrain_tfc.main(argv) == 0
+    assert calls["iter"] == 2
+
+    burst = (
+        tmp_path / "pool-src" / "runA"
+        / f"{pretrain_tfc._POOL_SIGNATURE_STREAM}_2026-07-08_06-00-00_000000.dat"
+    )
+    data = bytearray(burst.read_bytes())
+    data[0] ^= 0x01  # same size, different content
+    burst.write_bytes(bytes(data))
+    bumped = time.time() + 5
+    os.utime(burst, (bumped, bumped))
+
+    assert pretrain_tfc.main(argv) == 0
+    assert calls["iter"] == 4  # re-materialized, not served stale
+
+
+def test_pshp_pool_never_threads_a_seed_into_iter_target_windows(
+    tmp_path, monkeypatch
+):
+    """Seed-pinning tripwire (T6-review HIGH): threading --seed into
+    iter_target_windows would shuffle scoring-side windows into pretraining
+    (leakage). The iterator must be called WITHOUT any seed override."""
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
+    _stub_train(monkeypatch)
+    assert pretrain_tfc.main(
+        [
+            "--corpus", "pshp-pool", "--pool-runs", "runA,runB",
+            "--epochs", "1", "--batch-size", "4", "--seed", "99",
+            "--out", str(tmp_path / "out"),
+        ]
+    ) == 0
+    assert calls["iter_kwargs"], "iterator was never invoked"
+    for kwargs in calls["iter_kwargs"]:
+        assert "seed" not in kwargs, (
+            "iter_target_windows must run at its own pinned split seed -- a "
+            "threaded --seed would leak scoring-side windows into pretraining"
+        )
+
+
+def test_continue_from_garbage_file_exits_2_with_pointed_message(
+    tmp_path, monkeypatch, capsys
+):
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
+    garbage = tmp_path / "garbage.pt"
+    garbage.write_bytes(b"\x00\x01\x02 not a checkpoint")
+    with pytest.raises(SystemExit) as exc_info:
+        pretrain_tfc.main(
+            [
+                "--corpus", "pshp-pool", "--pool-runs", "runA,runB",
+                "--epochs", "1", "--batch-size", "4",
+                "--continue-from", str(garbage), "--out", str(tmp_path / "out"),
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "could not be read" in capsys.readouterr().err
+
+
+def test_continue_from_missing_state_key_exits_2(tmp_path, monkeypatch, capsys):
+    """strict=True regression pin (T6-review): a checkpoint missing one
+    parameter must fail LOUDLY -- under strict=False that parameter would
+    silently keep its random init."""
+    import torch
+
+    from rowii.tfc.model import TfcModel
+    from rowii.tfc.wrapper import TfcConfig
+
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
+    cfg = TfcConfig(channels=(4, 8))
+    state = TfcModel(cfg).state_dict()
+    dropped = next(iter(state))
+    del state[dropped]
+    source = tmp_path / "partial.pt"
+    torch.save({"cfg": dataclasses.asdict(cfg), "model": state}, source)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pretrain_tfc.main(
+            [
+                "--corpus", "pshp-pool", "--pool-runs", "runA,runB",
+                "--epochs", "1", "--batch-size", "4",
+                "--continue-from", str(source), "--out", str(tmp_path / "out"),
+            ]
+        )
+    assert exc_info.value.code == 2
+    assert "does not match" in capsys.readouterr().err
+
+
+def test_pshp_pool_empty_pool_exits_1_and_writes_no_npz(tmp_path, monkeypatch, capsys):
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run={"runA": []}, calls=calls
+    )
+    out_dir = tmp_path / "out"
+    exit_code = pretrain_tfc.main(
+        [
+            "--corpus", "pshp-pool", "--pool-runs", "runA",
+            "--epochs", "1", "--batch-size", "4", "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 1
+    assert not (out_dir / pretrain_tfc._POOL_WINDOWS_FILENAME).exists()
+
+
+def test_pshp_pool_malformed_npz_self_heals(tmp_path, monkeypatch, caplog):
+    calls = {"iter": 0, "discover": 0}
+    _patch_pool_environment(
+        monkeypatch, tmp_path / "pool-src", windows_per_run=_POOL_WINDOW_VALUES,
+        calls=calls,
+    )
+    _stub_train(monkeypatch)
+    out_dir = tmp_path / "out"
+    npz_path = out_dir / pretrain_tfc._POOL_WINDOWS_FILENAME
+    out_dir.mkdir(parents=True)
+    npz_path.write_bytes(b"this is not an npz archive")
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = pretrain_tfc.main(
+            [
+                "--corpus", "pshp-pool", "--pool-runs", "runA,runB",
+                "--epochs", "1", "--batch-size", "4", "--out", str(out_dir),
+            ]
+        )
+    assert exit_code == 0
+    assert calls["iter"] == 2  # re-materialized
+    assert any("unreadable" in r.getMessage() for r in caplog.records)
+    with np.load(npz_path, allow_pickle=False) as healed:
+        assert healed["windows"].dtype == np.float32
+        assert str(np.asarray(healed["fingerprint"]))  # real fingerprint stored
+
+
+def test_bearings_checkpoint_carries_null_lineage(tmp_path, monkeypatch):
+    _bearings_style_corpus(tmp_path)
+    _stub_train(monkeypatch)
+    out_dir = tmp_path / "out"
+    assert pretrain_tfc.main(
+        [
+            "--corpus", "bearings", "--data-root", str(tmp_path),
+            "--epochs", "1", "--batch-size", "4", "--out", str(out_dir),
+        ]
+    ) == 0
+    import torch
+
+    checkpoint = torch.load(out_dir / "tfc_vib.pt", map_location="cpu", weights_only=False)
+    assert checkpoint["continued_from"] is None
+    assert checkpoint["pool_runs"] is None
