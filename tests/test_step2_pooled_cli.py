@@ -1180,3 +1180,90 @@ def test_level_recal_requires_cross_day_pooled_protocol(
     # "cross-day-pooled" substring also appears in argparse's --protocol usage
     # banner and would pass vacuously before the flag exists.
     assert "requires --protocol cross-day-pooled" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T7: --save-snapshot + --level-recal stores the anchor as the snapshot's
+#     optional v2 `level_recal_medians` member (package-8 Task 7, spec
+#     D2/A1.4/A1.10) -- closes the gap the T6 commit (d791d13) left open.
+# ---------------------------------------------------------------------------
+
+
+def test_level_recal_save_snapshot_stores_pool_fit_anchor_medians(
+    tmp_path, monkeypatch
+) -> None:
+    """`_run_cross_day_pooled` with --save-snapshot --level-recal must pass the
+    SAME anchor `far_table_frozen.csv`/`far_table_recalibrate.csv` align the test
+    run onto (`column_medians(pool_fit.features, feature_names)`, A1.4) into
+    `fit_snapshot_from_parts` as `level_recal_medians` -- references stay RAW,
+    and `session_stats` must stay unset (A1.10 fit-path exclusivity)."""
+    prepared = _level_pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
+
+    import run_step2
+
+    snap_path = tmp_path / "snapshots" / "pool_lrecal.npz"
+    assert run_step2.main([*_LRECAL_ARGS, "--save-snapshot", str(snap_path)]) == 0
+
+    loaded = load_snapshot(snap_path)
+    assert loaded.session_stats is None
+    assert loaded.level_recal_medians is not None
+
+    hand = _hand_pipeline(prepared)
+    from rowii.anomaly.levelrecal import column_medians
+
+    expected_anchor = column_medians(hand.pool_fit.features, _LEVEL_FEATURE_NAMES)
+    assert loaded.level_recal_medians == expected_anchor
+    # References stay RAW (module docstring: "references stay RAW") -- bitwise
+    # identical to the raw pooled fit-side rows, same as the non-snapshot path.
+    for lid in range(_K):
+        np.testing.assert_array_equal(
+            loaded.references[lid], hand.pool_fit.features[hand.fit_labels == lid]
+        )
+
+
+# ---------------------------------------------------------------------------
+# T7 follow-up (T6-review binding fix): equivalence tripwire pinning
+# `_first_n_minutes_rows`' window-membership rule to `rowii.anomaly.normalize.
+# fit_session_stats`'s own -- both independently implement "first N minutes of
+# VALID windows" (window start offset < norm_minutes*60s AND valid_mask);
+# run_step2 duplicates the rule locally (module docstring: level-recal needs
+# the qualifying ROWS themselves, fit_session_stats returns only aggregate
+# stats). A failure here means the shared rule drifted between its two
+# independent implementations.
+# ---------------------------------------------------------------------------
+
+
+def test_first_n_minutes_rows_matches_fit_session_stats_window_membership() -> None:
+    import run_step2
+
+    from rowii.anomaly.normalize import fit_session_stats
+
+    rng = np.random.default_rng(11)
+    n = 40
+    window_ns = 10_000_000_000  # 10 s/window -> cutoff at 5 min = window index 30
+    grid = WindowGrid(t0_ns=0, window_ns=window_ns, n_windows=n)
+    valid_mask = np.ones(n, dtype=bool)
+    valid_mask[[2, 29]] = False  # invalid windows inside AND at the time-cutoff edge
+    features = rng.normal(0.0, 100.0, (n, 3))  # well-spread, non-degenerate values
+    prepared = PreparedRun(
+        features=features, grid=grid, valid_mask=valid_mask,
+        feature_names=["f0", "f1", "f2"], segment_ids=np.zeros(n, dtype=np.int64),
+    )
+
+    norm_minutes = 5.0
+    rows = run_step2._first_n_minutes_rows(prepared, norm_minutes)
+    stats = fit_session_stats(features, valid_mask, grid, norm_minutes=norm_minutes)
+
+    assert rows.shape[0] == stats.n_windows
+    # `fit_session_stats` exposes no raw rows -- recompute its OWN documented
+    # `_center_scale` formula (median; MAD * 1.4826, floored at 1e-8, the
+    # `SessionStats.scale` docstring's formula, `test_session_norm_snapshot_
+    # stores_pool_global_stats_and_raw_references`'s own device) from
+    # `_first_n_minutes_rows`' selected rows: if the two rules ever select a
+    # DIFFERENT row set, this well-spread fixture makes the median/MAD diverge.
+    expected_center = np.median(rows, axis=0)
+    expected_mad = np.median(np.abs(rows - expected_center), axis=0)
+    expected_scale = np.maximum(expected_mad * 1.4826, 1e-8)
+    np.testing.assert_array_equal(stats.center, expected_center)
+    np.testing.assert_array_equal(stats.scale, expected_scale)

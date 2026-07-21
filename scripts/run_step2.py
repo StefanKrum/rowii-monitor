@@ -192,7 +192,13 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   features have no meaningful level column, A1.1 -- any other variant is a
   `parser.error`); mutually exclusive with `--session-norm` (A1.10 fit-path
   exclusivity); cross-day-pooled only, same precedent as `--session-norm`.
-  Outputs land in a `-lrecal` suffixed leaf (`<variant>-pooled-lrecal/`).
+  Outputs land in a `-lrecal` suffixed leaf (`<variant>-pooled-lrecal/`). With
+  `--save-snapshot` (package-8 Task 7, spec A1.10), the pooled snapshot
+  ADDITIONALLY stores this SAME anchor as the OPTIONAL v2 member
+  `level_recal_medians` (`rowii.runtime.snapshot.fit_snapshot_from_parts`'
+  `level_recal_medians` kwarg; no version bump, mutually exclusive with
+  `session_stats` by fit path) -- `monitor.py --level-recal` reads it back to
+  align a NEW run onto exactly this anchor.
 - **Failures are loud** (unlike the pair-matrix protocols' log-and-skip): this
   protocol names every run explicitly and produces exactly ONE combo, so any
   pool-level failure (a member that cannot prepare, k too large for the pool, a
@@ -3757,6 +3763,7 @@ def _run_cross_day_pooled(
     pool_fit_labels = _pool_row_labels(pool_fit, labels_per_run)
     pool_conformal_labels = _pool_row_labels(pool_conformal, labels_per_run)
     level_recal_offsets_used: dict[str, float] | None = None
+    level_recal_anchor_used: dict[str, float] | None = None
     if stats_by_run is not None:
         pool_fit_scoring = _session_norm_pool(pool_fit, stats_by_run)
         pool_conformal_scoring = _session_norm_pool(pool_conformal, stats_by_run)
@@ -3782,6 +3789,12 @@ def _run_cross_day_pooled(
                 file=sys.stderr,
             )
             return 2
+        # T7 (package-8): the SAME anchor is stored as the pooled snapshot's
+        # optional level_recal_medians member when --save-snapshot is also
+        # given (below) -- the monitor aligns a new run's own first-N median
+        # onto exactly this anchor, mirroring how far_table_{frozen,recalibrate}
+        # .csv align the TEST run above.
+        level_recal_anchor_used = anchor
         pool_fit_scoring = pool_fit.features
         pool_conformal_scoring = pool_conformal.features
         test_features_scoring = apply_level_recal(
@@ -4009,6 +4022,7 @@ def _run_cross_day_pooled(
             feature_names=list(next(iter(prepared_fit.values())).feature_names),
             checkpoints=checkpoints,
             session_stats=snapshot_session_stats,
+            level_recal_medians=level_recal_anchor_used,
         )
         provenance: dict[str, object] = {
             "protocol": "cross-day-pooled",

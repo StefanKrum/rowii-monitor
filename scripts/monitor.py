@@ -86,6 +86,27 @@ WARNING: the stored references are raw, so recalibrate mode stays fully coherent
 frozen mode would compare raw-space scores against the snapshot's
 normalized-space thresholds, which the warning names.
 
+`--level-recal` (package-8 Task 7, spec D2 as amended by A1.4/A1.10/A1.11): the
+shape-preserving, feature-native counterpart to `--session-norm` -- an additive
+offset in the log10 domain (`rowii.anomaly.levelrecal`), applied ONLY to the
+monitored run's LEVEL columns (`*_log_rms`/`*_band_*`/`*_octave_*`); shape
+columns (`*_spectral_centroid`/`*_rolloff95`/`*_kurtosis`) are untouched.
+Mutually exclusive with `--session-norm` (A1.10 fit-path exclusivity, exit 2).
+The snapshot must carry `level_recal_medians` (format v2, the pooled FIT side's
+own per-column median at `run_step2 --save-snapshot --level-recal` fit time,
+A1.4) -- a snapshot without them is REFUSED with exit 2 (never a silent
+raw-space fallback, mirroring `--session-norm`'s stats-less refusal). Unlike
+`--session-norm`, this applies AFTER the snapshot-contract geometry projection
+(A1.11): the run-side median is computed over the monitored run's own
+label-free first-`_DEFAULT_NORM_MINUTES` (20) minutes of valid windows,
+name-keyed against the PROJECTED `feature_names` (mirrors `scripts/
+run_step2.py`'s `_first_n_minutes_rows`, duplicated locally -- the
+script-sibling rule). The DETECTOR still consumes RAW features (labels are
+norm-invariant, the same A3.5 boundary `--session-norm` uses); references stay
+the snapshot's RAW references -- only the monitored run's scoring features
+shift. A zero-level-column snapshot feature contract (an embedding variant)
+raises inside `rowii.anomaly.levelrecal` and is caught here as exit 2 (A1.9).
+
 Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` +
 `timeline.md` (the state half, `scripts/apply_detector.py`'s conventions incl.
 scatter-back over `valid_mask`), `alarms.parquet` (one row per VALID window:
@@ -121,6 +142,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rowii.anomaly.conformal import calibrate, p_values, threshold_index  # noqa: E402
+from rowii.anomaly.levelrecal import (  # noqa: E402
+    apply_level_recal,
+    column_medians,
+    level_recal_offsets,
+)
 from rowii.anomaly.normalize import (  # noqa: E402
     SessionStats,
     apply_session_norm,
@@ -164,7 +190,10 @@ _DEFAULT_NORM_MINUTES = 20.0
 """`--session-norm` fallback prefix length for the MONITORED run's own stats when
 the snapshot's stored `norm_minutes` is the pool-global sentinel (0.0) -- the D3
 default ("first `--norm-minutes` (default 20)"); a first-N snapshot's stored value
-is used verbatim instead."""
+is used verbatim instead. Also `--level-recal`'s (unconfigurable, D2 spec: "N=20
+default") first-N-minutes prefix length for the monitored run's own level-column
+median (`_first_n_minutes_rows`, package-8 Task 7) -- mirrors `scripts/
+run_step2.py`'s own reuse of the identical constant/value for the same purpose."""
 
 _DEFAULT_EXCLUDE_TOLERANCE_S = 5.0
 """`--exclude-calibration-events` default interval padding in seconds -- the same
@@ -210,6 +239,38 @@ _FROZEN_SHIFT_WARNING = (
 )
 """The notes' verbatim frozen-mode warning (spec D2: reported with an explicit
 distribution-shift warning; the binding phrase is "did NOT hold")."""
+
+
+def _first_n_minutes_rows(prepared: PreparedRun, norm_minutes: float) -> np.ndarray:
+    """*prepared*'s own first *norm_minutes* of VALID windows, float64 -- the
+    `--level-recal` run-side anchor source (package-8 Task 7, spec A1.4/A1.11:
+    "the monitored run's own first-N-minutes windows", label-free).
+
+    DUPLICATED from `scripts/run_step2.py::_first_n_minutes_rows` (the
+    script-sibling rule, module docstring: a script must not depend on a
+    SIBLING script's internals) -- mirrors `rowii.anomaly.normalize.
+    fit_session_stats`'s identical window-membership rule (window START offset
+    < `norm_minutes * 60s` AND `valid_mask`), duplicated rather than imported
+    because level-recal needs the qualifying ROWS themselves
+    (`rowii.anomaly.levelrecal.column_medians`' input), not a fitted
+    `SessionStats` center/scale.
+
+    Raises:
+        ValueError: if zero windows qualify (empty prefix / all-invalid) --
+            the same failure mode as `fit_session_stats`, loud rather than
+            silently medianing over nothing.
+    """
+    n_windows = prepared.features.shape[0]
+    cutoff_ns = int(round(norm_minutes * 60.0 * 1e9))
+    window_offsets = np.arange(n_windows, dtype=np.int64) * np.int64(prepared.grid.window_ns)
+    qualifying = (window_offsets < cutoff_ns) & prepared.valid_mask
+    rows = prepared.features[qualifying]
+    if rows.shape[0] == 0:
+        raise ValueError(
+            f"zero valid windows start within the first {norm_minutes:g} minute(s) "
+            f"of the run -- cannot compute the level-recal run-side median"
+        )
+    return np.asarray(rows, dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +334,17 @@ def build_parser() -> argparse.ArgumentParser:
              "falls back to 20 min). Requires a snapshot that stores session stats "
              "(format v2) -- a v1/no-stats snapshot is refused (exit 2). The "
              "detector always consumes RAW features; only scoring is normalized.",
+    )
+    parser.add_argument(
+        "--level-recal", action="store_true",
+        help="Score with the monitored run's LEVEL columns (*_log_rms/*_band_*/"
+             "*_octave_*) additively recentred onto the snapshot's stored anchor "
+             "medians (package-8 spec D2/A1.4/A1.10/A1.11); shape columns are "
+             "untouched. Applies AFTER the snapshot-contract geometry projection, "
+             "name-keyed against the projected feature_names. Requires a snapshot "
+             "that stores level-recal medians (format v2) -- a snapshot without "
+             "them is refused (exit 2). Mutually exclusive with --session-norm. "
+             "The detector always consumes RAW features; only scoring shifts.",
     )
     parser.add_argument(
         "--exclude-calibration-events", type=Path, default=None,
@@ -973,6 +1045,41 @@ def _session_norm_lines(snapshot_stats: SessionStats, run_stats: SessionStats) -
     ]
 
 
+def _level_recal_lines(offsets: dict[str, float]) -> list[str]:
+    """The notes' `--level-recal` section (D2/A1.4/A1.10/A1.11): names the
+    mechanism, the anchor source, and the per-column offset table -- mirrors
+    `scripts/run_step2.py`'s own `level_recal_note_lines` block (duplicated
+    text, not imported -- the script-sibling rule)."""
+    return [
+        "",
+        "## Level-only recalibration (--level-recal, spec D2/A1.4/A1.10/A1.11)",
+        "",
+        "Scoring happened with this run's LEVEL columns (`*_log_rms`/`*_band_*`/"
+        "`*_octave_*`, log10-scaled by construction -- VERIFIED fact, "
+        "`rowii.anomaly.levelrecal` module docstring) additively recentred onto "
+        "the SNAPSHOT's stored anchor medians (`level_recal_medians`, fit-time "
+        "anchor, A1.4); shape columns (`*_spectral_centroid`/`*_rolloff95`/"
+        "`*_kurtosis`) pass through untouched by construction. The recalibration "
+        "is applied AFTER the snapshot-contract projection (A1.11), name-keyed "
+        "against the projected feature_names. Offset = `run_median - "
+        "reference_median` per column, the run-side median drawn from this "
+        f"run's own label-free first-{_DEFAULT_NORM_MINUTES:g}-minute prefix. "
+        "The DETECTOR consumed RAW features (labels are norm-invariant, the "
+        "same A3.5 boundary --session-norm uses); references stay the "
+        "snapshot's RAW references -- only this run's scoring features shift.",
+        "",
+        "This is our own, independent, feature-native test of the partner's "
+        "channel-recalibration idea (Rodrigues & Zhang, 2026): every offset "
+        "below is computed from OUR OWN caches; no partner dB figure is "
+        "imported here (D2, spec A1.1/A1.9).",
+        "",
+        "| level column | offset (log10 units, run - reference) |",
+        "|---|---|",
+        *(f"| {name} | {offset:.6g} |" for name, offset in sorted(offsets.items())),
+        "",
+    ]
+
+
 def _rolling_coverage_lines(
     state_rows: list[_StateRow],
     snapshot: MonitorSnapshot,
@@ -1030,6 +1137,7 @@ def _notes_markdown(
     *,
     session_stats: SessionStats | None = None,
     run_stats: SessionStats | None = None,
+    level_recal_offsets_used: dict[str, float] | None = None,
     rolling_minutes: float | None = None,
     exclusion_note: str | None = None,
 ) -> str:
@@ -1112,6 +1220,8 @@ def _notes_markdown(
 
     if session_stats is not None and run_stats is not None:
         lines += _session_norm_lines(session_stats, run_stats)
+    if level_recal_offsets_used is not None:
+        lines += _level_recal_lines(level_recal_offsets_used)
 
     lines += [
         "",
@@ -1209,6 +1319,16 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.level_recal and args.session_norm:
+        # A1.10 fit-path exclusivity: session-normalization and level-only
+        # recalibration are different scoring-space transforms and are never
+        # both active in one pass.
+        print(
+            "monitor: --level-recal is mutually exclusive with --session-norm "
+            "(A1.10 fit-path exclusivity)",
+            file=sys.stderr,
+        )
+        return 2
     if not args.snapshot.is_file():
         print(f"monitor: snapshot file not found: {args.snapshot}", file=sys.stderr)
         return 2
@@ -1242,6 +1362,21 @@ def main(argv: list[str] | None = None) -> int:
             "against the raw references)",
             args.snapshot,
         )
+
+    if args.level_recal and snapshot.level_recal_medians is None:
+        # A1.10 binding: never a silent raw-space fallback under --level-recal.
+        print(
+            f"monitor: --level-recal requires a snapshot that stores level-"
+            f"recal reference medians (format v2 with level_recal_medians), "
+            f"but {args.snapshot} has none -- it is a format-v1 file, was "
+            f"fitted without --level-recal, or was fitted under --session-norm "
+            f"(session_stats and level_recal_medians are mutually exclusive by "
+            f"fit path, A1.10). Refit it with medians (scripts/run_step2.py "
+            f"--protocol cross-day-pooled --level-recal --save-snapshot) or "
+            f"drop --level-recal.",
+            file=sys.stderr,
+        )
+        return 2
 
     cfg = load_config()
     index = discover(cfg.data_root)
@@ -1312,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
     session_stats: SessionStats | None = None
     run_stats: SessionStats | None = None
     scoring_features: np.ndarray | None = None
+    level_recal_offsets_used: dict[str, float] | None = None
     if args.session_norm:
         session_stats = snapshot.session_stats
         assert session_stats is not None  # guarded right after load_snapshot
@@ -1337,6 +1473,32 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         scoring_features = apply_session_norm(prepared.features, run_stats)
+    elif args.level_recal:
+        # A1.11: applies AFTER the geometry-guard projection above, so
+        # prepared.feature_names already equals snapshot.feature_names here --
+        # the run-side median is name-keyed against the PROJECTED columns.
+        # session_stats stays None (references scored RAW, the query is
+        # aligned onto them, mirrors the A3.5 detector-RAW boundary).
+        assert snapshot.level_recal_medians is not None  # guarded after load_snapshot
+        try:
+            first_n_rows = _first_n_minutes_rows(prepared, _DEFAULT_NORM_MINUTES)
+            run_median = column_medians(first_n_rows, snapshot.feature_names)
+            level_recal_offsets_used = level_recal_offsets(
+                run_median, snapshot.level_recal_medians
+            )
+            scoring_features = apply_level_recal(
+                prepared.features, snapshot.feature_names, level_recal_offsets_used
+            )
+        except ValueError as exc:
+            # Covers the A1.9 zero-level-column refusal (an embedding snapshot's
+            # feature contract) and an empty first-N/anchor overlap alike --
+            # every ValueError from the levelrecal module surfaces as exit 2.
+            print(
+                f"monitor: --level-recal cannot compute offsets for run "
+                f"{args.run!r}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
 
     exclusion_mask: np.ndarray | None = None
     exclusion_note: str | None = None
@@ -1431,6 +1593,7 @@ def main(argv: list[str] | None = None) -> int:
             args.run, args.snapshot, snapshot, args.thresholds, alpha_used,
             verdicts, prepared,
             session_stats=session_stats, run_stats=run_stats,
+            level_recal_offsets_used=level_recal_offsets_used,
             rolling_minutes=rolling_minutes, exclusion_note=exclusion_note,
         )
     )

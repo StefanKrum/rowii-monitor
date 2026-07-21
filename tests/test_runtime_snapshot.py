@@ -738,6 +738,7 @@ def test_v2_without_stats_carries_no_session_members(tmp_path: Path) -> None:
     prepared = _two_state_prepared()
     snapshot, _ = _fit(prepared)
     assert snapshot.session_stats is None  # fit_snapshot never fits session stats
+    assert snapshot.level_recal_medians is None  # nor level-recal medians (P8 T7)
     assert snapshot.format_version == 2  # NEW saves are v2 either way (Task 4)
 
     path = tmp_path / "v2_bare.npz"
@@ -747,9 +748,11 @@ def test_v2_without_stats_carries_no_session_members(tmp_path: Path) -> None:
         meta = json.loads(str(data["meta"][0]))
     assert meta["format_version"] == 2
     assert "session_stats" not in meta
+    assert "level_recal_medians" not in meta
 
     loaded = load_snapshot(path)
     assert loaded.session_stats is None
+    assert loaded.level_recal_medians is None
     assert loaded.format_version == 2
 
 
@@ -802,3 +805,62 @@ def test_scorer_for_label_session_stats_transforms_the_reference() -> None:
         )
         got = scorer_for_label(snapshot, label, session_stats=stats).score(query)
         np.testing.assert_array_equal(got, expected)
+
+
+# ---------------------------------------------------------------------------
+# 13. Format v2 (cont'd): level-recal medians (package-8 Task 7, spec
+#     D2/A1.4/A1.10/A1.11) -- OPTIONAL v2 member, NO version bump, mutually
+#     exclusive with session_stats by fit path, name-keyed geometry guard.
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_round_trips_level_recal_medians(tmp_path: Path) -> None:
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    medians = {"f0": -40.0, "f1": -35.0}  # feature_names = ["f0", "f1"] (_from_parts default)
+    snapshot = _from_parts(
+        detector, references, cal_scores, thresholds, level_recal_medians=medians
+    )
+    assert snapshot.format_version == SNAPSHOT_FORMAT_VERSION == 2  # no version bump (A1.10)
+    assert snapshot.level_recal_medians == medians
+    assert snapshot.session_stats is None
+
+    path = tmp_path / "v2_level_recal.npz"
+    save_snapshot(path, snapshot)
+
+    with np.load(path, allow_pickle=False) as data:
+        # No new npz array -- the small dict lives entirely in the meta JSON
+        # (module docstring / A1.10: "no new npz array").
+        assert not any(name.startswith("session_") for name in data.files)
+        meta = json.loads(str(data["meta"][0]))
+    assert meta["level_recal_medians"] == medians
+
+    got = load_snapshot(path)
+    assert got.level_recal_medians == medians
+    assert got.session_stats is None
+    # The scoring/detector halves are untouched by the medians member.
+    assert got.thresholds == snapshot.thresholds
+
+
+def test_level_recal_and_session_stats_are_mutually_exclusive() -> None:
+    """A1.10: session_stats and level_recal_medians are two different fit paths
+    (session-normalization vs level-only recalibration) and must never both be
+    stored in one snapshot."""
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _from_parts(
+            detector, references, cal_scores, thresholds,
+            session_stats=_session_stats_2f(),
+            level_recal_medians={"f0": 1.0, "f1": -1.0},
+        )
+
+
+def test_from_parts_level_recal_medians_geometry_refusal() -> None:
+    """Every level_recal_medians key must be one of feature_names (A1.10's
+    geometry guard, the same posture as the session-stats width check) -- a
+    stray key would silently promise an anchor the snapshot cannot back."""
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    with pytest.raises(ValueError, match="feature_names"):
+        _from_parts(
+            detector, references, cal_scores, thresholds,
+            level_recal_medians={"f0": 1.0, "not_a_real_column": 2.0},
+        )

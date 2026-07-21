@@ -93,6 +93,23 @@ and a v1 FILE (no session members by construction) loads with
 `session_stats=None`. Refusing a stats-less snapshot under `--session-norm` is the
 MONITOR's job (spec A3.5), not the reader's -- a v1 artifact is still a perfectly
 valid raw-space snapshot.
+
+**Format v2 (cont'd): level-recal medians (package-8 Task 7, spec D2/A1.4/
+A1.10/A1.11).** A snapshot may ALSO carry `level_recal_medians`
+(`dict[str, float]`, name-keyed over LEVEL columns only -- `rowii.anomaly.
+levelrecal.level_columns`) -- the fit-side ANCHOR the monitor's `--level-recal`
+mode aligns a new run's own first-N-minutes level median onto (shape-preserving,
+log10-domain additive offsets, `rowii.anomaly.levelrecal.level_recal_offsets`/
+`apply_level_recal`). This is a SECOND, independent OPTIONAL v2 member alongside
+`session_stats` -- NO version bump (A1.10: both live in the same v2 format) --
+but the two are MUTUALLY EXCLUSIVE by fit path: session-normalization and
+level-only recalibration are different scoring-space transforms, and
+`fit_snapshot_from_parts` refuses a caller that passes both. Unlike
+`session_stats` (two float arrays), `level_recal_medians` is a small
+`dict[str, float]` and needs no npz array member at all -- it lives entirely in
+the `meta` JSON, present under a `"level_recal_medians"` key exactly when the
+snapshot carries it. Refusing a medians-less snapshot under `--level-recal` is
+the MONITOR's job (mirrors `session_stats`' A3.5 precedent), not the reader's.
 """
 from __future__ import annotations
 
@@ -218,6 +235,24 @@ class MonitorSnapshot:
     `session_stats` parameter) and the monitored run with its own first-N stats;
     a pooled artifact stores POOL-GLOBAL stats with the `norm_minutes == 0.0`
     sentinel (`rowii.anomaly.normalize.fit_pool_stats`)."""
+    level_recal_medians: dict[str, float] | None = None
+    """Fit-side level-only-recalibration ANCHOR medians (format v2, package-8
+    Task 7, spec D2/A1.4/A1.10/A1.11), name-keyed over LEVEL columns only
+    (`rowii.anomaly.levelrecal.level_columns`) -- OPTIONAL v2 member (no version
+    bump, module docstring), or `None` for a snapshot fitted without
+    `--level-recal`. For a `run_step2 --save-snapshot --level-recal` pooled
+    artifact this is the pooled FIT side's own per-column median
+    (`rowii.anomaly.levelrecal.column_medians(pool_fit.features, feature_names)`,
+    the A1.4 anchor) -- the SAME anchor `far_table_frozen.csv`/
+    `far_table_recalibrate.csv` align the TEST run onto. The monitor's
+    `--level-recal` mode treats this as the reference-side median it aligns a
+    NEW run's own first-N-minutes median onto (`rowii.anomaly.levelrecal.
+    level_recal_offsets`/`apply_level_recal`), applied AFTER the snapshot-
+    contract projection (A1.11) -- a medians-less snapshot under
+    `--level-recal` is refused with exit 2, never a silent raw-space fallback
+    (mirrors `session_stats`' A3.5 refusal precedent). Mutually exclusive with
+    `session_stats` by fit path (A1.10): the two normalization mechanisms are
+    never both stored in one snapshot, enforced by `fit_snapshot_from_parts`."""
 
 
 def _runtime_scorer(name: str) -> Scorer:
@@ -529,11 +564,13 @@ def fit_snapshot_from_parts(
     feature_names: list[str],
     checkpoints: dict[str, str],
     session_stats: SessionStats | None = None,
+    level_recal_medians: dict[str, float] | None = None,
 ) -> MonitorSnapshot:
     """Assemble a `MonitorSnapshot` from ALREADY-COMPUTED parts -- the pooled
     counterpart to `fit_snapshot` (Step-2 package-7 spec `docs/superpowers/specs/
     2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3; the
-    `session_stats` kwarg is Task 4's D3/A3.5 extension).
+    `session_stats` kwarg is Task 4's D3/A3.5 extension; the `level_recal_medians`
+    kwarg is package-8 Task 7's D2/A1.4/A1.10 extension).
 
     `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
     references, thresholds). Pooled artifacts derive those parts across runs
@@ -579,6 +616,19 @@ def fit_snapshot_from_parts(
             must be computed in that same pool-global-normalized space so the
             artifact stays self-consistent (`scripts/run_step2.py`'s
             cross-day-pooled `--session-norm` path does exactly this).
+        level_recal_medians: Optional fit-side level-only-recalibration ANCHOR
+            medians (format v2, package-8 Task 7, spec D2/A1.4/A1.10/A1.11) --
+            name-keyed over LEVEL columns (`rowii.anomaly.levelrecal.
+            level_columns`), e.g. the pooled FIT side's own per-column median
+            (`rowii.anomaly.levelrecal.column_medians(pool_fit.features,
+            feature_names)`, the A1.4 anchor `scripts/run_step2.py --level-recal`
+            aligns the TEST run onto). References are stored RAW regardless (the
+            field contract, mirroring `session_stats`); the monitor's
+            `--level-recal` mode uses this as the reference-side median it
+            aligns a NEW run's own first-N-minutes median onto. MUTUALLY
+            EXCLUSIVE with *session_stats* (A1.10): session-normalization and
+            level-only recalibration are different fit paths and are never both
+            stored in one snapshot.
 
     Returns:
         A `MonitorSnapshot` at the CURRENT format version -- `save_snapshot`/
@@ -596,7 +646,11 @@ def fit_snapshot_from_parts(
             promise a width the stored references cannot deliver); if
             *session_stats* is given with a center/scale width different from
             `len(feature_names)` (the same geometry rule -- stats that cannot
-            transform the stored references must never be stored beside them).
+            transform the stored references must never be stored beside them);
+            if *session_stats* AND *level_recal_medians* are BOTH given (A1.10
+            fit-path exclusivity); if *level_recal_medians* names a key that is
+            not one of *feature_names* (the same geometry-guard posture -- a
+            stray key would promise an anchor the snapshot cannot back).
         RuntimeError: from `_hmm_arrays` if the detector's component/id invariant
             is violated (see its docstring).
     """
@@ -631,6 +685,21 @@ def fit_snapshot_from_parts(
             f"{session_stats.scale.shape} -- stats that cannot transform the "
             f"stored references must never be stored beside them"
         )
+    if session_stats is not None and level_recal_medians is not None:
+        raise ValueError(
+            "session_stats and level_recal_medians are mutually exclusive "
+            "(A1.10: session-normalization and level-only recalibration are "
+            "different fit paths and must never both be stored in one "
+            "snapshot) -- got both"
+        )
+    if level_recal_medians is not None:
+        unknown = sorted(set(level_recal_medians) - set(feature_names))
+        if unknown:
+            raise ValueError(
+                f"level_recal_medians name(s) {unknown!r} are not in "
+                f"feature_names -- a stored anchor median must key onto a real "
+                f"column of this snapshot's feature contract"
+            )
     if not thresholds:
         logger.warning(
             "fit_snapshot_from_parts: assembling a snapshot with an EMPTY scoring "
@@ -670,6 +739,9 @@ def fit_snapshot_from_parts(
         created_at=datetime.now(UTC).isoformat(),
         format_version=SNAPSHOT_FORMAT_VERSION,
         session_stats=session_stats,
+        level_recal_medians=(
+            dict(level_recal_medians) if level_recal_medians is not None else None
+        ),
     )
 
 
@@ -730,7 +802,9 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
     round-tripped exactly by `json.loads` (the only reader of the npz meta member;
     the sidecar is for humans). Format v2: a `session_stats` entry (scalars only;
     the center/scale ARRAYS live in their own npz members) is added exactly when
-    the snapshot carries stats."""
+    the snapshot carries stats; a `level_recal_medians` entry (the WHOLE dict --
+    no npz array member, package-8 Task 7) is added exactly when the snapshot
+    carries medians."""
     meta: dict[str, object] = {
         "format_version": snapshot.format_version,
         "min_dwell_s": snapshot.min_dwell_s,
@@ -764,6 +838,8 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
             "n_windows": snapshot.session_stats.n_windows,
             "norm_minutes": snapshot.session_stats.norm_minutes,
         }
+    if snapshot.level_recal_medians is not None:
+        meta["level_recal_medians"] = dict(snapshot.level_recal_medians)
     return meta
 
 
@@ -931,6 +1007,14 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
                 norm_minutes=float(session_meta["norm_minutes"]),
             )
 
+        level_recal_medians: dict[str, float] | None = None
+        raw_medians = meta.get("level_recal_medians")
+        if raw_medians is not None:
+            # No npz array member to cross-check (module docstring: the WHOLE
+            # dict lives in meta) -- unlike session_stats there is no partial-
+            # presence corruption state to guard against here.
+            level_recal_medians = {str(k): float(v) for k, v in raw_medians.items()}
+
         return MonitorSnapshot(
             mean=data["mean"],
             std=data["std"],
@@ -958,4 +1042,5 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             created_at=str(meta["created_at"]),
             format_version=version,
             session_stats=session_stats,
+            level_recal_medians=level_recal_medians,
         )
