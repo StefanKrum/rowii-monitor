@@ -20,6 +20,7 @@ than hardcoding segment 2, so it can never drift from `split_by_segments`.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -277,18 +278,65 @@ def test_frozen_mode_flags_shift_warning(
 
 
 # ---------------------------------------------------------------------------
-# 3. Geometry guard: mismatched prepared features -> exit 2 naming both widths
+# 3. Geometry guard: the snapshot's trained columns are the scoring contract --
+#    extra prepared columns are projected away (channel-availability drift, the
+#    080726 TurbineVib-ch0 case); a MISSING snapshot column stays exit 2.
 # ---------------------------------------------------------------------------
 
 
-def test_geometry_mismatch_exits_2(
+def test_geometry_extra_prepared_columns_projected_to_snapshot_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)  # fitted on 2 feature columns
+    base = _two_state_prepared(_MON_T0_NS, seed=1)
+
+    # Reference run: exact-geometry prepared run, the pre-drift behavior.
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", base)
+    ref_dir = tmp_path / "out-ref"
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(ref_dir)]
+    ) == 0
+
+    # Drifted run: same two snapshot columns PLUS two live extra channels.
+    rng = np.random.default_rng(99)
+    extended = replace(
+        base,
+        features=np.hstack([base.features, rng.normal(5.0, 1.0, (len(base.features), 2))]),
+        feature_names=[*base.feature_names, "extra_a", "extra_b"],
+    )
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", extended)
+    out_dir = tmp_path / "out"
+    with caplog.at_level(logging.WARNING):
+        exit_code = monitor.main(
+            ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_dir)]
+        )
+    assert exit_code == 0
+
+    projection_warnings = [
+        r.message for r in caplog.records if "extra_a" in r.message
+    ]
+    assert projection_warnings, "projection must WARN, naming the dropped columns"
+    assert "extra_b" in projection_warnings[0]
+
+    # The extra columns must not influence scoring at all: identical alarms.
+    ref = pd.read_parquet(ref_dir / "alarms.parquet", engine="pyarrow")
+    got = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    pd.testing.assert_frame_equal(got, ref)
+
+
+def test_geometry_missing_snapshot_column_exits_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import monitor
 
     snapshot_path, snapshot = _make_snapshot(tmp_path)  # fitted on 2 feature columns
-    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1, n_features=4)
-    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    base = _two_state_prepared(_MON_T0_NS, seed=1)
+    renamed = replace(base, feature_names=["f0", "g1"])  # 'f1' gone, width equal
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", renamed)
     out_dir = tmp_path / "out"
 
     exit_code = monitor.main(
@@ -297,9 +345,10 @@ def test_geometry_mismatch_exits_2(
     assert exit_code == 2
 
     err = capsys.readouterr().err
-    assert str(len(snapshot.feature_names)) in err  # snapshot width (2)
-    assert str(len(mon_prepared.feature_names)) in err  # prepared width (4)
+    assert "missing" in err
+    assert "'f1'" in err  # the absent snapshot column, named
     assert "fusion" in err  # the snapshot's variant, named
+    assert str(len(snapshot.feature_names)) in err  # snapshot width (2)
     assert not out_dir.exists()  # refused BEFORE writing anything
 
 
