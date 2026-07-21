@@ -1391,6 +1391,13 @@ three representations reach 13/13 at alpha 0.10; audio-beats detects 11/13 at
 the strictest alpha 0.01 with window-FAR 0.008. Typical latencies 0.3–4 s
 (minute-level ground truth; seconds pending).
 
+Two planned side arms (fusion): the FROZEN cross-era row detects 13/13 in both
+sessions only trivially — window-FAR 0.62 (PU) / 0.96 (ST), the cross-config
+frozen failure alarming on most normal windows, useless as a detector; the
+session-norm arm (stats-bearing snapshot) DEGRADES the raw recalibrate numbers
+(PU 0.69 TPR at 0.094 FAR vs raw 0.92 at 0.046; ST 0.92 at 0.071) — consistent
+with D3's falsification.
+
 Readings: (1) frozen BEATs — zero plant-specific training — is the best
 strict-alpha operating point in BOTH sessions (PU 11/13 at 0.008 FAR, ST 13/13
 at 0.003 FAR), the strongest universality datum in the package; (2) the 0.8 MB
