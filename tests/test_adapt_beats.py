@@ -681,3 +681,126 @@ def test_missing_checkpoint_env_exits_via_systemexit(tmp_path, monkeypatch):
         adapt_beats.main(["--mode", "lora", "--run", "test-run", "--out", str(tmp_path / "out")])
 
     assert "ROWII_BEATS_CHECKPOINT" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# 10. --runs: multi-run round-robin pooling (Step-2 package-7 Task 8, spec D6
+#     as amended by A3.11). The rotation itself is unit-tested in
+#     tests/test_target_windows.py; here the CLI wiring is pinned --
+#     mutual exclusion with --run, --runs parse-level validation, budget/seed
+#     forwarding into iter_target_windows_multi, the '+'-joined checkpoint
+#     name, and the sidecar's per-run window counts.
+# ---------------------------------------------------------------------------
+
+
+def test_run_and_runs_are_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        adapt_beats.build_parser().parse_args(
+            ["--mode", "lora", "--run", "x", "--runs", "a,b"]
+        )
+    assert exc_info.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_one_of_run_or_runs_is_required(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        adapt_beats.build_parser().parse_args(["--mode", "lora"])
+    assert exc_info.value.code == 2
+    assert "--runs" in capsys.readouterr().err
+
+
+def test_help_documents_runs_flag(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        adapt_beats.main(["--help"])
+    assert exc_info.value.code == 0
+    assert "--runs" in capsys.readouterr().out
+
+
+def test_runs_with_duplicate_names_is_a_parser_error(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        adapt_beats.main(["--mode", "lora", "--runs", "run-a,run-b,run-a"])
+    assert exc_info.value.code == 2
+    assert "duplicate" in capsys.readouterr().err.lower()
+
+
+def test_runs_with_only_blank_names_is_a_parser_error(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        adapt_beats.main(["--mode", "lora", "--runs", " , ,"])
+    assert exc_info.value.code == 2
+    assert "at least one" in capsys.readouterr().err.lower()
+
+
+def test_e2e_multi_run_pool_checkpoint_name_and_per_run_sidecar_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        adapt_beats, "discover", lambda data_root: _fake_index(["run-a", "run-b"])
+    )
+    monkeypatch.setattr(adapt_beats, "load_beats_model", _stub_load_beats_model)
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", str(tmp_path / "fake_base_checkpoint.pt"))
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+
+    calls: list[dict[str, object]] = []
+
+    def fake_multi(runs, cfg, *, target_hz, seed, max_windows, return_run_names=False):
+        calls.append(
+            {
+                "run_names": [r.name for r in runs],
+                "target_hz": target_hz,
+                "seed": seed,
+                "max_windows": max_windows,
+                "return_run_names": return_run_names,
+            }
+        )
+        rng = np.random.default_rng(5)
+        # A plausible round-robin trace with run-a longer than run-b: 4 + 2
+        # windows -- the sidecar must count these PER RUN (A3.11).
+        order = ["run-a", "run-b", "run-a", "run-b", "run-a", "run-a"]
+        return iter(
+            [(name, rng.normal(0.0, 1.0, target_hz).astype(np.float32)) for name in order]
+        )
+
+    monkeypatch.setattr(adapt_beats, "iter_target_windows_multi", fake_multi)
+
+    out_dir = tmp_path / "out"
+    exit_code = adapt_beats.main(
+        [
+            "--mode", "lora", "--runs", "run-a,run-b", "--epochs", "1",
+            "--batch-size", "8", "--max-windows", "6", "--out", str(out_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        {
+            "run_names": ["run-a", "run-b"],
+            "target_hz": 16_000,
+            "seed": 7,
+            "max_windows": 6,
+            "return_run_names": True,
+        }
+    ], "--max-windows is forwarded as the TOTAL budget; runs keep their --runs order"
+
+    checkpoint_path = out_dir / "beats_lora_run-a+run-b.pt"
+    assert checkpoint_path.is_file(), "multi-run checkpoint name joins run names with '+'"
+
+    sidecar = json.loads(checkpoint_path.with_suffix(".json").read_text())
+    assert sidecar["runs"] == ["run-a", "run-b"]
+    assert sidecar["windows_per_run"] == {"run-a": 4, "run-b": 2}
+    assert sidecar["n_windows"] == 6
+    assert "run" not in sidecar, "multi-run sidecar carries 'runs', not the single-run 'run'"
+
+
+def test_unknown_run_in_runs_exits_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(adapt_beats, "discover", lambda data_root: _fake_index(["run-a"]))
+    monkeypatch.setenv("ROWII_BEATS_CHECKPOINT", str(tmp_path / "fake.pt"))
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+
+    exit_code = adapt_beats.main(
+        ["--mode", "lora", "--runs", "run-a,bogus-run", "--out", str(tmp_path / "out")]
+    )
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "bogus-run" in err
+    assert "run-a" in err

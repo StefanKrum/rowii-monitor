@@ -10,9 +10,20 @@ pointing `ROWII_BEATS_CHECKPOINT` at the saved file turns every existing
 `audio-beats`/`fusion-beats` variant into the adapted evaluation, no new
 featurizer code needed downstream.
 
-Usage: `adapt_beats.py --mode lora|full --run <name> [--epochs] [--batch-size 16]
-[--lr] --seed 7 --max-windows 8000 --out models/adapted/` -> `models/adapted/
-beats_lora_<run>.pt` / `beats_ft_<run>.pt` + a sidecar `<same-stem>.json`.
+Usage: `adapt_beats.py --mode lora|full (--run <name> | --runs <a,b,c>)
+[--epochs] [--batch-size 16] [--lr] --seed 7 --max-windows 8000 --out
+models/adapted/` -> `models/adapted/beats_lora_<run>.pt` / `beats_ft_<run>.pt`
+(multi-run: run names joined with `+`, e.g. `beats_lora_<a>+<b>.pt`) + a
+sidecar `<same-stem>.json`.
+
+Multi-run pooling (Step-2 package-7 Task 8, spec D6 as amended by A3.11:
+`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md`):
+`--runs a,b,c` (mutually exclusive with `--run`) draws the training windows
+ROUND-ROBIN across every named run's own leakage-safe calibration side via
+`rowii.adapt.target_windows.iter_target_windows_multi`, with `--max-windows`
+acting as the TOTAL budget (A3.11's binding rationale: a sequential chain
+would train almost entirely on run 1); the sidecar records the runs list and
+per-run window counts. The single-run `--run` path is untouched.
 
 The native token path (READ THIS FIRST -- the train/inference-consistency
 guarantee, Amendment A1 in `docs/superpowers/specs/2026-07-16-step2-package5-
@@ -66,7 +77,8 @@ Torch import discipline (plan's Global Constraints: eager only in
 `rowii.adapt.objective`/`rowii.adapt.lora`/`rowii.adapt.student`'s model part/
 `rowii.fusionx.model`; lazy everywhere else): every torch-touching name here is
 imported lazily inside the function that needs it, INCLUDING `load_beats_model`/
-`iter_target_windows`/`discover`, which is a deliberate exception to "lazy
+`iter_target_windows` (and its multi-run sibling `iter_target_windows_multi`)/
+`discover`, which is a deliberate exception to "lazy
 everywhere" -- `scripts/warm_cache.py` sets the precedent (`discover`/
 `prepare_run` imported at module top specifically so `tests/test_warm_cache.py`
 can `monkeypatch.setattr(warm_cache, "discover", ...)`; a name only ever bound
@@ -97,7 +109,10 @@ if TYPE_CHECKING:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rowii.adapt.target_windows import iter_target_windows  # noqa: E402
+from rowii.adapt.target_windows import (  # noqa: E402
+    iter_target_windows,
+    iter_target_windows_multi,
+)
 from rowii.config import Config, load_config  # noqa: E402
 from rowii.io.dataset import discover  # noqa: E402
 from rowii.pipeline import _BEATS_INSTALL_HINT  # noqa: E402
@@ -164,6 +179,27 @@ def _resolve_mode_defaults(mode: str, epochs: int | None, lr: float | None) -> t
     resolved_epochs = epochs if epochs is not None else default_epochs
     resolved_lr = lr if lr is not None else default_lr
     return resolved_epochs, resolved_lr
+
+
+def _parse_runs_or_error(parser: argparse.ArgumentParser, raw: str) -> list[str]:
+    """`--runs "a,b,c"` -> `["a", "b", "c"]`, with parse-level validation via
+    *parser*`.error` (exit 2, argparse's own convention; P7 spec D6/A3.11):
+    whitespace around names is stripped; an empty list (nothing but commas/
+    blanks) and duplicate names are both rejected -- a duplicated run would
+    occupy TWO slots of the round-robin rotation and silently double-weight
+    that run inside the shared `--max-windows` TOTAL budget.
+    """
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    if not names:
+        parser.error("--runs must name at least one run (comma-separated run names)")
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        parser.error(
+            f"--runs contains duplicate run name(s): {', '.join(duplicates)} -- each run "
+            "may appear once (a duplicate would occupy two round-robin slots and draw "
+            "its windows twice under the shared --max-windows total budget)"
+        )
+    return names
 
 
 def _prepare_model_for_mode(mode: str, model: BEATs) -> int:
@@ -448,9 +484,19 @@ def build_parser() -> argparse.ArgumentParser:
              "self_attn.{q,v}_proj, base frozen. full: every model parameter trainable "
              "(upper-capacity reference).",
     )
-    parser.add_argument(
-        "--run", required=True, metavar="NAME",
+    run_group = parser.add_mutually_exclusive_group(required=True)
+    run_group.add_argument(
+        "--run", metavar="NAME",
         help="Run name to draw target-normal windows from (e.g. 010726-tu_ph_tu).",
+    )
+    run_group.add_argument(
+        "--runs", metavar="NAMES",
+        help="Comma-separated run names for MULTI-run adaptation (P7 spec D6/A3.11): "
+             "target-normal windows are drawn ROUND-ROBIN across every named run's own "
+             "leakage-safe calibration side, --max-windows acting as the TOTAL budget "
+             "(a sequential chain would train almost entirely on the first run); the "
+             "checkpoint name joins the run names with '+' and the sidecar records "
+             "per-run window counts. Mutually exclusive with --run.",
     )
     parser.add_argument(
         "--epochs", type=int, default=None,
@@ -471,7 +517,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-windows", type=int, default=8000,
-        help="Cap on target-normal windows drawn from --run (default: 8000).",
+        help="Cap on target-normal windows drawn from --run; with --runs, the TOTAL "
+             "round-robin budget across all named runs (default: 8000).",
     )
     parser.add_argument(
         "--out", type=Path, default=Path("models/adapted/"),
@@ -486,6 +533,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Parse-level --runs validation (empty/duplicates) runs BEFORE the beats
+    # import guard: a malformed flag value is a usage error regardless of the
+    # environment's torch install.
+    run_names: list[str] = []
+    if args.runs is not None:
+        run_names = _parse_runs_or_error(parser, args.runs)
+
     _import_beats_or_exit()
 
     cfg = load_config()
@@ -493,36 +547,77 @@ def main(argv: list[str] | None = None) -> int:
 
     index = discover(cfg.data_root)
     by_name = {r.name: r for r in index.runs}
-    run = by_name.get(args.run)
-    if run is None:
-        available = ", ".join(sorted(by_name)) or "(none discovered)"
-        print(
-            f"adapt_beats: unknown --run {args.run!r}; available runs: {available}",
-            file=sys.stderr,
-        )
-        return 2
 
     epochs, lr = _resolve_mode_defaults(args.mode, args.epochs, args.lr)
 
     t0 = time.monotonic()
-    windows_list = list(
-        iter_target_windows(
-            run, cfg,
-            target_hz=BEATS_SAMPLE_RATE_HZ, seed=args.seed, max_windows=args.max_windows,
+    windows_per_run: dict[str, int] | None = None
+    if args.runs is not None:
+        # Multi-run pool (P7 spec D6/A3.11 -- module docstring): round-robin
+        # draw across every named run's own calibration side, --max-windows
+        # as the TOTAL budget, per-run counts recorded for the sidecar.
+        unknown = [name for name in run_names if name not in by_name]
+        if unknown:
+            available = ", ".join(sorted(by_name)) or "(none discovered)"
+            print(
+                f"adapt_beats: unknown --runs run(s): {', '.join(unknown)}; "
+                f"available runs: {available}",
+                file=sys.stderr,
+            )
+            return 2
+        pool_runs = [by_name[name] for name in run_names]
+        pairs = list(
+            iter_target_windows_multi(
+                pool_runs, cfg,
+                target_hz=BEATS_SAMPLE_RATE_HZ, seed=args.seed,
+                max_windows=args.max_windows, return_run_names=True,
+            )
         )
-    )
+        windows_list = [window for _name, window in pairs]
+        # Zero-contribution runs stay visible in the counts (A4.1's
+        # coverage-visibility principle: never silently absent).
+        windows_per_run = dict.fromkeys(run_names, 0)
+        for name, _window in pairs:
+            windows_per_run[name] += 1
+        label = "+".join(run_names)
+        source_desc = f"runs {', '.join(run_names)}"
+    else:
+        run = by_name.get(args.run)
+        if run is None:
+            available = ", ".join(sorted(by_name)) or "(none discovered)"
+            print(
+                f"adapt_beats: unknown --run {args.run!r}; available runs: {available}",
+                file=sys.stderr,
+            )
+            return 2
+        windows_list = list(
+            iter_target_windows(
+                run, cfg,
+                target_hz=BEATS_SAMPLE_RATE_HZ, seed=args.seed, max_windows=args.max_windows,
+            )
+        )
+        label = run.name
+        source_desc = f"run {run.name!r}"
+
     if not windows_list:
         print(
-            f"adapt_beats: no target-normal windows found for run {run.name!r} -- "
+            f"adapt_beats: no target-normal windows found for {source_desc} -- "
             "nothing to adapt on",
             file=sys.stderr,
         )
         return 1
     windows = np.stack(windows_list)
-    logger.info(
-        "adapt_beats: %d target-normal window(s) for run %s (--max-windows %s)",
-        windows.shape[0], run.name, args.max_windows,
-    )
+    if windows_per_run is None:
+        logger.info(
+            "adapt_beats: %d target-normal window(s) for run %s (--max-windows %s)",
+            windows.shape[0], label, args.max_windows,
+        )
+    else:
+        logger.info(
+            "adapt_beats: %d target-normal window(s) pooled round-robin across %d run(s) "
+            "(--max-windows %s TOTAL; per-run counts: %s)",
+            windows.shape[0], len(run_names), args.max_windows, windows_per_run,
+        )
 
     from rowii.signals.beats import best_device
 
@@ -552,13 +647,20 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("adapt_beats: merged %d LoRA adapter(s) back into base Linears", n_merged)
 
     probe = torch.from_numpy(windows[: min(4, windows.shape[0])].astype(np.float32)).to(device)
-    checkpoint_path = args.out / f"{_CHECKPOINT_PREFIX[args.mode]}_{run.name}.pt"
+    checkpoint_path = args.out / f"{_CHECKPOINT_PREFIX[args.mode]}_{label}.pt"
     max_deviation = _save_and_verify(checkpoint_path, model, probe, device)
     elapsed_s = time.monotonic() - t0
 
-    sidecar = {
+    # Provenance block: the single-run sidecar keeps its exact historical
+    # shape ("run"); a multi-run sidecar instead carries the runs list plus
+    # the A3.11-required per-run window counts.
+    if windows_per_run is None:
+        provenance: dict[str, object] = {"run": label}
+    else:
+        provenance = {"runs": run_names, "windows_per_run": windows_per_run}
+    sidecar: dict[str, object] = {
         "mode": args.mode,
-        "run": run.name,
+        **provenance,
         "epochs": epochs,
         "batch_size": args.batch_size,
         "lr": lr,

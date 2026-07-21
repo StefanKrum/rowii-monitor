@@ -399,3 +399,169 @@ def iter_target_windows(
     if return_indices:
         return indexed
     return (window for _, window in indexed)
+
+
+def _iter_windows_multi(
+    runs: list[Run],
+    cfg: Config,
+    *,
+    max_windows: int,
+    target_hz: int,
+    seed: int,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Shared implementation behind `iter_target_windows_multi`'s two
+    overloads: always yields `(run_name, window)` pairs in rotation order --
+    the public function strips the name off unless the caller asks for it
+    (`return_run_names=True`), mirroring `iter_target_windows`'s own
+    `_iter_indexed_windows` split.
+
+    A generator function on purpose: the `max_windows == 0` guard and the
+    per-run iterator construction only run on first `next()`, so a zero
+    budget constructs NO per-run iterator at all (and therefore -- via
+    `iter_target_windows`'s own truncate-before-touching-files contract --
+    opens no burst file).
+    """
+    if max_windows == 0:
+        return
+    rotation: list[tuple[str, Iterator[np.ndarray]]] = [
+        (
+            run.name,
+            iter_target_windows(
+                run, cfg, target_hz=target_hz, seed=seed, max_windows=max_windows
+            ),
+        )
+        for run in runs
+    ]
+    n_yielded = 0
+    while rotation:
+        survivors: list[tuple[str, Iterator[np.ndarray]]] = []
+        for name, windows in rotation:
+            window = next(windows, None)
+            if window is None:
+                # Exhausted -- this run drops out of the rotation for good
+                # (never re-probed: iter_target_windows yields each
+                # calibration-side window exactly once).
+                continue
+            survivors.append((name, windows))
+            yield name, window
+            n_yielded += 1
+            if n_yielded >= max_windows:
+                return
+        rotation = survivors
+
+
+@overload
+def iter_target_windows_multi(
+    runs: list[Run],
+    cfg: Config,
+    *,
+    max_windows: int,
+    target_hz: int,
+    seed: int = 7,
+    return_run_names: Literal[False] = False,
+) -> Iterator[np.ndarray]: ...
+
+
+@overload
+def iter_target_windows_multi(
+    runs: list[Run],
+    cfg: Config,
+    *,
+    max_windows: int,
+    target_hz: int,
+    seed: int = 7,
+    return_run_names: Literal[True],
+) -> Iterator[tuple[str, np.ndarray]]: ...
+
+
+def iter_target_windows_multi(
+    runs: list[Run],
+    cfg: Config,
+    *,
+    max_windows: int,
+    target_hz: int,
+    seed: int = 7,
+    return_run_names: bool = False,
+) -> Iterator[np.ndarray] | Iterator[tuple[str, np.ndarray]]:
+    """Round-robin multi-run pooling of `iter_target_windows` (Step-2
+    package-7 Task 8, spec D6 as amended by A3.11: `docs/superpowers/specs/
+    2026-07-18-step2-package7-robustness-design.md`): target-normal windows
+    drawn from EVERY run in *runs*, interleaved one window per run per
+    rotation pass (a, b, c, a, b, c, ...), stopping after *max_windows*
+    TOTAL windows.
+
+    Budget semantics (A3.11, binding): *max_windows* is the TOTAL pool
+    budget, NOT a per-run cap. Round-robin is what makes a total budget
+    meaningful for a pool: a sequential chain (all of run 1, then run 2,
+    ...) under the same total would exhaust the budget almost entirely on
+    run 1 whenever run 1 alone offers ~budget-many calibration windows
+    (every real pool day does at `scripts/adapt_beats.py`'s 8000-window
+    default) -- silently training a "multi-run" model on one run. The
+    rotation instead keeps per-run contributions within one window of each
+    other for as long as every run still has windows.
+
+    Exhausted runs drop out of the rotation: a run whose calibration side
+    is consumed stops occupying turns, and the remaining runs keep rotating
+    until the budget is met or every run is exhausted (yielding fewer than
+    *max_windows* windows in total is not an error here -- the CLI layer
+    decides whether an empty/short pool is fatal).
+
+    Leakage rule, inherited PER RUN (package-5 spec D3, restated by P7's
+    D6): each run's windows come from that run's OWN `iter_target_windows`
+    iterator and therefore from that run's OWN top-split calibration side
+    (`split_by_segments`, `_TOP_SPLIT_FRAC`, *seed*) -- no run's
+    scoring-side windows are ever touched. *seed* is forwarded UNCHANGED as
+    every run's split seed, with `iter_target_windows`'s own caveat
+    inherited: 7 (the default) is the canonical split seed every Step-2
+    sweep shares; pass a different value only for a deliberately different
+    split.
+
+    Determinism: the rotation adds no randomness of its own -- run order is
+    *runs*' own order, per-run window order is `iter_target_windows`'s
+    ascending-index order -- so the full yielded sequence is deterministic
+    for a fixed (*runs*, *cfg*, *seed*, *target_hz*, *max_windows*).
+
+    Each per-run iterator is constructed with `max_windows=max_windows` as
+    its OWN cap too: the rotation stops at the total budget first, so no
+    single run can ever be asked for more than *max_windows* windows --
+    the per-run truncation therefore changes nothing about which windows
+    the rotation can reach, while preserving the single-run path's property
+    that a small budget also bounds how many burst files get opened.
+
+    Args:
+        runs: Runs to pool, iterated in the given order (= the rotation
+            order). Callers are responsible for not repeating a run -- a
+            duplicate would occupy two rotation slots and double-weight
+            that run inside the shared budget.
+        cfg: Project configuration, forwarded to `iter_target_windows`.
+        max_windows: TOTAL window budget across all runs (see above). `0`
+            yields nothing and constructs no per-run iterator.
+        target_hz: Output sample rate/count per window, forwarded per run.
+        seed: Per-run SPLIT seed (see the leakage paragraph above).
+        return_run_names: If `True`, yield `(run_name, window)` pairs --
+            the intended way for a caller (`scripts/adapt_beats.py`'s
+            sidecar) to record the per-run window counts A3.11 requires,
+            without a second, parallel computation of the rotation.
+            `False` (default) yields bare arrays, matching
+            `iter_target_windows`'s own base contract.
+
+    Yields:
+        `(target_hz,)`-shaped `float32` arrays (or `(run_name, array)`
+        pairs when *return_run_names* is `True`), in rotation order.
+
+    Raises:
+        ValueError: if *max_windows* is negative (mirrors
+            `iter_target_windows`'s own guard; raised eagerly at call
+            time, before any iteration).
+    """
+    if max_windows < 0:
+        raise ValueError(
+            f"max_windows must be >= 0, got {max_windows!r} -- the multi-run TOTAL "
+            "budget has no 'unbounded' mode and a negative value is always a caller bug"
+        )
+    paired = _iter_windows_multi(
+        runs, cfg, max_windows=max_windows, target_hz=target_hz, seed=seed
+    )
+    if return_run_names:
+        return paired
+    return (window for _name, window in paired)
