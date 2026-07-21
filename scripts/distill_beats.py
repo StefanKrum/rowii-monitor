@@ -48,11 +48,18 @@ invocation to fix it).
 stream ALONE) are not guaranteed to be byte-identical -- the same physical
 reason `scripts/run_step2.py`'s own `--ensemble` guard
 (`_check_ensemble_grid_alignment`) tolerates a sub-window offset between a
-vibration-bearing sweep variant and `logmel`. `_check_cache_alignment` mirrors
-that guard here: `window_ns`/`n_windows` must match EXACTLY, and the two
-grids' `t0_ns` must agree within one window (a warning, not an abort, when
-nonzero) -- `SystemExit(2)` otherwise, since a coarser mismatch would make
-"window index i" refer to different physical time slots in the two caches.
+vibration-bearing sweep variant and `logmel`. The stream-set difference can
+also shift `t0_ns` by whole windows AND change `n_windows` (the 010726-pu
+real-data case: the turbine mic starts 41 ms after the generator mic, so the
+both-mics grid loses the one trailing window the mic-alone grid still fits).
+`_check_cache_alignment` therefore requires only `window_ns` to match EXACTLY,
+computes the integer window shift `round((student_t0 - teacher_t0) /
+window_ns)` pairing student window j with teacher window j + shift, restricts
+training to the student-index overlap range where a teacher partner exists
+(a warning names every dropped window count -- never a silent trim), and
+keeps the residual sub-window offset as a warning. `SystemExit(2)` remains
+for a `window_ns` mismatch or grids with NO overlapping windows at all --
+either signals a structural inconsistency distillation cannot paper over.
 
 ## Leakage rule (spec D3, reused here)
 
@@ -277,49 +284,90 @@ def _load_cache_or_exit(run: Run, variant: str, cfg: Config) -> PreparedRun:
     return cached
 
 
-def _check_cache_alignment(run_name: str, teacher: PreparedRun, student_input: PreparedRun) -> int:
+@dataclasses.dataclass(frozen=True)
+class _CacheAlignment:
+    """Window-index pairing between the teacher (`audio-beats`) and student
+    (`logmel`) caches of one run (module docstring's "Cache loading + grid
+    alignment" section): student window j pairs with teacher window
+    `j + shift`; only student indices in `[student_lo, student_hi)` have a
+    teacher partner; `t0_offset_ns` is the residual sub-window |t0| skew left
+    AFTER the integer shift (always `<= window_ns / 2`)."""
+
+    shift: int
+    student_lo: int
+    student_hi: int
+    t0_offset_ns: int
+
+    def teacher_indices(self, student_indices: np.ndarray) -> np.ndarray:
+        """The teacher-cache row for each student-cache window index -- callers
+        must only pass indices inside `[student_lo, student_hi)` (which
+        `_select_calibration_windows`' pairing mask already guarantees)."""
+        return student_indices + self.shift
+
+
+def _check_cache_alignment(
+    run_name: str, teacher: PreparedRun, student_input: PreparedRun
+) -> _CacheAlignment:
     """Grid-alignment guard between the *teacher* (`audio-beats`) and
     *student_input* (`logmel`) caches -- mirrors `scripts/run_step2.py`'s own
-    `--ensemble` guard (`_check_ensemble_grid_alignment`), adapted (module
+    `--ensemble` guard (`_check_ensemble_grid_alignment`), generalized (module
     docstring's "Cache loading + grid alignment" section has the full
-    rationale): the two caches must be STRUCTURALLY identical (`window_ns`,
-    `n_windows` -- exact) and t0-aligned WITHIN ONE WINDOW for a shared window
-    INDEX to refer to (near enough) the same physical time slot in both --
-    `_select_calibration_windows`/`main` index BOTH caches' feature matrices at
-    the SAME window indices.
+    rationale): the two grids must share `window_ns` EXACTLY, but the variants'
+    different stream sets legitimately shift `t0_ns` (sub-window DAQ skew AND
+    whole-window offsets) and change `n_windows` -- the returned
+    `_CacheAlignment` pairs student window j with teacher window `j + shift`
+    over the overlap range, and every window either side loses to the trim is
+    logged, never silently dropped.
 
     Returns:
-        The absolute t0 offset in ns between the two grids (`0` when exactly
-        aligned; always `< window_ns`).
+        The `_CacheAlignment` pairing the two grids.
 
     Raises:
-        SystemExit: code 2, with a clear message on stderr, if `window_ns`/
-            `n_windows` differ at all, or the t0 offset is one full window or
-            more -- either signals a structural inconsistency distillation
-            cannot safely paper over.
+        SystemExit: code 2, with a clear message on stderr, if `window_ns`
+            differs at all, or the two grids share NO overlapping window --
+            either signals a structural inconsistency distillation cannot
+            safely paper over.
     """
     tg, sg = teacher.grid, student_input.grid
-    if tg.window_ns != sg.window_ns or tg.n_windows != sg.n_windows:
+    if tg.window_ns != sg.window_ns:
         print(
             f"distill_beats: cache grid mismatch for run {run_name!r}: audio-beats "
             f"grid (t0_ns={tg.t0_ns}, window_ns={tg.window_ns}, n_windows={tg.n_windows}) "
             f"!= logmel grid (t0_ns={sg.t0_ns}, window_ns={sg.window_ns}, "
-            f"n_windows={sg.n_windows}) -- window_ns and n_windows must be identical for "
-            "distillation to index both caches at the same window positions",
+            f"n_windows={sg.n_windows}) -- window_ns must be identical for a window "
+            "index in one cache to map onto a window index in the other",
             file=sys.stderr,
         )
         raise SystemExit(2)
-    t0_offset_ns = abs(tg.t0_ns - sg.t0_ns)
-    if t0_offset_ns >= tg.window_ns:
+    # delta is a difference of nearby ns timestamps (int-exact, small), so the
+    # float division below is safely inside double precision.
+    delta_ns = sg.t0_ns - tg.t0_ns
+    shift = int(round(delta_ns / tg.window_ns))
+    t0_offset_ns = abs(delta_ns - shift * tg.window_ns)
+    student_lo = max(0, -shift)
+    student_hi = min(sg.n_windows, tg.n_windows - shift)
+    if student_hi <= student_lo:
         print(
-            f"distill_beats: audio-beats/logmel caches for run {run_name!r} are "
-            f"misaligned by >= one window: |t0 offset| = {t0_offset_ns / 1e6:.1f} ms >= "
-            f"window {tg.window_ns / 1e6:.0f} ms (audio-beats t0_ns={tg.t0_ns}, logmel "
-            f"t0_ns={sg.t0_ns}) -- window index i would refer to non-overlapping time "
-            "slots in the two caches",
+            f"distill_beats: audio-beats/logmel caches for run {run_name!r} share "
+            f"no overlapping window: audio-beats grid (t0_ns={tg.t0_ns}, "
+            f"n_windows={tg.n_windows}) vs logmel grid (t0_ns={sg.t0_ns}, "
+            f"n_windows={sg.n_windows}) at window_ns={tg.window_ns} -- nothing "
+            "to distill on",
             file=sys.stderr,
         )
         raise SystemExit(2)
+    n_paired = student_hi - student_lo
+    student_dropped = sg.n_windows - n_paired
+    teacher_dropped = tg.n_windows - n_paired
+    if student_dropped or teacher_dropped:
+        logger.warning(
+            "distill_beats: audio-beats/logmel grids for run %r differ in extent "
+            "(the variants' stream sets differ -- module docstring): pairing "
+            "student window j with teacher window j%+d over student range "
+            "[%d, %d), dropping %d unpaired logmel window(s) and %d unpaired "
+            "audio-beats window(s) from distillation",
+            run_name, shift, student_lo, student_hi, student_dropped, teacher_dropped,
+        )
     if t0_offset_ns > 0:
         logger.warning(
             "distill_beats: audio-beats/logmel caches for run %r are offset by %.1f ms "
@@ -329,7 +377,10 @@ def _check_cache_alignment(run_name: str, teacher: PreparedRun, student_input: P
             run_name, t0_offset_ns / 1e6, tg.window_ns / 1e6,
             (1.0 - t0_offset_ns / tg.window_ns) * 100.0,
         )
-    return t0_offset_ns
+    return _CacheAlignment(
+        shift=shift, student_lo=student_lo, student_hi=student_hi,
+        t0_offset_ns=t0_offset_ns,
+    )
 
 
 def _teacher_target_columns(
@@ -374,7 +425,11 @@ def _teacher_target_columns(
 
 
 def _select_calibration_windows(
-    student_input: PreparedRun, teacher: PreparedRun, *, seed: int
+    student_input: PreparedRun,
+    teacher: PreparedRun,
+    *,
+    seed: int,
+    alignment: _CacheAlignment,
 ) -> np.ndarray:
     """The leakage-safe calibration-side window indices to distill on (spec D3's
     rule, reused here per the module docstring's "Leakage rule" section):
@@ -385,23 +440,31 @@ def _select_calibration_windows(
     score against it.
 
     The valid mask fed to `split_by_segments` is the AND of both caches' own
-    `valid_mask` (a deliberate, documented extension beyond a literal "logmel's
-    own mask" reading): after `_check_cache_alignment` confirms the two grids
-    share `window_ns`/`n_windows` and are t0-aligned within one window, window
-    index i means (near enough) the same physical second in both -- but a
-    window can still be coverage-valid for `logmel`'s single primary-mic stream
-    while `audio-beats`' own validity (BOTH mic streams,
-    `rowii.pipeline._streams_for_variant("audio-beats")`) says otherwise (e.g.
-    the turbine mic missing coverage there). Training on such a window would
-    regress the student against a teacher target that is undefined (NaN) at
-    that index -- ANDing the masks keeps every drawn window's teacher target
-    finite, without weakening the leakage rule itself (segment ids AND the
+    `valid_mask` under *alignment*'s pairing (a deliberate, documented
+    extension beyond a literal "logmel's own mask" reading): after
+    `_check_cache_alignment` establishes which teacher window (`j + shift`)
+    each student window j refers to, a window can still be coverage-valid for
+    `logmel`'s single primary-mic stream while `audio-beats`' own validity
+    (BOTH mic streams, `rowii.pipeline._streams_for_variant("audio-beats")`)
+    says otherwise (e.g. the turbine mic missing coverage there), and a
+    student window OUTSIDE `[student_lo, student_hi)` has no teacher partner
+    at all. Training on such a window would regress the student against a
+    teacher target that is undefined (NaN) or nonexistent at that index --
+    the combined mask keeps every drawn window's teacher target finite and
+    real, without weakening the leakage rule itself (segment ids AND the
     scoring-side exclusion still come from the logmel cache alone, per D3).
 
     Returns:
-        `(N,)` int64 ascending window indices, valid in BOTH caches.
+        `(N,)` int64 ascending STUDENT-cache window indices, valid in both
+        caches and inside *alignment*'s paired range -- the matching teacher
+        rows are `alignment.teacher_indices(result)`.
     """
-    combined_valid = student_input.valid_mask & teacher.valid_mask
+    lo, hi = alignment.student_lo, alignment.student_hi
+    teacher_valid_at_student = np.zeros(student_input.grid.n_windows, dtype=bool)
+    teacher_valid_at_student[lo:hi] = teacher.valid_mask[
+        lo + alignment.shift : hi + alignment.shift
+    ]
+    combined_valid = student_input.valid_mask & teacher_valid_at_student
     split = split_by_segments(student_input.segment_ids, combined_valid, _CALIBRATION_FRAC, seed)
     return split.calibration_windows
 
@@ -621,15 +684,19 @@ def main(argv: list[str] | None = None) -> int:
         for run in pool_runs:
             teacher = _load_cache_or_exit(run, _TEACHER_VARIANT, cfg)
             student_input = _load_cache_or_exit(run, _STUDENT_INPUT_VARIANT, cfg)
-            _check_cache_alignment(run.name, teacher, student_input)
+            alignment = _check_cache_alignment(run.name, teacher, student_input)
             calibration_windows = _select_calibration_windows(
-                student_input, teacher, seed=args.seed
+                student_input, teacher, seed=args.seed, alignment=alignment
             )
             teacher_cols = _teacher_target_columns(
                 teacher, primary_stream, expected_dim=student_cfg.out_dim
             )
             student_blocks.append(student_input.features[calibration_windows])
-            teacher_blocks.append(teacher.features[calibration_windows][:, teacher_cols])
+            teacher_blocks.append(
+                teacher.features[alignment.teacher_indices(calibration_windows)][
+                    :, teacher_cols
+                ]
+            )
             # Zero-contribution runs stay visible in the counts (A4.1's
             # coverage-visibility principle: never silently absent).
             calibration_windows_per_run[run.name] = int(calibration_windows.size)
@@ -660,9 +727,11 @@ def main(argv: list[str] | None = None) -> int:
         teacher = _load_cache_or_exit(run, _TEACHER_VARIANT, cfg)
         student_input = _load_cache_or_exit(run, _STUDENT_INPUT_VARIANT, cfg)
 
-        _check_cache_alignment(run.name, teacher, student_input)
+        alignment = _check_cache_alignment(run.name, teacher, student_input)
 
-        calibration_windows = _select_calibration_windows(student_input, teacher, seed=args.seed)
+        calibration_windows = _select_calibration_windows(
+            student_input, teacher, seed=args.seed, alignment=alignment
+        )
         if calibration_windows.size == 0:
             print(
                 f"distill_beats: no calibration-side window(s) for run {run.name!r} -- "
@@ -675,7 +744,9 @@ def main(argv: list[str] | None = None) -> int:
             teacher, primary_stream, expected_dim=student_cfg.out_dim
         )
         student_inputs = student_input.features[calibration_windows]
-        teacher_targets = teacher.features[calibration_windows][:, teacher_cols]
+        teacher_targets = teacher.features[alignment.teacher_indices(calibration_windows)][
+            :, teacher_cols
+        ]
         label = run.name
         logger.info(
             "distill_beats: %d calibration-side window(s) for run %s (of %d/%d valid); "

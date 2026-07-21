@@ -380,34 +380,53 @@ def _fake_index(runs: list[Run]) -> RecordingIndex:
 
 
 class TestCheckCacheAlignment:
-    def test_exact_match_returns_zero_offset(self):
+    def test_exact_match_is_identity_alignment(self):
         teacher = _prepared_with_grid(_grid())
         student_input = _prepared_with_grid(_grid())
-        assert distill_beats._check_cache_alignment("run", teacher, student_input) == 0
+        alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        assert (alignment.shift, alignment.student_lo, alignment.student_hi) == (0, 0, 10)
+        assert alignment.t0_offset_ns == 0
 
     def test_sub_window_offset_tolerated_with_warning(self, caplog):
         teacher = _prepared_with_grid(_grid(t0_ns=26_000_000))
         student_input = _prepared_with_grid(_grid(t0_ns=0))
         with caplog.at_level(logging.WARNING):
-            offset = distill_beats._check_cache_alignment("run", teacher, student_input)
-        assert offset == 26_000_000
+            alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        assert alignment.t0_offset_ns == 26_000_000
+        assert (alignment.shift, alignment.student_lo, alignment.student_hi) == (0, 0, 10)
         assert any("offset" in r.message.lower() for r in caplog.records)
 
-    def test_one_window_offset_exits_2(self, capsys):
+    def test_whole_window_offset_becomes_integer_shift(self, caplog):
+        # Teacher grid starts exactly one window later: student j pairs with
+        # teacher j-1 over the overlap; the first student window has no partner.
         teacher = _prepared_with_grid(_grid(t0_ns=1_000_000_000))
         student_input = _prepared_with_grid(_grid(t0_ns=0))
-        with pytest.raises(SystemExit) as exc_info:
-            distill_beats._check_cache_alignment("run", teacher, student_input)
-        assert exc_info.value.code == 2
-        assert "misaligned by >= one window" in capsys.readouterr().err
+        with caplog.at_level(logging.WARNING):
+            alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        assert (alignment.shift, alignment.student_lo, alignment.student_hi) == (-1, 1, 10)
+        assert alignment.t0_offset_ns == 0
+        assert any("dropp" in r.message.lower() for r in caplog.records)
 
-    def test_structural_n_windows_mismatch_exits_2(self, capsys):
-        teacher = _prepared_with_grid(_grid(n_windows=10))
-        student_input = _prepared_with_grid(_grid(n_windows=9))
+    def test_n_windows_mismatch_trims_to_overlap(self, caplog):
+        # The 010726-pu real-data case (P7 execution B): logmel's primary-mic-only
+        # grid starts 41 ms earlier and fits one MORE window than audio-beats'
+        # both-mics grid -- pair i<->i over the teacher's range, drop the
+        # student's extra final window, keep the sub-window residual warning.
+        teacher = _prepared_with_grid(_grid(t0_ns=41_000_000, n_windows=10))
+        student_input = _prepared_with_grid(_grid(t0_ns=0, n_windows=11))
+        with caplog.at_level(logging.WARNING):
+            alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        assert (alignment.shift, alignment.student_lo, alignment.student_hi) == (0, 0, 10)
+        assert alignment.t0_offset_ns == 41_000_000
+        assert any("dropp" in r.message.lower() for r in caplog.records)
+
+    def test_disjoint_grids_exit_2(self, capsys):
+        teacher = _prepared_with_grid(_grid(t0_ns=20_000_000_000, n_windows=10))
+        student_input = _prepared_with_grid(_grid(t0_ns=0, n_windows=10))
         with pytest.raises(SystemExit) as exc_info:
             distill_beats._check_cache_alignment("run", teacher, student_input)
         assert exc_info.value.code == 2
-        assert "grid mismatch" in capsys.readouterr().err
+        assert "no overlapping window" in capsys.readouterr().err
 
     def test_structural_window_ns_mismatch_exits_2(self, capsys):
         teacher = _prepared_with_grid(_grid(window_ns=1_000_000_000))
@@ -416,6 +435,15 @@ class TestCheckCacheAlignment:
             distill_beats._check_cache_alignment("run", teacher, student_input)
         assert exc_info.value.code == 2
         assert "grid mismatch" in capsys.readouterr().err
+
+    def test_teacher_indices_applies_shift(self):
+        alignment = distill_beats._CacheAlignment(
+            shift=-1, student_lo=1, student_hi=10, t0_offset_ns=0
+        )
+        student_idx = np.array([1, 4, 9], dtype=np.int64)
+        np.testing.assert_array_equal(
+            alignment.teacher_indices(student_idx), np.array([0, 3, 8])
+        )
 
 
 # --- 5a2. _teacher_target_columns (primary-mic slice) ------------------------
@@ -493,7 +521,10 @@ class TestSelectCalibrationWindows:
 
         monkeypatch.setattr(distill_beats, "split_by_segments", fake_split_by_segments)
 
-        result = distill_beats._select_calibration_windows(student_input, teacher, seed=7)
+        alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        result = distill_beats._select_calibration_windows(
+            student_input, teacher, seed=7, alignment=alignment
+        )
 
         np.testing.assert_array_equal(result, known_split.calibration_windows)
         assert not (set(result.tolist()) & set(known_split.scoring_windows.tolist())), (
@@ -522,7 +553,10 @@ class TestSelectCalibrationWindows:
 
         monkeypatch.setattr(distill_beats, "split_by_segments", fake_split_by_segments)
 
-        distill_beats._select_calibration_windows(prepared, prepared, seed=99)
+        alignment = distill_beats._check_cache_alignment("run", prepared, prepared)
+        distill_beats._select_calibration_windows(
+            prepared, prepared, seed=99, alignment=alignment
+        )
 
         assert calls == [(0.5, 99)]
 
@@ -553,9 +587,83 @@ class TestSelectCalibrationWindows:
 
         monkeypatch.setattr(distill_beats, "split_by_segments", fake_split_by_segments)
 
-        distill_beats._select_calibration_windows(student_input, teacher, seed=7)
+        alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        distill_beats._select_calibration_windows(
+            student_input, teacher, seed=7, alignment=alignment
+        )
 
         np.testing.assert_array_equal(seen_masks[0], np.array([True, False, True, True]))
+
+    def test_alignment_trim_masks_unpaired_student_windows(self, monkeypatch):
+        # Student cache has one MORE window than the teacher (the 010726-pu
+        # case): the unpaired final student window must reach split_by_segments
+        # as invalid even though both caches' own masks are all-True there.
+        student_input = PreparedRun(
+            features=np.zeros((5, 1)), grid=_grid(n_windows=5),
+            valid_mask=np.ones(5, dtype=bool), feature_names=["f0"],
+            segment_ids=np.array([0, 0, 1, 1, 1], dtype=np.int64),
+        )
+        teacher = PreparedRun(
+            features=np.zeros((4, 1)), grid=_grid(n_windows=4),
+            valid_mask=np.ones(4, dtype=bool), feature_names=["f0"],
+            segment_ids=np.array([0, 0, 1, 1], dtype=np.int64),
+        )
+        seen_masks: list[np.ndarray] = []
+
+        def fake_split_by_segments(segment_ids, valid_mask, calibration_frac, seed):
+            seen_masks.append(valid_mask.copy())
+            return SegmentSplit(
+                calibration_windows=np.array([0], dtype=np.int64),
+                scoring_windows=np.array([2], dtype=np.int64),
+            )
+
+        monkeypatch.setattr(distill_beats, "split_by_segments", fake_split_by_segments)
+
+        alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        distill_beats._select_calibration_windows(
+            student_input, teacher, seed=7, alignment=alignment
+        )
+
+        np.testing.assert_array_equal(
+            seen_masks[0], np.array([True, True, True, True, False])
+        )
+
+    def test_alignment_shift_reads_teacher_mask_at_shifted_index(self, monkeypatch):
+        # shift=-1 (teacher grid one window later): student window j must AND
+        # against teacher.valid_mask[j-1], and the unpaired student window 0
+        # must come out invalid.
+        student_input = PreparedRun(
+            features=np.zeros((4, 1)), grid=_grid(t0_ns=0, n_windows=4),
+            valid_mask=np.ones(4, dtype=bool), feature_names=["f0"],
+            segment_ids=np.array([0, 0, 1, 1], dtype=np.int64),
+        )
+        teacher = PreparedRun(
+            features=np.zeros((4, 1)), grid=_grid(t0_ns=1_000_000_000, n_windows=4),
+            valid_mask=np.array([True, False, True, True]), feature_names=["f0"],
+            segment_ids=np.array([0, 0, 1, 1], dtype=np.int64),
+        )
+        seen_masks: list[np.ndarray] = []
+
+        def fake_split_by_segments(segment_ids, valid_mask, calibration_frac, seed):
+            seen_masks.append(valid_mask.copy())
+            return SegmentSplit(
+                calibration_windows=np.array([2], dtype=np.int64),
+                scoring_windows=np.array([3], dtype=np.int64),
+            )
+
+        monkeypatch.setattr(distill_beats, "split_by_segments", fake_split_by_segments)
+
+        alignment = distill_beats._check_cache_alignment("run", teacher, student_input)
+        assert (alignment.shift, alignment.student_lo, alignment.student_hi) == (-1, 1, 4)
+        distill_beats._select_calibration_windows(
+            student_input, teacher, seed=7, alignment=alignment
+        )
+
+        # Student j=1 -> teacher 0 (True), j=2 -> teacher 1 (False), j=3 -> teacher 2
+        # (True); student 0 has no teacher partner.
+        np.testing.assert_array_equal(
+            seen_masks[0], np.array([False, True, False, True])
+        )
 
 
 # --- 5c. _load_cache_or_exit (public cache-load path + fingerprint check) --
@@ -992,7 +1100,10 @@ def test_multi_run_stacks_calibration_rows_across_runs_in_runs_order(tmp_path, m
     for run in (run1, run2):
         teacher = distill_beats._load_cache_or_exit(run, "audio-beats", cfg)
         student_input = distill_beats._load_cache_or_exit(run, "logmel", cfg)
-        calib = distill_beats._select_calibration_windows(student_input, teacher, seed=7)
+        alignment = distill_beats._check_cache_alignment(run.name, teacher, student_input)
+        calib = distill_beats._select_calibration_windows(
+            student_input, teacher, seed=7, alignment=alignment
+        )
         assert calib.size > 0, "fixture sanity: every run must contribute rows"
         expected_x_blocks.append(student_input.features[calib])
         # Primary-mic slice hand-pinned from the fixture's feature-name order
@@ -1014,20 +1125,21 @@ def test_multi_run_stacks_calibration_rows_across_runs_in_runs_order(tmp_path, m
     assert sidecar["n_calibration_windows"] == sum(expected_counts.values())
 
 
-def test_multi_run_misaligned_second_run_exits_2_before_training(
+def test_multi_run_disjoint_second_run_exits_2_before_training(
     tmp_path, monkeypatch, capsys
 ):
     pytest.importorskip("torch")
     cfg = _distill_cfg(tmp_path / "results")
     run1 = _write_run_with_cache_pair(tmp_path, cfg, "align-run-1", n=8, seed=31)
-    # run2's turbine mic starts 1 s after its generator mic, so the freshly
-    # recomputed audio-beats grid (both-mic intersection) starts one FULL
-    # window after the logmel grid (primary mic alone) -- exactly the
-    # >= one-window misalignment _check_cache_alignment refuses (see
-    # _write_run_with_cache_pair's docstring for why the misalignment must
-    # live in the burst files, not the cache npz).
+    # run2's turbine mic starts a full 8 windows (= n) after its generator mic,
+    # so the freshly recomputed audio-beats grid (both-mic intersection) shares
+    # NO window with the logmel grid (primary mic alone) -- whole-window shifts
+    # within the overlap are now paired by _CacheAlignment, but a fully
+    # disjoint pair remains the hard refusal (see _write_run_with_cache_pair's
+    # docstring for why the misalignment must live in the burst files, not the
+    # cache npz).
     run2 = _write_run_with_cache_pair(
-        tmp_path, cfg, "align-run-2", n=8, seed=32, tur_shift_s=1.0
+        tmp_path, cfg, "align-run-2", n=8, seed=32, tur_shift_s=8.0
     )
     _multi_run_env(monkeypatch, tmp_path, cfg, [run1, run2])
     captured = _capture_train_student(monkeypatch)
@@ -1038,7 +1150,7 @@ def test_multi_run_misaligned_second_run_exits_2_before_training(
         )
 
     assert exc_info.value.code == 2
-    assert "misaligned by >= one window" in capsys.readouterr().err
+    assert "no overlapping window" in capsys.readouterr().err
     assert captured == [], "the per-run alignment guard must fire BEFORE any training"
 
 
