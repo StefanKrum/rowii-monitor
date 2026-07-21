@@ -1471,13 +1471,13 @@ information advantage, stated as such, not a method win. Mean ARI:
 
 | representation | bank gaussian | bank knn | bank gmm | P7 pooled clusterer |
 |---|---|---|---|---|
-| audio-beats | 0.471 | **0.883** | 0.755 | 0.606 |
-| vibration | **0.827** | 0.688 | 0.644 | 0.614 |
-| fusion | 0.454 | 0.408 | 0.454 | 0.361 |
+| audio-beats | 0.476 | **0.882** | 0.746 | 0.606 |
+| vibration | **0.824** | 0.686 | 0.641 | 0.614 |
+| fusion | 0.454 | 0.397 | 0.454 | 0.361 |
 
 Where it matters most — the cross-config era-A days the clusterer failed on —
 the bank holds: 250526-tu best-family ARI 0.83–0.98 vs the clusterer's
-0.05–0.06; 250526-pu-morning 1.00 vs 0.00 (fusion) / 1.00 vs 1.00 (vibration).
+0.04–0.06; 250526-pu-morning 1.00 vs 0.00 (fusion) / 1.00 vs 1.00 (vibration).
 `--smooth` (duration-filter only) adds small consistent gains (up to +0.07).
 The chain probe converts label quality into alarm quality: bank-gaussian
 per-mode references drop the frozen pooled FAR on B1->290626-tu to **0.011 vs
@@ -1511,7 +1511,7 @@ advantage all along):
   doesn't, independently reproduced in our pipeline. On the 080726 strike day
   the same raw-frozen vibration snapshot detects **11/13 pump-operation
   strikes at window-FAR 0.041, zero-shot across eras** (audio frozen is
-  trivially broken there, FAR 0.69–1.0; level-recal wrecks the vibration arm
+  trivially broken there, FAR 0.68–1.0; level-recal wrecks the vibration arm
   to FAR 0.513; the recalibrate+level-recal control is redundant as
   predicted, 0.92 TPR @ 0.063). Standstill stays out of reach for an
   operation-pool frozen vibration snapshot (TPR 0.08) — the pool contains
