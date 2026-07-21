@@ -8,8 +8,13 @@ state timeline plus per-window conformal alarm verdicts -- the design chapter's
 model the spec commits to; no streaming, no retraining, no refit of anything).
 
 Pipeline: `prepare_run` (feature cache honored unless `--no-cache`) -> geometry
-guard (the prepared run's `feature_names` must EQUAL the snapshot's, else exit 2
-naming the variant and both widths -- a snapshot fitted on `fusion` must never
+guard (the snapshot's `feature_names` are the SCORING CONTRACT: the prepared run
+must contain every snapshot column -- else exit 2 naming the variant, both
+widths, and the missing columns -- and is projected, by name, onto exactly those
+columns in snapshot order; extra prepared columns, e.g. a channel dead at fit
+time but live on the monitored day (the 080726 TurbineVib-ch0 case), are dropped
+with a WARNING naming each one -- the trained model never saw them, so they must
+never influence scoring; a snapshot fitted on `fusion` must likewise never
 silently score some other variant's features) -> `to_detector(snapshot).apply` on
 the valid windows (fit-day standardization + fit-day HMM Viterbi decode, scattered
 back to the full grid with `-1` on invalid windows) -> per-state scoring against
@@ -103,6 +108,7 @@ rule); `src/rowii/` modules are imported normally.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import math
 import sys
@@ -1118,16 +1124,42 @@ def main(argv: list[str] | None = None) -> int:
     prepared = prepare_run(run, snapshot.variant, cfg, use_cache=not args.no_cache)
 
     if list(prepared.feature_names) != list(snapshot.feature_names):
-        print(
-            f"monitor: feature geometry mismatch for run {args.run!r}: the snapshot "
-            f"was fitted on variant {snapshot.variant!r} with "
-            f"{len(snapshot.feature_names)} feature column(s), but the prepared run "
-            f"has {len(prepared.feature_names)} -- refusing to score "
-            f"(snapshot columns: {snapshot.feature_names}; prepared columns: "
-            f"{prepared.feature_names})",
-            file=sys.stderr,
+        # The snapshot's trained columns are the scoring contract (module
+        # docstring): project the prepared run onto them BY NAME, refuse only
+        # when a trained column is absent from the prepared run.
+        prepared_pos = {name: i for i, name in enumerate(prepared.feature_names)}
+        missing = [name for name in snapshot.feature_names if name not in prepared_pos]
+        if missing:
+            print(
+                f"monitor: feature geometry mismatch for run {args.run!r}: the "
+                f"snapshot was fitted on variant {snapshot.variant!r} with "
+                f"{len(snapshot.feature_names)} feature column(s), but the prepared "
+                f"run ({len(prepared.feature_names)} column(s)) is missing "
+                f"{len(missing)} of them -- refusing to score (missing columns: "
+                f"{missing})",
+                file=sys.stderr,
+            )
+            return 2
+        snapshot_names = set(snapshot.feature_names)
+        extras = [name for name in prepared.feature_names if name not in snapshot_names]
+        logger.warning(
+            "monitor: projecting run %r onto the snapshot's %d-column feature "
+            "contract -- dropping %d prepared column(s) the %r snapshot never saw "
+            "at fit time (channel-availability drift; a trained model cannot score "
+            "features it was not fitted on): %s. valid_mask is kept from the full "
+            "prepared run (conservative: a window invalid only because of a "
+            "dropped extra column stays excluded).",
+            args.run, len(snapshot.feature_names), len(extras), snapshot.variant,
+            extras,
         )
-        return 2
+        column_index = np.array(
+            [prepared_pos[name] for name in snapshot.feature_names], dtype=np.intp
+        )
+        prepared = dataclasses.replace(
+            prepared,
+            features=prepared.features[:, column_index],
+            feature_names=list(snapshot.feature_names),
+        )
 
     if not bool(prepared.valid_mask.any()):
         # T4-review hardening: an all-invalid run would otherwise surface as a raw
