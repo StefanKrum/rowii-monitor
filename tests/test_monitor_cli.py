@@ -814,6 +814,170 @@ def test_help_documents_session_norm(capsys: pytest.CaptureFixture[str]) -> None
 
 
 # ---------------------------------------------------------------------------
+# T7: --level-recal (package-8 Task 7, spec D2/A1.4/A1.10/A1.11) -- refusal on
+#     medians-less snapshots, mutual exclusion with --session-norm, applying
+#     AFTER the snapshot-contract projection with a shape-preserving recentre
+# ---------------------------------------------------------------------------
+
+_LEVEL_FEATURE_NAMES = ["f0_log_rms", "f1_octave_125"]
+"""Level-bearing column names (both match `rowii.anomaly.levelrecal`'s
+`_LEVEL_SUBSTRINGS`) -- the T7 fixture needs a snapshot whose feature_names
+actually carry a level column, unlike the module's default `f0`/`f1` names."""
+
+
+def _level_prepared(t0_ns: int, seed: int) -> PreparedRun:
+    """`_two_state_prepared`'s exact blob/segment layout (module docstring sizing
+    note applies unchanged), with LEVEL-bearing feature names (T7 fixture)."""
+    return replace(_two_state_prepared(t0_ns, seed), feature_names=list(_LEVEL_FEATURE_NAMES))
+
+
+def _level_snapshot(
+    tmp_path: Path, *, medians: dict[str, float] | None
+) -> tuple[Path, MonitorSnapshot]:
+    """A REAL fit_snapshot product optionally upgraded with level-recal reference
+    medians (`level_recal_medians`, D2/A1.4/A1.10) -- `medians=None` reproduces the
+    v1/no-recal refusal fixture; a concrete dict reproduces a `run_step2
+    --level-recal --save-snapshot` artifact (`_stats_snapshot`'s own device,
+    injecting the field `fit_snapshot` itself never sets)."""
+    fit_prepared = _level_prepared(_FIT_T0_NS, seed=0)
+    snapshot, _ = fit_snapshot(
+        fit_prepared, _cfg(tmp_path / "unused"), SweepConfig(),
+        variant="fusion", fit_run=_FIT_RUN,
+    )
+    assert len(snapshot.thresholds) == 2
+    if medians is not None:
+        snapshot = replace(snapshot, level_recal_medians=medians)
+    path = tmp_path / "snapshot_level_recal.npz"
+    save_snapshot(path, snapshot)
+    return path, snapshot
+
+
+def test_monitor_level_recal_refuses_snapshot_without_medians(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A1.10: a snapshot with `level_recal_medians=None` (a v1 file, or any
+    snapshot fitted without --level-recal) must be REFUSED under --level-recal
+    with exit 2 -- never a silent raw-space fallback (mirrors --session-norm's
+    stats-less refusal, `test_session_norm_refuses_snapshot_without_stats`)."""
+    import monitor
+
+    snapshot_path, _snapshot = _level_snapshot(tmp_path, medians=None)
+    mon_prepared = _level_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out-refused"
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--level-recal", "--out", str(out_dir),
+        ]
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--level-recal" in err
+    assert not out_dir.exists()  # refused BEFORE writing anything
+
+
+def test_monitor_level_recal_and_session_norm_mutually_exclusive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import monitor
+
+    medians = {name: 0.0 for name in _LEVEL_FEATURE_NAMES}
+    snapshot_path, _snapshot = _level_snapshot(tmp_path, medians=medians)
+    mon_prepared = _level_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--level-recal", "--session-norm",
+        ]
+    )
+    assert exit_code == 2
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_monitor_level_recal_applies_after_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A1.11: --level-recal computes its run-side median AFTER the snapshot-
+    contract projection, name-keyed against the PROJECTED feature_names -- an
+    extra prepared column beyond the snapshot's own 2 must be dropped BEFORE the
+    recal runs (else column_medians/apply_level_recal would see the wrong width
+    and the run would wrongly exit 2). The recentring property mirrors D3's own
+    shift-removal test: additively shifting the monitored run's LEVEL columns and
+    recentring with --level-recal reproduces the UNSHIFTED run's alarm set."""
+    import monitor
+
+    anchor = {name: 0.0 for name in _LEVEL_FEATURE_NAMES}
+    snapshot_path, _snapshot = _level_snapshot(tmp_path, medians=anchor)
+
+    base = _level_prepared(_MON_T0_NS, seed=1)
+    out_base = tmp_path / "out-lrecal-base"
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", base)
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--level-recal", "--out", str(out_base),
+        ]
+    ) == 0
+
+    rng = np.random.default_rng(123)
+    extended = replace(
+        base,
+        # An EXTRA prepared column beyond the snapshot's 2 -- must be projected
+        # away BEFORE level-recal ever sees it (A1.11); plus a +5.0 shift on
+        # ONLY the two level columns (never touching the extra column).
+        features=np.hstack(
+            [base.features + 5.0, rng.normal(5.0, 1.0, (len(base.features), 1))]
+        ),
+        feature_names=[*base.feature_names, "extra_shape_col"],
+    )
+    out_shifted = tmp_path / "out-lrecal-shifted"
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", extended)
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--level-recal", "--out", str(out_shifted),
+        ]
+    )
+    assert exit_code == 0
+
+    alarms_base = pd.read_parquet(out_base / "alarms.parquet", engine="pyarrow")
+    alarms_shift = pd.read_parquet(out_shifted / "alarms.parquet", engine="pyarrow")
+    assert list(alarms_shift.columns) == _ALARM_COLUMNS  # schema unchanged
+
+    # Shift removed + extra column safely projected away: identical verdicts.
+    np.testing.assert_array_equal(
+        alarms_shift["state"].to_numpy(), alarms_base["state"].to_numpy()
+    )
+    np.testing.assert_array_equal(
+        alarms_shift["role"].to_numpy(), alarms_base["role"].to_numpy()
+    )
+    np.testing.assert_array_equal(
+        alarms_shift["alarm"].to_numpy(), alarms_base["alarm"].to_numpy()
+    )
+    np.testing.assert_allclose(
+        alarms_shift["score"].to_numpy(), alarms_base["score"].to_numpy(),
+        rtol=1e-9, atol=1e-9,
+    )
+
+    notes = (out_shifted / "monitor_notes.md").read_text()
+    assert "level" in notes.lower()
+    assert "recal" in notes.lower()
+
+
+def test_help_documents_level_recal(capsys: pytest.CaptureFixture[str]) -> None:
+    import monitor
+
+    with pytest.raises(SystemExit) as exc_info:
+        monitor.main(["--help"])
+    assert exc_info.value.code == 0
+    assert "--level-recal" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # T5: --thresholds rolling (package-7 Task 5, spec D7 as amended by A3.2) --
 #     per-window trailing thresholds with conformal-floor fallback, the
 #     threshold_source column, coverage stats, and the all-invalid guard
