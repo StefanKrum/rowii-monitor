@@ -61,22 +61,39 @@ style), and `digest` only reads THIS module's own output tree:
    feature-stability/era-step's ACROSS-day comparison). An independent,
    per-day replication of the partner's reported within-day mode
    separability (Rodrigues & Zhang, 2026), computed only from our own
-   caches.
+   caches. The figure's own title names the *variant* it was rendered from
+   (T9-review item 1, interpretation honesty), and its x-axis units follow
+   `_feature_unit_label`: genuine log10 for a raw-scale variant, `fusion`'s
+   own per-run z-score for `fusion` (A1.1 -- `fuse()`'s columns keep their
+   `_band_`/`_octave_` name tokens even though the VALUES are z-scored, so
+   the check is on *variant*, not column names), or that model's own
+   embedding units for an embedding variant -- never a blanket "log10"
+   claim regardless of variant.
 5. `tonal-table` (Task 9) -- per (run, GT mode, physical stream) the three
    `rowii.signals.features.MACHINE_HZ` machine-tone band energies (shaft,
-   blade-pass, guide-vane-pass) contrasted against their own NEIGHBORING
-   octave column (nearest center by Hz, among the octave centers actually
-   present for that stream) -- `_tonal_contrast = band_energy -
-   octave_floor`, an SNR-like contrast defined ENTIRELY from our own
-   band/octave features, explicitly NOT the partner's exact metric (A1.8) --
-   it only shares the analysis TYPE (a machine-fingerprint table) with
-   Rodrigues & Zhang (2026). Own stored units throughout: log10 for the
-   audio/vibration variants (a genuine, if uncalibrated, level-ratio
-   reading); for `fusion`, whose `fuse()` step per-run z-scores every
-   column before concatenation (A1.1), the same subtraction is a
-   difference of two INDEPENDENTLY-scaled z-scores, not a log10-domain
-   ratio -- still an internally consistent RELATIVE reading, but not even
-   loosely decibel-equivalent the way the audio/vibration case is. This
+   blade-pass, guide-vane-pass) contrasted against their own NEAREST
+   TONE-FREE OCTAVE FLOOR (`_nearest_octave_hz`, T9-review item 2: the
+   octave center nearest by Hz among those actually present for that
+   stream, EXCLUDING any candidate whose own `[center/sqrt(2),
+   center*sqrt(2)]` span already contains the tone -- a "floor" that
+   itself contains the tone would leak the tone's own energy into its own
+   background reading, defeating the contrast's purpose; if every
+   candidate's span contains the tone, all re-enter the pool with a
+   logged warning rather than the tone silently dropping out) --
+   `_tonal_contrast = band_energy - octave_floor`, an SNR-like contrast
+   defined ENTIRELY from our own band/octave features, explicitly NOT the
+   partner's exact metric (A1.8) -- it only shares the analysis TYPE (a
+   machine-fingerprint table) with Rodrigues & Zhang (2026). Own stored
+   units throughout: log10 for the audio/vibration variants (a genuine, if
+   uncalibrated, level-ratio reading); for `fusion`, whose `fuse()` step
+   per-run z-scores every column before concatenation (A1.1), the same
+   subtraction is a difference of two INDEPENDENTLY-scaled z-scores, not a
+   log10-domain ratio -- still an internally consistent RELATIVE reading,
+   but not even loosely decibel-equivalent the way the audio/vibration
+   case is; an embedding variant reads in that model's own embedding
+   units instead (T9-review item 1). Both non-log10 cases are named in the
+   figure's own title/colorbar (`_feature_unit_label`) and repeated once
+   in the digest, never silently left as an implied log10 claim. This
    module does not exclude fusion here (unlike D2's corrective
    `--level-recal`, `tonal-table` is a descriptive figure, never an offset
    applied to downstream detection) -- the caveat is real and stated once,
@@ -129,6 +146,7 @@ from pathlib import Path  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
@@ -476,6 +494,32 @@ def _tonal_contrast(band_energy: float, octave_floor: float) -> float:
     only the ANALYSIS TYPE (contrasting a narrowband tone against a nearby
     broadband floor) is shared."""
     return band_energy - octave_floor
+
+
+def _feature_unit_label(variant: str, feature_names: Sequence[str]) -> str:
+    """The units phrase for *variant*'s own stored feature values (T9-review
+    item 1, LOW-MED interpretation honesty): shared by `mode-signatures`/
+    `tonal-table` (their title/axis/colorbar text) and the digest's matching
+    caveat sentences, so one variant reads identically everywhere this
+    module talks about its units.
+
+    `fusion` is checked FIRST, by *variant* NAME rather than column content:
+    `fuse()` z-scores every stream per run before concatenating
+    (`rowii.signals.features.fuse`, A1.1), but its level-named columns keep
+    their `_band_`/`_octave_` name tokens -- a content-only check would
+    misclassify them as genuine log10 columns. An embedding variant
+    (`rowii.anomaly.levelrecal.level_columns` returns the empty set for
+    *feature_names*, e.g. `audio-beats`/`audio-tfc`/`logmel`) is in that
+    model's own embedding units, also never log10. Every other (raw-scale)
+    variant keeps the genuine log10 reading."""
+    if variant == "fusion":
+        return (
+            "per-run z-score (dimensionless) -- fuse()'s own per-run "
+            "standardization, A1.1"
+        )
+    if not level_columns(list(feature_names)):
+        return "embedding units (model-specific)"
+    return "log10, own stored units -- not a calibrated acoustic-dB conversion"
 
 
 def _mode_profile(
@@ -1234,15 +1278,22 @@ def _band_octave_columns(feature_names: list[str]) -> list[int]:
 
 
 def _plot_mode_signatures(
-    table: pd.DataFrame, out_path: Path, top_n: int = _MODE_SIGNATURES_TOP_N_DEFAULT
-) -> None:
+    table: pd.DataFrame,
+    out_path: Path,
+    variant: str,
+    feature_names: Sequence[str],
+    top_n: int = _MODE_SIGNATURES_TOP_N_DEFAULT,
+) -> Axes:
     """Dot-interval (errorbar) figure, ONE day's own `_mode_profile` table --
     one row per (feature, mode), grouped by feature, colored by mode,
     restricted to the top *top_n* features by cross-mode separation
     (`max(median) - min(median)` over that feature's own mode rows;
     legibility, mirrors `_plot_feature_stability`'s `top_n` cap). Whiskers
     are the mode's own interquartile range (asymmetric q25/q75 bounds
-    around the median)."""
+    around the median). T9-review item 1: *variant* names the figure's own
+    title, and the x-axis units follow `_feature_unit_label(variant,
+    feature_names)` -- never a blanket "log10" claim for `fusion`/an
+    embedding variant. Returns the rendered `Axes` (test seam)."""
     if table.empty:
         fig, ax = plt.subplots(figsize=(8.5, 3.0))
         fig.patch.set_facecolor(_COLOR_SURFACE)
@@ -1251,10 +1302,11 @@ def _plot_mode_signatures(
             0.5, 0.5, "no GT mode (excl. unknown/transition) had >= 1 window this day",
             ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
         )
+        ax.set_title(f"Mode signatures ({variant})", loc="left", fontsize=10, color="#0b0b0b")
         ax.axis("off")
         fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
         plt.close(fig)
-        return
+        return ax
 
     separation = (
         table.groupby("feature")["median"]
@@ -1292,14 +1344,11 @@ def _plot_mode_signatures(
     ax.set_yticks(range(len(top_features)))
     ax.set_yticklabels(top_features, fontsize=7.5, color=_COLOR_TEXT_SECONDARY)
     ax.invert_yaxis()
-    ax.set_xlabel(
-        "feature value (own stored units: log10 for level columns -- not a "
-        "calibrated acoustic-dB conversion)",
-        color=_COLOR_TEXT_MUTED, fontsize=8,
-    )
+    unit_label = _feature_unit_label(variant, feature_names)
+    ax.set_xlabel(f"feature value ({unit_label})", color=_COLOR_TEXT_MUTED, fontsize=8)
     ax.set_title(
-        f"Mode signatures -- top {len(top_features)} band/octave feature(s) by "
-        "cross-mode separation (dot = mode median, whisker = IQR)",
+        f"Mode signatures ({variant}) -- top {len(top_features)} band/octave "
+        "feature(s) by cross-mode separation (dot = mode median, whisker = IQR)",
         loc="left", fontsize=10, color="#0b0b0b",
     )
     handles = [
@@ -1319,6 +1368,7 @@ def _plot_mode_signatures(
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
+    return ax
 
 
 def _run_mode_signatures(args: argparse.Namespace) -> int:
@@ -1375,7 +1425,9 @@ def _run_mode_signatures(args: argparse.Namespace) -> int:
         table["feature"] = [rf.feature_names[int(c)] for c in table["column"]]
         table = table[["mode", "feature", "column", "median", "q25", "q75", "n_windows"]]
         table.to_csv(out_dir / f"{name}.csv", index=False)
-        _plot_mode_signatures(table, out_dir / f"{name}.png", top_n=int(args.top_n))
+        _plot_mode_signatures(
+            table, out_dir / f"{name}.png", variant, rf.feature_names, top_n=int(args.top_n)
+        )
         written += 1
 
     if written == 0:
@@ -1411,16 +1463,50 @@ def _stream_octave_centers(
     return out
 
 
+_OCTAVE_SPAN_SQRT2 = float(np.sqrt(2.0))
+"""Octave half-bandwidth factor: a full-octave band centered at `fc` spans
+`[fc / sqrt(2), fc * sqrt(2)]` (upper/lower ratio exactly 2, i.e. one
+octave) -- VERIFIED to match `rowii.signals.features._octave_bands`'s own
+`lo_hz, hi_hz = fc / sqrt(2), fc * sqrt(2)` span formula, duplicated here
+(not imported: that helper is features.py-internal, leading-underscore --
+this module already duplicates other VERIFIED facts from sibling
+`src/rowii/` modules this way, e.g. `_LEVEL_SUBSTRINGS`/`_level_db_factor`)."""
+
+
+def _octave_span_contains(center_hz: float, target_hz: float) -> bool:
+    """Whether *target_hz* falls inside the full-octave span
+    `[center_hz / sqrt(2), center_hz * sqrt(2)]` (`_OCTAVE_SPAN_SQRT2`)."""
+    lo, hi = center_hz / _OCTAVE_SPAN_SQRT2, center_hz * _OCTAVE_SPAN_SQRT2
+    return bool(lo <= target_hz <= hi)
+
+
 def _nearest_octave_hz(target_hz: float, available_hz: Sequence[float]) -> float:
-    """The octave CENTER in *available_hz* nearest to *target_hz* (absolute
-    Hz distance; an exact tie keeps the smaller center -- deterministic).
+    """The octave CENTER in *available_hz* nearest to *target_hz*, restricted
+    to centers whose OWN span (`_octave_span_contains`) does NOT already
+    contain *target_hz* (T9-review item 2: a "floor" that contains the tone
+    would let the background reading include the tone's own energy,
+    defeating `tonal-table`'s contrast) -- absolute Hz distance among the
+    tone-free survivors; an exact tie keeps the smaller center
+    (deterministic). If EVERY candidate's own span contains *target_hz* (no
+    tone-free floor exists among what this stream actually offers -- e.g. a
+    single Nyquist-truncated octave column), every candidate re-enters the
+    pool (logged) rather than the tone silently dropping out of the table.
 
     Raises:
         ValueError: *available_hz* is empty.
     """
     if not available_hz:
         raise ValueError("_nearest_octave_hz: available_hz is empty")
-    return min(available_hz, key=lambda hz: (abs(hz - target_hz), hz))
+    tone_free = [hz for hz in available_hz if not _octave_span_contains(hz, target_hz)]
+    if not tone_free:
+        logger.warning(
+            "_nearest_octave_hz: every candidate octave's own span contains "
+            "%.3g Hz -- no tone-free floor among %s, falling back to the "
+            "plain nearest center",
+            target_hz, sorted(available_hz),
+        )
+        tone_free = list(available_hz)
+    return min(tone_free, key=lambda hz: (abs(hz - target_hz), hz))
 
 
 def _stream_machine_band_columns(
@@ -1438,9 +1524,11 @@ def _tonal_table(runs_features: Sequence[_RunFeatures]) -> pd.DataFrame:
     GT mode (`unknown`/`transition` excluded), per physical stream present,
     per `rowii.signals.features.MACHINE_HZ` band -- the tone's own median
     column energy (averaged across that stream's own live channels)
-    contrasted (`_tonal_contrast`) against its NEIGHBORING octave column's
-    median energy (`_nearest_octave_hz`, chosen from the octave centers
-    ACTUALLY present for that stream). A (stream, band) combination absent
+    contrasted (`_tonal_contrast`) against its NEAREST TONE-FREE OCTAVE
+    FLOOR's median energy (`_nearest_octave_hz`, T9-review item 2: the
+    octave center nearest by Hz among those ACTUALLY present for that
+    stream, EXCLUDING any whose own span already contains the tone). A
+    (stream, band) combination absent
     from a run (no matching column at all -- e.g. the band's upper edge
     exceeded that stream's Nyquist, or `VibFeaturizer` dropped every live
     channel) is silently omitted from that run's rows."""
@@ -1496,12 +1584,17 @@ def _tonal_table(runs_features: Sequence[_RunFeatures]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def _plot_tonal_table(table: pd.DataFrame, out_path: Path) -> None:
+def _plot_tonal_table(
+    table: pd.DataFrame, out_path: Path, variant: str, feature_names: Sequence[str]
+) -> Axes:
     """Heatmap, (run/mode x stream/band) -> `tonal_contrast` (own stored
     units; see module docstring's fusion z-score caveat), annotated with the
     numeric value per cell (mirrors `_plot_flag_rate_heatmap`'s layout, but
     SIGNED: `vmin`/`vmax` are the table's own min/max rather than a
-    zero-anchored non-negative range)."""
+    zero-anchored non-negative range). T9-review item 1: *variant* names
+    the figure's own title, and the colorbar label follows
+    `_feature_unit_label(variant, feature_names)`. Returns the rendered
+    `Axes` (test seam; the colorbar itself lives on `ax.figure.axes[-1]`)."""
     if table.empty:
         fig, ax = plt.subplots(figsize=(8.5, 3.0))
         fig.patch.set_facecolor(_COLOR_SURFACE)
@@ -1510,10 +1603,11 @@ def _plot_tonal_table(table: pd.DataFrame, out_path: Path) -> None:
             0.5, 0.5, "no (run, mode, stream, band) combination available",
             ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
         )
+        ax.set_title(f"Tonal contrast ({variant})", loc="left", fontsize=10, color="#0b0b0b")
         ax.axis("off")
         fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
         plt.close(fig)
-        return
+        return ax
 
     pivot = table.copy()
     pivot["row"] = pivot["run"].astype(str) + " / " + pivot["mode"].astype(str)
@@ -1546,8 +1640,9 @@ def _plot_tonal_table(table: pd.DataFrame, out_path: Path) -> None:
     ax.set_xlabel("stream / machine band", color=_COLOR_TEXT_MUTED, fontsize=9)
     ax.set_ylabel("run / GT mode", color=_COLOR_TEXT_MUTED, fontsize=9)
     ax.set_title(
-        "Tonal contrast -- machine band vs. neighboring octave floor "
-        "(own units, our own SNR-like definition -- NOT the partner's metric)",
+        f"Tonal contrast ({variant}) -- machine band vs. nearest "
+        "non-containing octave floor (own units, our own SNR-like "
+        "definition -- NOT the partner's metric)",
         loc="left", fontsize=10, color="#0b0b0b",
     )
 
@@ -1561,13 +1656,16 @@ def _plot_tonal_table(table: pd.DataFrame, out_path: Path) -> None:
             text_color = "#ffffff" if frac > 0.6 else _COLOR_TEXT_SECONDARY
             ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7, color=text_color)
 
+    unit_label = _feature_unit_label(variant, feature_names)
     cbar = fig.colorbar(im, ax=ax)
     cbar.set_label(
-        "tonal contrast (band - neighboring octave floor)", color=_COLOR_TEXT_MUTED, fontsize=8
+        f"tonal contrast (band - nearest non-containing octave floor; {unit_label})",
+        color=_COLOR_TEXT_MUTED, fontsize=8,
     )
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
+    return ax
 
 
 def _run_tonal_table(args: argparse.Namespace) -> int:
@@ -1618,7 +1716,7 @@ def _run_tonal_table(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = variant
     table.to_csv(out_dir / f"{stem}.csv", index=False)
-    _plot_tonal_table(table, out_dir / f"{stem}.png")
+    _plot_tonal_table(table, out_dir / f"{stem}.png", variant, runs_features[0].feature_names)
     print(
         f"tonal-table: wrote {out_dir / (stem + '.csv')} and .png "
         f"({len(runs_features)} GT-bearing day(s), {len(table)} row(s))"
@@ -1647,7 +1745,13 @@ def _discover_pillar3_leaves(root: Path) -> pd.DataFrame:
     alpha). A leaf directory whose name carries no trailing `-a<alpha>`
     suffix (e.g. a `-frozen` leaf, outside the alpha grid this figure
     compares) is silently skipped, as is any leaf missing `event_eval.csv`
-    or a `summary` row."""
+    or a `summary` row -- or whose CSV fails to parse or is missing an
+    expected column at all (a corrupt/truncated write): T9-review item 3
+    wraps the per-leaf read + summary extraction in a try/except
+    (`ValueError`, `KeyError`, `OSError`, `pd.errors.ParserError`,
+    `pd.errors.EmptyDataError`), logs a warning naming the leaf, and moves
+    on -- matching `_discover_rotation_leaves`'s own skip-on-missing
+    philosophy; one bad leaf never aborts discovery of the rest."""
     rows: list[dict[str, object]] = []
     if not root.is_dir():
         return pd.DataFrame(rows, columns=list(_PILLAR3_COLUMNS))
@@ -1659,14 +1763,16 @@ def _discover_pillar3_leaves(root: Path) -> pd.DataFrame:
             csv_path = leaf_dir / "event_eval.csv"
             if not csv_path.is_file():
                 continue
-            table = pd.read_csv(csv_path)
-            summary = table[table["row_type"] == "summary"]
-            if summary.empty:
-                logger.warning("pillar3-figure: %s has no 'summary' row -- skipped", csv_path)
-                continue
-            r = summary.iloc[0]
-            rows.append(
-                {
+            try:
+                table = pd.read_csv(csv_path)
+                summary = table[table["row_type"] == "summary"]
+                if summary.empty:
+                    logger.warning(
+                        "pillar3-figure: %s has no 'summary' row -- skipped", csv_path
+                    )
+                    continue
+                r = summary.iloc[0]
+                row: dict[str, object] = {
                     "session": session_dir.name,
                     "representation": match.group("rep"),
                     "alpha": float(match.group("alpha")),
@@ -1675,7 +1781,16 @@ def _discover_pillar3_leaves(root: Path) -> pd.DataFrame:
                     "event_tpr": float(r["event_tpr"]),
                     "realized_window_far": float(r["realized_window_far"]),
                 }
-            )
+            except (
+                ValueError,
+                KeyError,
+                OSError,
+                pd.errors.ParserError,
+                pd.errors.EmptyDataError,
+            ) as exc:
+                logger.warning("pillar3-figure: skipping %s (%s)", leaf_dir, exc)
+                continue
+            rows.append(row)
     return pd.DataFrame(rows, columns=list(_PILLAR3_COLUMNS))
 
 
@@ -1791,7 +1906,7 @@ _FUSION_ZSCORE_FINDING = (
     "plausibly explains fusion's own cross-day FAR advantage over the "
     "raw-scale audio/vibration variants in the P7 rotations -- an "
     "accounting, not a claim that fusion 'solves' drift; the level-recal "
-    "(D2) comparisons and the rotations-heatmap figure above test that "
+    "(D2) comparisons and the rotations-heatmap figure below test that "
     "hypothesis directly rather than assume it."
 )
 
@@ -1833,18 +1948,25 @@ _FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
         "whose whiskers do not overlap are separable on that feature alone. "
         "An independent, per-day replication of Rodrigues & Zhang (2026)'s "
         "reported within-day mode separability, computed only from our own "
-        "features and caches.",
+        "features and caches. The figure's own title names the variant it "
+        "was rendered from; for `fusion` the x-axis reads a per-run "
+        "z-score (dimensionless) rather than log10, and for an embedding "
+        "variant it reads that model's own embedding units instead.",
         "Rodrigues & Zhang (2026)",
     ),
     "tonal-table": (
         "A (run/mode x stream/band) heatmap of the shaft, blade-pass, and "
-        "guide-vane machine-tone energies relative to their own "
-        "neighbouring octave-band floor -- positive means the tone reads "
-        "above its local background, negative means it does not. An "
+        "guide-vane machine-tone energies relative to their own nearest "
+        "non-containing octave (the nearest octave band whose own span "
+        "does not already contain the tone) -- positive means the tone "
+        "reads above its local background, negative means it does not. An "
         "SNR-like contrast defined entirely from our own band/octave "
         "features (see the module docstring), NOT the partner's exact "
         "metric -- it only shares the analysis TYPE with Rodrigues & Zhang "
-        "(2026)'s own machine-fingerprint table.",
+        "(2026)'s own machine-fingerprint table. The colorbar label "
+        "follows the same per-variant units as mode-signatures: log10 for "
+        "a raw-scale variant, a per-run z-score for `fusion`, or an "
+        "embedding variant's own embedding units.",
         "Rodrigues & Zhang (2026)",
     ),
     "pillar3-figure": (
@@ -1853,7 +1975,10 @@ _FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
         "taller bars mean more of the induced strike/sweep events were "
         "detected at that operating point. Read straight from our own "
         "results/pillar3/**/event_eval.csv summary rows -- no partner "
-        "number involved.",
+        "number involved. `fusion-snorm` is fusion's own session-norm "
+        "side arm (a per-run first-N-minute recalibration layered on top "
+        "of fusion, P7 D3), not a fourth base representation alongside "
+        "audio/vibration/fusion/audio-beats.",
         None,
     ),
 }

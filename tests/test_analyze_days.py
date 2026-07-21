@@ -608,8 +608,10 @@ def test_mode_signatures_writes_one_png_per_run(tmp_path, monkeypatch) -> None:
 
 
 def test_nearest_octave_hz_picks_closest_by_absolute_distance() -> None:
-    assert ad._nearest_octave_hz(43.75, [31.5, 63.0, 125.0]) == 31.5
-    assert ad._nearest_octave_hz(125.0, [31.5, 63.0, 125.0, 250.0]) == 125.0
+    # T9-review item 2 (superseded by the "nearest NON-CONTAINING octave"
+    # semantics below): 6.25 Hz sits outside every candidate's own span, so
+    # the plain nearest-by-Hz result is unchanged by the new rule.
+    assert ad._nearest_octave_hz(6.25, [31.5, 63.0, 125.0]) == 31.5
     with pytest.raises(ValueError, match="empty"):
         ad._nearest_octave_hz(6.25, [])
 
@@ -776,3 +778,217 @@ def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
         "mode-signatures", "tonal-table", "pillar3-figure",
     ):
         assert name in readme
+
+
+# ---------------------------------------------------------------------------
+# T9-review polish (2026-07-21 fix-loop, post-a05344e): item 1 variant-aware
+# unit labeling on mode-signatures/tonal-table (title + axis/colorbar +
+# digest caveat), item 2 tonal-table's nearest NON-CONTAINING octave floor,
+# item 3 a per-leaf parse guard on pillar3-figure's discovery, item 4 two
+# digest-prose nits (fold in).
+# ---------------------------------------------------------------------------
+
+# --- item 1: `_feature_unit_label` (shared pure helper) --------------------
+
+_FUSION_STYLE_NAMES = [
+    "RAWGeneratorMic__0::ch0_band_shaft", "RAWGeneratorMic__0::ch0_octave_31",
+    "RAWTurbineVib__3::ch0_band_shaft", "RAWTurbineVib__3::ch0_octave_31",
+]  # fuse() concatenates audio+vib column NAMES unchanged -- only the VALUES
+   # are per-run z-scored (A1.1), so the names alone can't tell fusion apart
+   # from a raw-scale variant; the classifier keys on *variant*, not names.
+
+
+def test_feature_unit_label_fusion_reads_zscore_not_log10() -> None:
+    label = ad._feature_unit_label("fusion", _FUSION_STYLE_NAMES)
+    assert "z-score" in label
+    assert "log10" not in label
+
+
+def test_feature_unit_label_embedding_variant_reads_embedding_units() -> None:
+    label = ad._feature_unit_label("audio-beats", ["beats_0", "beats_1"])
+    assert "embedding units" in label
+    assert "log10" not in label
+
+
+def test_feature_unit_label_raw_scale_variant_reads_log10() -> None:
+    label = ad._feature_unit_label("audio", _FUSION_STYLE_NAMES)
+    assert "log10" in label
+
+
+# --- item 1: mode-signatures / tonal-table wiring (variant in the title;
+# RED: fusion's axis/title reads 'z-score' and never claims 'log10') -------
+
+
+def test_plot_mode_signatures_fusion_variant_axis_and_title_read_zscore(tmp_path) -> None:
+    features = np.vstack([np.zeros((5, 2)), np.full((5, 2), 3.0)])
+    gt = np.array((["turbine"] * 5) + (["pump"] * 5), dtype=object)
+    table = ad._mode_profile(features, gt, level_cols=[0, 1])
+    table = table.copy()
+    table["feature"] = [_FUSION_STYLE_NAMES[int(c)] for c in table["column"]]
+    ax = ad._plot_mode_signatures(
+        table, tmp_path / "fusion.png", "fusion", _FUSION_STYLE_NAMES, top_n=5,
+    )
+    assert "fusion" in ax.get_title(loc="left")
+    assert "z-score" in ax.get_xlabel()
+    assert "log10" not in ax.get_xlabel()
+
+
+def test_plot_mode_signatures_raw_scale_variant_axis_reads_log10(tmp_path) -> None:
+    features = np.vstack([np.zeros((5, 2)), np.full((5, 2), 3.0)])
+    gt = np.array((["turbine"] * 5) + (["pump"] * 5), dtype=object)
+    table = ad._mode_profile(features, gt, level_cols=[0, 1])
+    table = table.copy()
+    table["feature"] = [_FUSION_STYLE_NAMES[int(c)] for c in table["column"]]
+    ax = ad._plot_mode_signatures(
+        table, tmp_path / "audio.png", "audio", _FUSION_STYLE_NAMES, top_n=5,
+    )
+    assert "audio" in ax.get_title(loc="left")
+    assert "log10" in ax.get_xlabel()
+
+
+def test_plot_tonal_table_fusion_variant_title_and_colorbar_read_zscore(tmp_path) -> None:
+    rf = _tonal_run("dayA", shaft=-30.0, floor=-45.0)
+    table = ad._tonal_table([rf])
+    ax = ad._plot_tonal_table(table, tmp_path / "fusion.png", "fusion", _TONAL_NAMES)
+    assert "fusion" in ax.get_title(loc="left")
+    cbar_label = ax.figure.axes[-1].get_ylabel()
+    assert "z-score" in cbar_label
+    assert "log10" not in cbar_label
+
+
+def test_plot_tonal_table_title_says_nearest_non_containing_octave(tmp_path) -> None:
+    rf = _tonal_run("dayA", shaft=-30.0, floor=-45.0)
+    table = ad._tonal_table([rf])
+    ax = ad._plot_tonal_table(table, tmp_path / "audio.png", "audio", _TONAL_NAMES)
+    assert "nearest non-containing octave" in ax.get_title(loc="left")
+    assert "log10" in ax.figure.axes[-1].get_ylabel()
+
+
+# --- item 1: digest carries the same caveat, one sentence per section -----
+
+
+def test_digest_mode_signatures_section_carries_the_zscore_embedding_caveat(tmp_path) -> None:
+    text = ad._render_digest(tmp_path / "analysis-days")
+    section = text.split("## mode-signatures")[1].split("## tonal-table")[0]
+    assert "z-score" in section
+    assert "embedding units" in section
+
+
+def test_digest_tonal_table_section_carries_the_zscore_embedding_caveat(tmp_path) -> None:
+    text = ad._render_digest(tmp_path / "analysis-days")
+    section = text.split("## tonal-table")[1].split("## pillar3-figure")[0]
+    assert "z-score" in section
+    assert "embedding units" in section
+
+
+# --- item 2: tonal-table's nearest NON-CONTAINING octave floor -------------
+
+
+def test_nearest_octave_hz_prefers_nearest_by_absolute_distance_when_tone_free() -> None:
+    # shaft (6.25 Hz): outside every candidate's own span -- unaffected by
+    # the new rule, still the plain nearest-by-Hz.
+    assert ad._nearest_octave_hz(6.25, [31.5, 63.0, 125.0]) == 31.5
+
+
+def test_nearest_octave_hz_skips_a_candidate_whose_own_span_contains_the_target() -> None:
+    # blade_pass (43.75 Hz): octave 31.5's own span (~[22.3, 44.5]) CONTAINS
+    # it -- disqualified; octave 63.0's span (~[44.5, 89.1]) does not.
+    assert ad._nearest_octave_hz(43.75, [31.5, 63.0, 125.0]) == 63.0
+
+
+def test_nearest_octave_hz_skips_an_exact_center_match_too() -> None:
+    # guide_vane_pass (125.0 Hz) IS a candidate center -- its own span
+    # trivially contains itself, disqualified. Remaining: 63.0 (dist 62) is
+    # nearer than 250.0 (dist 125).
+    assert ad._nearest_octave_hz(125.0, [31.5, 63.0, 125.0, 250.0]) == 63.0
+
+
+def test_nearest_octave_hz_falls_back_to_a_containing_candidate_if_none_is_tone_free(
+    caplog,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        assert ad._nearest_octave_hz(125.0, [125.0]) == 125.0
+    assert any(
+        "125" in r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+    )
+
+
+def test_nearest_octave_hz_empty_available_raises() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        ad._nearest_octave_hz(6.25, [])
+
+
+_TONAL_BLADE_NAMES = [
+    "RAWGeneratorMic__0::ch0_band_blade_pass",
+    "RAWGeneratorMic__0::ch0_octave_31",
+    "RAWGeneratorMic__0::ch0_octave_63",
+]
+
+
+def _tonal_blade_run(
+    run_name: str, *, blade: float, floor31: float, floor63: float
+) -> ad._RunFeatures:
+    n = 20
+    features = np.zeros((n, 3), dtype=np.float64)
+    features[:, 0] = blade
+    features[:, 1] = floor31
+    features[:, 2] = floor63
+    return ad._RunFeatures(
+        run_name=run_name, features=features,
+        gt_states=np.array(["turbine"] * n, dtype=object),
+        segment_ids=np.arange(n) // 5, feature_names=list(_TONAL_BLADE_NAMES), has_gt=True,
+    )
+
+
+def test_tonal_table_blade_pass_skips_the_containing_octave_31() -> None:
+    # old behaviour would pick octave 31 (nearest by |Hz|, 12.25) and read
+    # floor31=-99.0 (contrast=79.0); the new rule disqualifies it (span
+    # contains 43.75) and picks octave 63 instead (floor63=-35.0, contrast=15.0).
+    rf = _tonal_blade_run("dayA", blade=-20.0, floor31=-99.0, floor63=-35.0)
+    table = ad._tonal_table([rf])
+    row = table[table["band"] == "blade_pass"].iloc[0]
+    assert row["octave_floor_hz"] == pytest.approx(63.0)
+    assert row["octave_floor"] == pytest.approx(-35.0)
+    assert row["tonal_contrast"] == pytest.approx(15.0)  # -20.0 - (-35.0)
+
+
+# --- item 3: `_discover_pillar3_leaves` per-leaf parse guard ---------------
+
+
+def test_discover_pillar3_leaves_skips_a_corrupt_csv_with_warning(tmp_path, caplog) -> None:
+    root = tmp_path / "results" / "pillar3"
+    _write_event_eval(
+        root / "080726-pu_strikes" / "audio-a0.05",
+        n_events=10.0, n_detected=10.0, event_tpr=1.0, realized_window_far=0.06,
+    )
+    corrupt_leaf = root / "080726-pu_strikes" / "fusion-a0.01"
+    corrupt_leaf.mkdir(parents=True)
+    # wrong schema entirely (no 'row_type' column at all) -- KeyError, one of
+    # the guarded exception types; a plausible real-world truncated/corrupt write.
+    pd.DataFrame([{"unexpected": 1}]).to_csv(corrupt_leaf / "event_eval.csv", index=False)
+    with caplog.at_level(logging.WARNING):
+        table = ad._discover_pillar3_leaves(root)
+    assert list(table["representation"]) == ["audio"]  # only the good leaf renders
+    assert any(
+        "fusion-a0.01" in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+    )
+
+
+# --- item 4: digest prose nits (fold in) ------------------------------------
+
+
+def test_digest_fusion_finding_points_below_not_above(tmp_path) -> None:
+    text = ad._render_digest(tmp_path / "analysis-days")
+    assert "figure above" not in text
+
+
+def test_digest_pillar3_section_annotates_fusion_snorm_as_session_norm_side_arm(
+    tmp_path,
+) -> None:
+    text = ad._render_digest(tmp_path / "analysis-days")
+    section = text.split("## pillar3-figure")[1]
+    assert "fusion-snorm" in section
+    assert "session-norm" in section
+    assert "base representation" in section  # explicitly disclaims this framing
