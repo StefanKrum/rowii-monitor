@@ -347,12 +347,13 @@ def test_sha_mismatch_exits_nonzero_removes_file_and_writes_no_manifest(
 # ---------------------------------------------------------------------------
 # 7. Package-7 K003-K006 additions (spec D5/A3.10, Task 7): the REMAINING
 #    Paderborn healthy bearings join the table -- same BearingDataCenter URL
-#    scheme as K001/K002 (NOT Zenodo; only MIMII is Zenodo -- A3.10), each
-#    carrying the `_SHA256_TBD` sentinel until its first verified download
-#    (the execution task's live-HEAD + compute-and-transcribe procedure;
-#    downloads never run in tests). Growing the table must never touch a
-#    pre-existing entry -- the regression pin below holds every established
-#    URL/sha256 byte-identical.
+#    scheme as K001/K002 (NOT Zenodo; only MIMII is Zenodo -- A3.10). Each
+#    carried the `_SHA256_TBD` sentinel until its first verified download
+#    (2026-07-21, the execution task's live-HEAD + compute-and-transcribe
+#    procedure; downloads never run in tests) -- the transcribed hashes are
+#    pinned below exactly like the established entries. Growing the table
+#    must never touch a pre-existing entry -- the regression pin holds every
+#    established URL/sha256 byte-identical.
 # ---------------------------------------------------------------------------
 
 _BEARINGDATACENTER_BASE = "https://groups.uni-paderborn.de/kat/BearingDataCenter"
@@ -374,11 +375,22 @@ def test_paderborn_k003_k006_use_bearingdatacenter_urls(stem: str) -> None:
     assert entry.license == "CC BY-NC 4.0"
 
 
-@pytest.mark.parametrize("stem", ["K003", "K004", "K005", "K006"])
-def test_paderborn_k003_k006_carry_the_sha256_sentinel(stem: str) -> None:
-    # Real hashes are transcribed only after the first verified download at
-    # execution time -- never measured (or faked) in tests.
-    assert _paderborn_entry(f"{stem}.rar").sha256 == download_corpora._SHA256_TBD
+@pytest.mark.parametrize(
+    ("stem", "sha256"),
+    [
+        ("K003", "d7d1edf6047fac088efe118198abd0856c5280dd8653496fbac9a5d877180f1e"),
+        ("K004", "97242542046cf3ce286c13e12d8df11f618a53365efe592750e2047256345333"),
+        ("K005", "2faf0ee4ee66055bcc066e5b6d9ed9fc44638b2c1ea397a279261103aa83caaa"),
+        ("K006", "250b8e0ef18082163ae4003cd7f50e6daa3061b3a095e226378910da55b78b94"),
+    ],
+)
+def test_paderborn_k003_k006_pin_transcribed_sha256(stem: str, sha256: str) -> None:
+    # Hashes computed by _download_file during the first verified download
+    # (2026-07-21, recorded in data/public/paderborn/MANIFEST.json) and
+    # transcribed here -- never measured (or faked) in tests.
+    entry = _paderborn_entry(f"{stem}.rar")
+    assert entry.sha256 == sha256
+    assert entry.sha256 != download_corpora._SHA256_TBD
 
 
 def test_dry_run_lists_k003_k006(monkeypatch, tmp_path, capsys) -> None:
