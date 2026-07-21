@@ -1,22 +1,26 @@
 # Ground truth: induced Schonhammer strikes, ROWII machine 1, 2026-07-08 — PUMP-OPERATION session
 # (Kunstliche_Anomalie; SCADA-confirmed pumping at -279 MW / -377.8 rpm during the strike span).
 # Provenance: minute-level protocol independently verified against the raw data by the campaign's
-# crosscheck (illwerke-080726-analysis/crosscheck-notes-v1.md, 2026-07-13). Times UTC; each event
-# spans its logged minute. Classes as in the ST file. Seconds-level timestamps pending.
-# The recording (13:46-17:10 UTC) is otherwise strike-free pumping; a pump->phase-shifter
-# changeover (~15:04-15:06) is SCADA-verifiable from OUR Betriebsdaten and deliberately NOT
+# crosscheck (illwerke-080726-analysis/crosscheck-notes-v1.md, 2026-07-13). Each event spans its
+# logged minute. Classes as in the ST file. Seconds-level timestamps pending.
+# TIMEBASE (corrected 2026-07-21): the strike protocol logs LOCAL time (CEST = UTC+2); the times
+# below are converted to true UTC (-2 h). Verified against OUR audio-UTC state timeline: the
+# protocol's pump->phase-shifter changeover (~15:04-15:06 local) appears as the state transition
+# at 13:05:28 UTC in results/pillar3/080726-pu_strikes/*/segments.csv, and the ST strike span
+# falls inside the ST recording only under the -2 h reading. Recording spans 11:46-15:20 UTC
+# (13:46-17:20 local); it is otherwise strike-free pumping. The changeover is deliberately NOT
 # listed here (this file holds induced-strike ground truth only).
 start_utc,end_utc,kind
-2026-07-08T14:43:00+00:00,2026-07-08T14:44:00+00:00,plate-gen_0
-2026-07-08T14:44:00+00:00,2026-07-08T14:45:00+00:00,plate-gen_90
-2026-07-08T14:45:00+00:00,2026-07-08T14:46:00+00:00,plate-gen_180
-2026-07-08T14:46:00+00:00,2026-07-08T14:47:00+00:00,plate-gen_270
-2026-07-08T14:47:00+00:00,2026-07-08T14:48:00+00:00,plate-tur_bottom
-2026-07-08T14:48:00+00:00,2026-07-08T14:49:00+00:00,landmark-B_11TG
-2026-07-08T14:49:00+00:00,2026-07-08T14:50:00+00:00,landmark-A_kugelschieber
-2026-07-08T14:50:00+00:00,2026-07-08T14:53:00+00:00,vane-sweep
-2026-07-08T14:54:00+00:00,2026-07-08T14:55:00+00:00,plate-tur_0
-2026-07-08T14:55:00+00:00,2026-07-08T14:56:00+00:00,plate-tur_90
-2026-07-08T14:56:00+00:00,2026-07-08T14:57:00+00:00,plate-tur_180
-2026-07-08T14:57:00+00:00,2026-07-08T14:58:00+00:00,plate-tur_270
-2026-07-08T15:01:00+00:00,2026-07-08T15:02:00+00:00,landmark-C_EG
+2026-07-08T12:43:00+00:00,2026-07-08T12:44:00+00:00,plate-gen_0
+2026-07-08T12:44:00+00:00,2026-07-08T12:45:00+00:00,plate-gen_90
+2026-07-08T12:45:00+00:00,2026-07-08T12:46:00+00:00,plate-gen_180
+2026-07-08T12:46:00+00:00,2026-07-08T12:47:00+00:00,plate-gen_270
+2026-07-08T12:47:00+00:00,2026-07-08T12:48:00+00:00,plate-tur_bottom
+2026-07-08T12:48:00+00:00,2026-07-08T12:49:00+00:00,landmark-B_11TG
+2026-07-08T12:49:00+00:00,2026-07-08T12:50:00+00:00,landmark-A_kugelschieber
+2026-07-08T12:50:00+00:00,2026-07-08T12:53:00+00:00,vane-sweep
+2026-07-08T12:54:00+00:00,2026-07-08T12:55:00+00:00,plate-tur_0
+2026-07-08T12:55:00+00:00,2026-07-08T12:56:00+00:00,plate-tur_90
+2026-07-08T12:56:00+00:00,2026-07-08T12:57:00+00:00,plate-tur_180
+2026-07-08T12:57:00+00:00,2026-07-08T12:58:00+00:00,plate-tur_270
+2026-07-08T13:01:00+00:00,2026-07-08T13:02:00+00:00,landmark-C_EG
