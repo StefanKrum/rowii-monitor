@@ -365,6 +365,35 @@ def _write_cli_inputs(tmp_path: Path) -> tuple[Path, Path]:
     return alarms_path, events_path
 
 
+def test_cli_events_csv_with_comment_provenance_lines(tmp_path: Path) -> None:
+    """The real ground-truth files (`docs/groundtruth/080726_events_*.csv`) open
+    with `#` provenance lines before the header -- the CLI must skip them
+    instead of parsing the first comment as the column row (the P7 execution-B
+    failure mode)."""
+    import eval_events
+
+    alarms_path, events_path = _write_cli_inputs(tmp_path)
+    commented = tmp_path / "events_commented.csv"
+    commented.write_text(
+        "# Ground truth: induced strikes, provenance line\n"
+        "# second provenance line (verification pointer)\n" + events_path.read_text()
+    )
+    out_dir = tmp_path / "out-commented"
+
+    rc = eval_events.main(
+        [
+            "--alarms", str(alarms_path),
+            "--events", str(commented),
+            "--tolerance-s", "1.0",
+            "--out", str(out_dir),
+        ]
+    )
+    assert rc == 0
+    frame = pd.read_csv(out_dir / "event_eval.csv")
+    assert int(frame.loc[0, "n_events"]) == 1
+    assert int(frame.loc[0, "n_detected"]) == 1
+
+
 def test_cli_smoke_writes_event_eval_csv_and_notes(tmp_path: Path) -> None:
     import eval_events
 

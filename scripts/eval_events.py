@@ -204,7 +204,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         alarms = pd.read_parquet(args.alarms, engine="pyarrow")
-        events = pd.read_csv(args.events)
+        # comment="#": the ground-truth CSVs (docs/groundtruth/080726_events_*.csv)
+        # open with # provenance lines before the header row.
+        events = pd.read_csv(args.events, comment="#")
         result = evaluate_events(
             alarms, events, window_s=args.window_s, tolerance_s=args.tolerance_s
         )
