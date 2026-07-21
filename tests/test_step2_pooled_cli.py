@@ -73,10 +73,20 @@ _BASE_ARGS = [
 ]
 
 
-def _blob_run(blob_cycle: list[int], n_segments: int, seed: int) -> PreparedRun:
+def _blob_run(
+    blob_cycle: list[int],
+    n_segments: int,
+    seed: int,
+    *,
+    feature_names: list[str] | None = None,
+) -> PreparedRun:
     """Contiguous `_SEG_LEN`-window segments, one blob per segment, cycling
     *blob_cycle* -- `tests/test_detect_pooled.py`'s layout with per-segment ids so
-    `split_by_segments` has real segments to draw."""
+    `split_by_segments` has real segments to draw. *feature_names* defaults to the
+    original `["f0", "f1"]` (every pre-T6 call site is unaffected); the T6
+    `--level-recal` fixture (`_level_pooled_prepared` below) passes
+    `_LEVEL_FEATURE_NAMES` so the columns actually match `rowii.anomaly.
+    levelrecal`'s level-column substrings."""
     rng = np.random.default_rng(seed)
     feats: list[np.ndarray] = []
     seg_ids: list[np.ndarray] = []
@@ -90,7 +100,7 @@ def _blob_run(blob_cycle: list[int], n_segments: int, seed: int) -> PreparedRun:
         features=features,
         grid=WindowGrid(t0_ns=0, window_ns=1_000_000_000, n_windows=n),
         valid_mask=np.ones(n, dtype=bool),
-        feature_names=["f0", "f1"],
+        feature_names=feature_names if feature_names is not None else ["f0", "f1"],
         segment_ids=np.concatenate(seg_ids),
     )
 
@@ -138,7 +148,7 @@ def _default_index() -> RecordingIndex:
 
 
 def _install_fakes(monkeypatch, tmp_path, prepared: dict[str, PreparedRun],
-                   index: RecordingIndex) -> None:
+                   index: RecordingIndex, *, variant: str = "fusion") -> None:
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
 
@@ -146,8 +156,8 @@ def _install_fakes(monkeypatch, tmp_path, prepared: dict[str, PreparedRun],
 
     monkeypatch.setattr(run_step2, "discover", lambda root: index)
 
-    def fake_prepare(run, variant, cfg, use_cache=True):
-        assert variant == "fusion"
+    def fake_prepare(run, variant_arg, cfg, use_cache=True):
+        assert variant_arg == variant
         return prepared[run.name]
 
     monkeypatch.setattr(run_step2, "prepare_run", fake_prepare)
@@ -970,3 +980,203 @@ def test_session_norm_requires_cross_day_pooled_protocol(
         run_step2.main(["--protocol", "within-day", "--variant", "fusion", *extra])
     assert exc_info.value.code == 2
     assert "cross-day-pooled" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# T6: --level-recal (package-8 Task 6, spec D2/A1.4/A1.9/A1.11) -- cross-day-
+#     pooled wiring ONLY, audio/vibration variants (fusion excluded, A1.1),
+#     mutually exclusive with --session-norm (A1.10 fit-path exclusivity)
+# ---------------------------------------------------------------------------
+
+_LEVEL_FEATURE_NAMES = [
+    "RAWGeneratorMic__0::ch0_log_rms",
+    "RAWGeneratorMic__0::ch0_octave_125",
+]
+"""Level-bearing column names (both match `rowii.anomaly.levelrecal`'s
+`_LEVEL_SUBSTRINGS`) -- the T6 fixture needs `--variant audio` runs whose
+feature_names actually carry a level column, unlike the module's default
+`["f0", "f1"]` blob fixture."""
+
+_LRECAL_ARGS = [
+    "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-b",
+    "--test-run", "test-c", "--variant", "audio", "--scorer", "knn", "--k", str(_K),
+    "--level-recal",
+]
+
+
+def _level_pooled_prepared() -> dict[str, PreparedRun]:
+    """Same blob layout/sizing as `_pooled_prepared` (module docstring's sizing
+    note applies unchanged -- only `feature_names` differ, and blob VALUES do not
+    depend on feature_names at all), so the pooled-detector/min_ref math is
+    identical to the already-verified fusion fixture."""
+    return {
+        "fit-a": _blob_run([1, 2], _FIT_SEGMENTS, seed=0, feature_names=_LEVEL_FEATURE_NAMES),
+        "fit-b": _blob_run([2, 3], _FIT_SEGMENTS, seed=1, feature_names=_LEVEL_FEATURE_NAMES),
+        "test-c": _blob_run(
+            [1, 2, 3], _TEST_SEGMENTS, seed=2, feature_names=_LEVEL_FEATURE_NAMES
+        ),
+    }
+
+
+def _lrecal_out_dir(tmp_path) -> Path:
+    """`--level-recal` runs land in a `-lrecal` suffixed leaf (module docstring's
+    'Output leaf suffix' bullet), mirroring `_snorm_out_dir`'s own convention."""
+    return (
+        tmp_path / "results" / "step2" / "cross-day-pooled" / _TEST_RUN_NAME
+        / "audio-pooled-lrecal"
+    )
+
+
+def test_level_recal_writes_lrecal_leaf_with_notes(tmp_path, monkeypatch) -> None:
+    prepared = _level_pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
+
+    import run_step2
+
+    assert run_step2.main(_LRECAL_ARGS) == 0
+
+    out_dir = _lrecal_out_dir(tmp_path)
+    for filename in ("far_table_frozen.csv", "far_table_recalibrate.csv"):
+        path = out_dir / filename
+        assert path.is_file(), f"missing {path}"
+        table = _read_far(path)
+        assert list(table.columns) == list(run_step2._FAR_TABLE_COLUMNS)
+        assert list(table["label"]) == ["0", "1", "2", "pooled"]
+
+    notes = (out_dir / "notes.md").read_text()
+    assert "Level-only recalibration" in notes
+    assert "log10" in notes.lower()
+    assert "Rodrigues & Zhang" in notes  # attribution present, no partner NUMBER
+
+
+def test_level_recal_computes_offsets_from_pool_fit_anchor_and_test_first_n(
+    tmp_path, monkeypatch
+) -> None:
+    """Pins the A1.4 wiring precisely: the anchor is the per-column median over
+    the POOLED FIT side, the run-side statistic is the TEST run's own first-N-
+    MINUTES valid rows (label-free), and `apply_level_recal` is called exactly
+    once, on the TEST run's own features -- never the pool's (module docstring:
+    "the pooled FIT/CONFORMAL rows stay RAW ... only the TEST run shifts")."""
+    prepared = _level_pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
+
+    import run_step2
+
+    median_calls: list[np.ndarray] = []
+    real_column_medians = run_step2.column_medians
+
+    def spy_medians(rows, feature_names):
+        median_calls.append(np.asarray(rows).copy())
+        return real_column_medians(rows, feature_names)
+
+    monkeypatch.setattr(run_step2, "column_medians", spy_medians)
+
+    apply_calls: list[np.ndarray] = []
+    real_apply = run_step2.apply_level_recal
+
+    def spy_apply(features, feature_names, offsets):
+        apply_calls.append(np.asarray(features))
+        return real_apply(features, feature_names, offsets)
+
+    monkeypatch.setattr(run_step2, "apply_level_recal", spy_apply)
+
+    assert run_step2.main(_LRECAL_ARGS) == 0
+
+    assert len(median_calls) == 2  # anchor (pool FIT side) + test run first-N rows
+    hand = _hand_pipeline(prepared)
+    np.testing.assert_array_equal(median_calls[0], hand.pool_fit.features)
+
+    test = prepared[_TEST_RUN_NAME]
+    cutoff_ns = int(round(run_step2._DEFAULT_NORM_MINUTES * 60.0 * 1e9))
+    win_offsets = (
+        np.arange(test.features.shape[0], dtype=np.int64) * np.int64(test.grid.window_ns)
+    )
+    qualifying = (win_offsets < cutoff_ns) & test.valid_mask
+    np.testing.assert_array_equal(median_calls[1], test.features[qualifying])
+
+    assert len(apply_calls) == 1
+    np.testing.assert_array_equal(apply_calls[0], test.features)
+
+
+def test_level_recal_frozen_thresholds_match_raw_baseline_pool_stays_raw(
+    tmp_path, monkeypatch
+) -> None:
+    """The pooled FIT/CONFORMAL rows are NEVER level-recalibrated -- only the
+    TEST run's own scoring features shift -- so the FROZEN references/thresholds
+    (calibrated on the pool's own nested-CONFORMAL side, A3.7) must be BITWISE
+    IDENTICAL to the raw baseline's."""
+    prepared = _level_pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
+
+    import run_step2
+
+    raw_args = [a for a in _LRECAL_ARGS if a != "--level-recal"]
+    assert run_step2.main(raw_args) == 0
+    assert run_step2.main(_LRECAL_ARGS) == 0
+
+    raw_dir = (
+        tmp_path / "results" / "step2" / "cross-day-pooled" / _TEST_RUN_NAME / "audio-pooled"
+    )
+    raw = _read_far(raw_dir / "far_table_frozen.csv").set_index("label")
+    lrecal = _read_far(_lrecal_out_dir(tmp_path) / "far_table_frozen.csv").set_index("label")
+    for lid in (str(i) for i in range(_K)):
+        assert float(raw.loc[lid, "threshold"]) == float(lrecal.loc[lid, "threshold"])
+        assert int(raw.loc[lid, "n_calibration"]) == int(lrecal.loc[lid, "n_calibration"])
+
+
+def test_level_recal_refuses_fusion_variant(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(
+            [
+                "--protocol", "cross-day-pooled", "--fit-runs", "fit-a,fit-b",
+                "--test-run", "test-c", "--variant", "fusion", "--level-recal",
+            ]
+        )
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    # A specific phrase from the guard's own message -- NOT the generic "audio"/
+    # "vibration" substrings, which also appear in argparse's --variant usage
+    # banner and would make this assertion pass vacuously before the flag exists.
+    assert "requires --variant audio or vibration" in err
+
+
+def test_level_recal_and_session_norm_mutually_exclusive(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main([*_LRECAL_ARGS, "--session-norm"])
+    assert exc_info.value.code == 2
+    # "mutually exclusive" is unique to the guard's own message -- unlike a bare
+    # "--session-norm" substring check, which argparse's usage banner would also
+    # satisfy vacuously before the flag exists.
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_level_recal_requires_cross_day_pooled_protocol(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--protocol", "within-day", "--variant", "audio", "--level-recal"])
+    assert exc_info.value.code == 2
+    # The specific "requires --protocol cross-day-pooled" phrase -- a bare
+    # "cross-day-pooled" substring also appears in argparse's --protocol usage
+    # banner and would pass vacuously before the flag exists.
+    assert "requires --protocol cross-day-pooled" in capsys.readouterr().err
