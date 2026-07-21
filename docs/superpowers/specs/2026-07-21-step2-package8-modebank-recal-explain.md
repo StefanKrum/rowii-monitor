@@ -177,3 +177,90 @@ artifact-shape tests on synthetic inputs; era-step column math unit test.
 Model policy for subagents (Stefan 2026-07-21): implementation/tests/readers on
 sonnet; adversarial spec/whole-branch reviews on opus; fable only if a review
 blocks twice.
+
+## 7. Amendment A1 (adversarial spec review, 2026-07-21 — all 11 findings adopted)
+
+**A1.1 (F1, blocker) — D2 runs on raw-dB variants; fusion is excluded with a
+finding.** `fuse()` z-scores each stream PER RUN before concatenation
+(`signals/features.py` / `pipeline.py`), so fusion's stored features are
+dimensionless per-run z-scores: an additive dB offset is meaningless there and
+a broadband level step is ALREADY removed by fusion's own assembly. D2's
+variants are therefore `audio` and `vibration` (plain hstack, native log/dB
+scale). Fusion's built-in per-run z-score is recorded as a FINDING in its own
+right — an implicit session normalization that plausibly explains fusion's
+cross-day FAR advantage — and D3's digest documents it. The plan adds a task
+step verifying which level columns are log-scaled in `features.py` before the
+offset math is fixed.
+
+**A1.2 (F2, blocker) — GT gates.** D4.3 (SCADA timebase probe for 080726) is
+an explicit GATE for every 080726 GT-matched analysis (D1's pillar-3 spot,
+D3 era-step's 080726 point). 27.06 has NO Betriebsdaten: the era-step figure
+matches modes by GT only on 25.06/29.06/01.07 (+080726 after the gate) and
+shows 27.06 as an UN-MATCHED per-stream-median point, flagged "no GT — era-A
+anchor by MeasName only". Feature-stability runs on GT-bearing days only.
+
+**A1.3 (F3, blocker) — fair comparison rules.** Primary metric = ARI
+(mapping-invariant). Accuracy is reported for the bank only, and every
+comparison cell carries a supervised/unsupervised tag; the prose states the
+bank's edge is an INFORMATION advantage (SCADA at commissioning), not a
+method win. `--smooth` = duration-filter ONLY (`min_dwell_s`), never the
+EM smoother (`smooth.fit_decode` re-estimates emissions — using it would make
+both arms HMM-EM differing only in init).
+
+**A1.4 (F4, blocker) — offset sources + pillar-3 mode.** Offset target per
+surface: run_step2 cross-day-pooled = per-column median over the POOLED FIT
+side; monitor = reference medians STORED in the snapshot at fit time. Both
+name-keyed. The D2 pillar-3 side arm is FROZEN mode WITHOUT
+`--exclude-calibration-events` (no-op in frozen; frozen scores every valid
+window, so all events stay evaluable): the question is precisely whether
+level-recal rescues frozen cross-era transfer (raw frozen fusion was 0.62/0.96
+window-FAR). Recalibrate+level-recal is expected-redundant (session-norm
+precedent) and is run once only as a control row, stated as such.
+
+**A1.5 (F5) — bank internals pinned.** Standardization: gaussian/gmm use
+pool-FIT-side global mean/std (stored with the bank); knn uses cosine on raw
+features (mirrors the Step-2 scorer contract). Per-mode floor = `min_ref`
+(20): a mode below floor is dropped from the bank with a
+`coverage_warnings`-style warning; its GT windows then mis-assign or reject —
+that IS the measured behavior. GT `unknown` AND `transition` windows are
+excluded from bank TRAINING; evaluation masks both from ARI/accuracy (applied
+identically to the clusterer arm; noted as a delta vs P7's k-selection mask
+which excluded only `unknown`).
+
+**A1.6 (F6) — D4 feasibility fixes.** D4.1 is channel-anonymous: per-channel
+level profiles at plate-strike minutes across ALL generator-mic channels,
+identifying the outlier channel WITHOUT asserting an azimuth mapping (no
+azimuth→channel map exists in-repo; the mapping arrives only if
+`Sensor_Anordnung_15062026.xlsx` is delivered — meeting request). D4.2 is a
+per-file DATA-VARIANCE liveness probe (std < 1e-9 per channel over sampled
+blocks, the `VibFeaturizer` dead-channel criterion), not a header scan.
+
+**A1.7 (F7) — bank cross-era honesty.** Before the pillar-3 TPR/FAR spot, the
+bank's mode-ID accuracy ON 080726 vs GT (post-gate) is reported as a
+prerequisite readout; the six rotations already provide the within-era
+baseline (B1→290626 same-era) and the 250526 rotations are tagged cross-config
+for the bank exactly as for the detector.
+
+**A1.8 (F8) — firewall hardening.** The 3 dB stability cutoff is labeled
+"same cutoff as Rodrigues & Zhang (2026), adopted for comparability"; the
+primary deliverable is the CONTINUOUS shift distribution (dot-interval
+figure), the binary classification is secondary. Testing rule added: no
+partner-derived numeric constant may appear as an expected value in `src/`,
+`scripts/`, or test fixtures.
+
+**A1.9 (F9) — column-set cleanups.** "ratios" removed from the shape list
+(no such features exist). `--level-recal` refuses (exit 2) when the selected
+level-column set is empty (embedding variants).
+
+**A1.10 (F10) — snapshot policy.** Level-recal reference medians are OPTIONAL
+v2 members (no version bump); absent member + `--level-recal` = exit 2;
+session_stats and level medians are mutually exclusive by fit path.
+
+**A1.11 (F11) — remaining pins.** Bootstrap block = `segment_ids` (the 12-min
+recording segment), never wall-clock. `--level-recal` in run_step2 is
+cross-day-pooled-only (session-norm precedent). In monitor, level-recal
+applies AFTER the snapshot-contract projection, with name-keyed medians.
+
+**Scope note (review):** D1 is greenfield and the package's real cost center;
+the plan sizes it accordingly (module, CLI, tests, 6 rotations × 3 families ×
+3 representations, chain probe, pillar-3 spot).
