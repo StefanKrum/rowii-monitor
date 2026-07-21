@@ -1220,3 +1220,56 @@ def test_distill_runs_with_only_blank_names_is_a_parser_error(capsys):
     with pytest.raises(SystemExit) as exc_info:
         distill_beats.main(["--runs", "  ,  ,", "--out", "/tmp/unused"])
     assert exc_info.value.code == 2
+
+
+def test_multi_run_zero_contribution_warning_fires_for_a_non_last_run(
+    tmp_path, monkeypatch, caplog
+):
+    """Whole-branch-review finding 3: the T8 zero-contribution warning sat
+    OUTSIDE the pool loop and therefore only ever inspected the LAST run's
+    count -- a zero-contribution run in any earlier position was silently
+    unflagged (A4.1's never-silently-absent principle). Pin: run 1 contributes
+    zero, run 2 contributes rows -> the warning fires and names run 1."""
+    import logging
+
+    pytest.importorskip("torch")
+    cfg = _distill_cfg(tmp_path / "results")
+    run1 = _write_run_with_cache_pair(tmp_path, cfg, "zero-run", n=8, seed=41)
+    run2 = _write_run_with_cache_pair(tmp_path, cfg, "rich-run", n=8, seed=42)
+    _multi_run_env(monkeypatch, tmp_path, cfg, [run1, run2])
+    captured = _capture_train_student(monkeypatch)
+
+    real_select = distill_beats._select_calibration_windows
+
+    def fake_select(student_input, teacher, *, seed, alignment):
+        # Deterministically starve the FIRST run only.
+        if fake_select.calls == 0:
+            fake_select.calls += 1
+            return np.empty(0, dtype=np.int64)
+        fake_select.calls += 1
+        return real_select(student_input, teacher, seed=seed, alignment=alignment)
+
+    fake_select.calls = 0
+    monkeypatch.setattr(distill_beats, "_select_calibration_windows", fake_select)
+
+    with caplog.at_level(logging.WARNING):
+        rc = distill_beats.main(
+            ["--runs", f"{run1.name},{run2.name}", "--out", str(tmp_path / "out")]
+        )
+    assert rc == 0
+
+    zero_warnings = [
+        r.message for r in caplog.records if "ZERO calibration-side" in r.message
+    ]
+    assert any("zero-run" in m for m in zero_warnings), (
+        "the zero-contribution warning must fire for a NON-LAST pool run"
+    )
+    assert not any("rich-run" in m for m in zero_warnings)
+    # Training saw only the rich run's rows; the sidecar records both counts.
+    assert len(captured) == 1
+    import json as _json
+    sidecar = _json.loads(
+        (tmp_path / "out" / f"student_{run1.name}+{run2.name}.json").read_text()
+    )
+    assert sidecar["calibration_windows_per_run"][run1.name] == 0
+    assert sidecar["calibration_windows_per_run"][run2.name] > 0

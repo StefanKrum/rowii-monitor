@@ -698,13 +698,16 @@ def main(argv: list[str] | None = None) -> int:
                 ]
             )
             # Zero-contribution runs stay visible in the counts (A4.1's
-            # coverage-visibility principle: never silently absent).
+            # coverage-visibility principle: never silently absent) AND get a
+            # runtime warning PER RUN -- the whole-branch review caught this
+            # check sitting outside the loop, where it only ever saw the last
+            # run's count.
             calibration_windows_per_run[run.name] = int(calibration_windows.size)
-        if calibration_windows.size == 0:
-            logger.warning(
-                "distill_beats: pool run %s contributed ZERO calibration-side "
-                "windows", run.name,
-            )
+            if calibration_windows.size == 0:
+                logger.warning(
+                    "distill_beats: pool run %s contributed ZERO calibration-side "
+                    "windows", run.name,
+                )
         student_inputs = np.vstack(student_blocks)
         teacher_targets = np.vstack(teacher_blocks)
         if student_inputs.shape[0] == 0:
