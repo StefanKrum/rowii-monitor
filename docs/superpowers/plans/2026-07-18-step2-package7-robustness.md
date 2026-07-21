@@ -32,8 +32,8 @@
   - `coverage_table(prepared: dict[str, PreparedRun], windows_per_run: dict[str, np.ndarray], labels_per_run: dict[str, np.ndarray]) -> pd.DataFrame` — rows (run, label, n_windows); plus `coverage_warnings(train_table, eval_table) -> list[str]` (A4.1/A4.2 zero-coverage warnings; label here is ANY per-window label array — detected state or GT state or "state|load_bin" composite strings, caller's choice).
 - Binding: labels-agnostic (pool machinery never derives labels itself); pooled `features` are float64 copies; empty side for a run → member with n_windows 0 + warning, never a crash.
 
-- [ ] RED tests: per-run split parity (hand-run `split_by_segments` per run, compare member windows exactly); side semantics (calibration ⊃ fit ∪ conformal, fit ∩ conformal = ∅ per run); stacked `features`/`run_index`/`window_index` alignment (probe row i maps back to `prepared[run].features[window]` bitwise); scoring windows of every run NEVER in any side (leakage probe); provenance counts; coverage_table schema + composite-label rows; coverage_warnings fires exactly on eval-not-train cells; empty-side warning.
-- [ ] GREEN implementation → gates → commit `feat: multi-run pools with leakage-safe sides and coverage tables (P7 D1/A3.7/A4.1-2)`.
+- [x] RED tests: per-run split parity (hand-run `split_by_segments` per run, compare member windows exactly); side semantics (calibration ⊃ fit ∪ conformal, fit ∩ conformal = ∅ per run); stacked `features`/`run_index`/`window_index` alignment (probe row i maps back to `prepared[run].features[window]` bitwise); scoring windows of every run NEVER in any side (leakage probe); provenance counts; coverage_table schema + composite-label rows; coverage_warnings fires exactly on eval-not-train cells; empty-side warning.
+- [x] GREEN implementation → gates → commit `feat: multi-run pools with leakage-safe sides and coverage tables (P7 D1/A3.7/A4.1-2)`.
 
 ### Task 2: `FittedDetector.fit_pooled` — pooled KMeans, per-run decode
 
@@ -44,8 +44,8 @@
 - Produces (used by T3): `FittedDetector.fit_pooled(cls, pooled_features: np.ndarray, cfg: Config, *, k: int, clusterer: str = "kmeans") -> FittedDetector` — z-score stats from POOLED features; KMeans (seed = cfg.detect.random_seed) on pooled z-scored features → labels; emissions via `_init_means_covars` on pooled labels; GaussianHMM assembled EXACTLY like `StickyHmmSmoother.fit_decode`'s construction but **NO `model.fit` call** (A3.4: no cross-run EM chain); smoother fields set so the returned detector's `apply` does per-run Viterbi with the pooled emission model. Label ids = KMeans cluster ids 0..k-1.
 - Binding: returned object is a normal `FittedDetector` (snapshot-serializable via the EXISTING extraction path — verify `_hmm_arrays`' component_to_id invariant holds: ids are 0..k-1 → identity ✓); docstring states the no-EM decision + that k is chosen by GT-ARI sweep at execution (A3.4).
 
-- [ ] RED tests: two synthetic runs with DISJOINT extra mode (run A: blobs 1+2; run B: blobs 2+3) → fit_pooled(k=3) recovers 3 clusters and `apply` on run B labels blob-3 windows with their own id (the pump-owns-a-cluster property); z-stats = pooled stats; NO EM (transmat bitwise == `_sticky_transmat(k, cfg)`); apply parity after snapshot save/load round trip (reuse `test_runtime_snapshot` helpers); degenerate k=1 path.
-- [ ] GREEN → gates → commit `feat: FittedDetector.fit_pooled — pooled KMeans emissions, per-run Viterbi (A3.4)`.
+- [x] RED tests: two synthetic runs with DISJOINT extra mode (run A: blobs 1+2; run B: blobs 2+3) → fit_pooled(k=3) recovers 3 clusters and `apply` on run B labels blob-3 windows with their own id (the pump-owns-a-cluster property); z-stats = pooled stats; NO EM (transmat bitwise == `_sticky_transmat(k, cfg)`); apply parity after snapshot save/load round trip (reuse `test_runtime_snapshot` helpers); degenerate k=1 path.
+- [x] GREEN → gates → commit `feat: FittedDetector.fit_pooled — pooled KMeans emissions, per-run Viterbi (A3.4)`.
 
 ### Task 3: `--protocol cross-day-pooled` + `fit_snapshot_from_parts`
 
@@ -56,8 +56,8 @@
 - Produces:
   - `fit_snapshot_from_parts(detector: FittedDetector, references: dict[int, np.ndarray], calibration_scores: dict[int, np.ndarray], thresholds: dict[int, ConformalThreshold], *, scorer: str, alpha: float, min_ref: int, calibration_frac: float, seed: int, variant: str, fit_run: str, feature_names: list[str], checkpoints: dict[str, str]) -> MonitorSnapshot` (pure assembly + validation: key-set equality, scorer whitelist, geometry; `fit_run` carries a `"pool:"`-prefixed comma list; per-run provenance goes in the npz sidecar via a new optional `provenance` kwarg on `save_snapshot`).
   - CLI: `run_step2.py --protocol cross-day-pooled --fit-runs <csv> --test-run <name> [--k N|auto] [--alpha F] [--session-norm] …` → per-state + aggregate FAR tables for BOTH threshold modes (frozen thresholds from the pool's CONFORMAL side per A3.7; recalibrate from the test run's calibration side), coverage tables (detected-state AND GT-state × load-bin when Betriebsdaten exist), notes with baselines comparison hooks. Day-group disjointness guard (calendar day of first file; `parser.error` on overlap — A3.8). Detected labels on every run come from the ONE pooled detector.
-- [ ] RED: synthetic 3-run fixture (2 fit + 1 test, style-2 monkeypatch); tests: disjointness guard exit 2 (incl. sibling-run same-day case 010726-tu1 vs 010726-tu2 style names); frozen thresholds bitwise == calibrate(pool conformal scores, alpha); recalibrate == calibrate(test-run calibration side); pool-member-as-test refused (A3.1 guard!); coverage tables written; snapshot_from_parts round trip + refusal tests; α override.
-- [ ] GREEN → gates → commit `feat: cross-day-pooled protocol + fit_snapshot_from_parts (A3.1/A3.7/A3.8)`.
+- [x] RED: synthetic 3-run fixture (2 fit + 1 test, style-2 monkeypatch); tests: disjointness guard exit 2 (incl. sibling-run same-day case 010726-tu1 vs 010726-tu2 style names); frozen thresholds bitwise == calibrate(pool conformal scores, alpha); recalibrate == calibrate(test-run calibration side); pool-member-as-test refused (A3.1 guard!); coverage tables written; snapshot_from_parts round trip + refusal tests; α override.
+- [x] GREEN → gates → commit `feat: cross-day-pooled protocol + fit_snapshot_from_parts (A3.1/A3.7/A3.8)`.
 
 ### Task 4: `rowii/anomaly/normalize.py` + `--session-norm` + snapshot v2
 
@@ -67,40 +67,40 @@
 - `@dataclass(frozen=True) class SessionStats`: `center: np.ndarray`, `scale: np.ndarray` (median / MAD·1.4826, floor 1e-8), `n_windows: int`, `norm_minutes: float`.
 - `fit_session_stats(features: np.ndarray, valid_mask: np.ndarray, grid: WindowGrid, *, norm_minutes: float) -> SessionStats` (first-N-minutes valid rows); `apply_session_norm(features, stats) -> np.ndarray`.
 - Wiring (A3.5 binding): detector ALWAYS consumes RAW features; normalization applies to the SCORING space only (references, calibration scores, scoring windows — all transformed with their OWN run's stats; fit-day references with the fit day's stats). Snapshot: `SNAPSHOT_FORMAT_VERSION = 2` when `session_stats` stored; `load_snapshot` accepts v1 (no stats) and v2; monitor `--session-norm` REFUSES a v1 snapshot (clear message) and fits the monitored run's stats from its first N minutes.
-- [ ] RED: median/MAD correctness + floor; first-N boundary (window starts, valid-only); detector-labels invariance under norm (bitwise); scoring-space application sites (probe: references transformed with fit stats, test windows with test stats — construct a shift that norm removes and assert FAR recovers on the synthetic fixture); v1-refusal + v2 round trip; state-mix confound documented in docstring (assert docstring mentions it — cheap doc pin).
-- [ ] GREEN → gates → commit `feat: label-free session normalization (median/MAD, scoring-space only) + snapshot v2 (D3/A3.5)`.
+- [x] RED: median/MAD correctness + floor; first-N boundary (window starts, valid-only); detector-labels invariance under norm (bitwise); scoring-space application sites (probe: references transformed with fit stats, test windows with test stats — construct a shift that norm removes and assert FAR recovers on the synthetic fixture); v1-refusal + v2 round trip; state-mix confound documented in docstring (assert docstring mentions it — cheap doc pin).
+- [x] GREEN → gates → commit `feat: label-free session normalization (median/MAD, scoring-space only) + snapshot v2 (D3/A3.5)`.
 
 ### Task 5: monitor `--thresholds rolling`
 
 **Files:** Modify `scripts/monitor.py` · Test extend `tests/test_monitor_cli.py`
 
 **Interfaces:** `--thresholds rolling --rolling-minutes M` (default 60): per (state, scored window): trailing same-state calibration-role windows within M minutes; threshold = `calibrate(those, alpha)` when count ≥ ceil(1/alpha)−1 else fit-day frozen threshold; new alarms.parquet column `threshold_source ∈ {rolling, fit_day_fallback}` (other modes: constant `mode` value); notes gain per-state trailing-coverage stats (fraction of scored windows with rolling coverage, per M) citing the A3.2 motivating numbers.
-- [ ] RED: synthetic run where early windows force fallback and later ones roll (assert per-window threshold_source pattern + bitwise thresholds both branches); coverage stats in notes; column contract update everywhere (events harness role-filter unaffected — assert eval_events still consumes the parquet).
-- [ ] GREEN → gates → commit `feat: rolling thresholds with conformal-floor fallback + coverage stats (D7/A3.2)`.
+- [x] RED: synthetic run where early windows force fallback and later ones roll (assert per-window threshold_source pattern + bitwise thresholds both branches); coverage stats in notes; column contract update everywhere (events harness role-filter unaffected — assert eval_events still consumes the parquet).
+- [x] GREEN → gates → commit `feat: rolling thresholds with conformal-floor fallback + coverage stats (D7/A3.2)`.
 
 ### Task 6: `pretrain_tfc.py --corpus pshp-pool --continue-from` + materialized pool windows
 
 **Files:** Modify `scripts/pretrain_tfc.py` · Test extend `tests/test_pretrain_tfc.py`
 
 **Interfaces:** new corpus key `pshp-pool`: windows via `iter_target_windows(run, cfg, target_hz=8000)` over `--pool-runs <csv>` (default = canonical pool), MATERIALIZED once to `<out>/pshp_pool_windows.npz` (members: `windows` float32 (N,8000), `run_names`, `per_run_counts`; `allow_pickle=False`; reused on rerun via sha256 of run names + per-run window counts + target_hz); `--continue-from PATH` initializes the model from that checkpoint's state dict; checkpoint + sidecar gain `continued_from: str | None` and `pool_runs`; `_CHECKPOINT_NAMES["pshp-pool"] = "tfc_audio_pshp.pt"`, scratch control via `--out-name tfc_audio_pshp_scratch.pt` override flag.
-- [ ] RED: corpus-key wiring (KeyError paths gone); materialize-once (second call: no iter_target_windows invocation — monkeypatch-count); `--continue-from` lineage in sidecar + init actually loaded (probe: weights equal source before training step); out-name override.
-- [ ] GREEN → gates → commit `feat: TF-C continued pretraining on PSHP pool (materialized windows, lineage) (D4/A3.9)`.
+- [x] RED: corpus-key wiring (KeyError paths gone); materialize-once (second call: no iter_target_windows invocation — monkeypatch-count); `--continue-from` lineage in sidecar + init actually loaded (probe: weights equal source before training step); out-name override.
+- [x] GREEN → gates → commit `feat: TF-C continued pretraining on PSHP pool (materialized windows, lineage) (D4/A3.9)`.
 
 ### Task 7: Paderborn K003–K006 + `tfc_vib_v2`
 
 **Files:** Modify `scripts/download_corpora.py` · Test extend `tests/test_download_corpora.py`
 
 **Interfaces:** K003–K006 entries with `groups.uni-paderborn.de/kat/BearingDataCenter/K00x.rar` URLs + `_SHA256_TBD` sentinel (live-HEAD verification at execution per house procedure — A3.10; NOT Zenodo); extraction reuses the existing rar path; `pretrain_tfc --corpus bearings` output name becomes overridable (`--out-name`, default unchanged `tfc_vib.pt`; execution uses `tfc_vib_v2.pt`).
-- [ ] RED: manifest entries present with correct host; dry-run lists new files; out-name override test (shared with T6's flag — implement once in T6, this task only VERIFIES it applies to bearings).
-- [ ] GREEN → gates → commit `feat: Paderborn K003-K006 downloads + vib checkpoint naming (D5/A3.10)`.
+- [x] RED: manifest entries present with correct host; dry-run lists new files; out-name override test (shared with T6's flag — implement once in T6, this task only VERIFIES it applies to bearings).
+- [x] GREEN → gates → commit `feat: Paderborn K003-K006 downloads + vib checkpoint naming (D5/A3.10)`.
 
 ### Task 8: `adapt_beats`/`distill_beats` `--runs` round-robin
 
 **Files:** Modify `scripts/adapt_beats.py`, `scripts/distill_beats.py`, `src/rowii/adapt/target_windows.py` (multi-run iterator helper) · Tests extend `tests/test_adapt_beats.py`, `tests/test_student.py`, `tests/test_target_windows.py`
 
 **Interfaces:** `iter_target_windows_multi(runs: list[Run], cfg: Config, *, max_windows: int, target_hz: int, seed: int) -> Iterator[np.ndarray]` — ROUND-ROBIN across per-run iterators (A3.11: budget is TOTAL; a sequential chain would train almost entirely on run 1), per-run splits unchanged; exhausted runs drop out of the rotation. CLIs accept `--runs a,b,c` (singular `--run` stays, mutually exclusive); sidecars record per-run window counts. distill_beats pools calibration windows across runs for BOTH student inputs and teacher targets (per-run caches loaded, per-run splits, stacked; grid-alignment check per run).
-- [ ] RED: round-robin order pinned on unequal-length fake iterators (a,b,c,a,c,a…); total budget honored; per-run counts in sidecar; mutual-exclusion parser error; distill multi-run stacking parity vs single-run path on a 1-run list (bitwise).
-- [ ] GREEN → gates → commit `feat: multi-run round-robin adaptation/distillation pools (D6/A3.11)`.
+- [x] RED: round-robin order pinned on unequal-length fake iterators (a,b,c,a,c,a…); total budget honored; per-run counts in sidecar; mutual-exclusion parser error; distill multi-run stacking parity vs single-run path on a 1-run list (bitwise).
+- [x] GREEN → gates → commit `feat: multi-run round-robin adaptation/distillation pools (D6/A3.11)`.
 
 ### Task 9: Execution A — baselines, rotations, norm ablation (spec §8.2–8.4)
 

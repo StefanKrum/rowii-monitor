@@ -1104,3 +1104,115 @@ def test_help_documents_rolling_flags(capsys: pytest.CaptureFixture[str]) -> Non
     out = capsys.readouterr().out
     assert "--rolling-minutes" in out
     assert "rolling" in out  # the third --thresholds choice is documented
+
+
+# ---------------------------------------------------------------------------
+# T5-review hardening: boundary unit pin, rolling-off-norm warning, branches
+# ---------------------------------------------------------------------------
+
+
+def test_trailing_bounds_upper_edge_exclusive_lower_inclusive() -> None:
+    """T5-review finding 1: cal/scoring segment-disjointness makes cal_t ==
+    scr_t unreachable through the CLI, so the upper-edge exclusivity had NO
+    test (the side="right" mutation survived the suite). Pin both edges on
+    synthetic arrays directly."""
+    import monitor
+
+    m_ns = 10
+    cal_t = np.array([0, 5, 10, 15, 20], dtype=np.int64)
+    # Scored window exactly AT a calibration time: that calibration window is
+    # EXCLUDED (upper edge exclusive). Scored window exactly M after one: that
+    # one is INCLUDED (lower edge inclusive).
+    scr_t = np.array([10, 25], dtype=np.int64)
+    lo, hi = monitor._trailing_bounds(cal_t, scr_t, m_ns)
+    # Window at t=10, interval [0, 10): cal 0 and 5 in, cal 10 OUT.
+    assert (lo[0], hi[0]) == (0, 2)
+    # Window at t=25, interval [15, 25): cal 15 and 20 in.
+    assert (lo[1], hi[1]) == (3, 5)
+
+
+def test_rolling_without_session_norm_warns_and_fallback_matches_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """T5-review finding 2: the stats-bearing-snapshot warning must name
+    rolling's fallback branch, and that branch must inherit frozen mode's
+    verdicts bitwise (probed correct by the review; pinned here)."""
+    import logging
+
+    import monitor
+
+    snapshot_path, _ = _stats_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+
+    out_roll = tmp_path / "out-roll"
+    with caplog.at_level(logging.WARNING):
+        assert monitor.main(
+            [
+                "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+                "--thresholds", "rolling", "--rolling-minutes", "10000",
+                "--out", str(out_roll),
+            ]
+        ) == 0
+    warned = " ".join(r.getMessage() for r in caplog.records)
+    assert "fit_day_fallback" in warned
+
+    out_frozen = tmp_path / "out-frozen"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "frozen", "--out", str(out_frozen),
+        ]
+    ) == 0
+
+    roll = pd.read_parquet(out_roll / "alarms.parquet", engine="pyarrow")
+    frozen = pd.read_parquet(out_frozen / "alarms.parquet", engine="pyarrow")
+    fb = roll[roll["threshold_source"] == "fit_day_fallback"]
+    if len(fb):
+        fz = frozen.set_index("window").loc[fb["window"]]
+        assert (fb["alarm"].to_numpy() == fz["alarm"].to_numpy()).all()
+        assert np.array_equal(fb["p_value"].to_numpy(), fz["p_value"].to_numpy())
+
+
+def test_rolling_zero_calibration_state_all_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T5-review finding 3a: a snapshot-known state with zero calibration-side
+    windows on the monitored run takes the flagged fallback for ALL its scored
+    windows in rolling mode (the designed A3.2 behavior)."""
+    import monitor
+
+    snapshot_path, snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _lone_high_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--out", str(out_dir),
+        ]
+    ) == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    scored = alarms[alarms["role"] == "scored"]
+    lone = scored[scored["threshold_source"] == "fit_day_fallback"]
+    assert len(lone) > 0
+
+
+def test_rolling_minutes_overflow_guard_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    import monitor
+
+    snapshot_path, _ = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    exit_code = monitor.main(
+        [
+            "--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+            "--thresholds", "rolling", "--rolling-minutes", "1000000000",
+            "--out", str(tmp_path / "out"),
+        ]
+    )
+    assert exit_code == 2
+    assert "decade" in capsys.readouterr().err
