@@ -800,3 +800,173 @@ def test_k_below_one_exits_2(tmp_path, monkeypatch, capsys) -> None:
             ]
         )
     assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# T4: --session-norm / --norm-minutes (package-7 Task 4, spec D3/A3.5) --
+#     cross-day-pooled wiring ONLY (within-day/cross-day wiring is deferred)
+# ---------------------------------------------------------------------------
+
+_SNORM_ARGS = [*_BASE_ARGS, "--session-norm"]
+
+
+def _snorm_out_dir(tmp_path, minutes: str = "20") -> Path:
+    """Session-norm runs land in a `-snorm<N>` suffixed leaf so the A2.2 N-sweep
+    never overwrites the un-normed baseline (or another N's outputs)."""
+    return (
+        tmp_path / "results" / "step2" / "cross-day-pooled" / _TEST_RUN_NAME
+        / f"fusion-pooled-snorm{minutes}"
+    )
+
+
+def test_session_norm_smoke_tables_and_thresholds_differ(tmp_path, monkeypatch) -> None:
+    prepared = _pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
+
+    import run_step2
+
+    assert run_step2.main(_BASE_ARGS) == 0  # un-normed baseline first
+    assert run_step2.main(_SNORM_ARGS) == 0
+
+    out_dir = _snorm_out_dir(tmp_path)
+    for filename in ("far_table_frozen.csv", "far_table_recalibrate.csv"):
+        path = out_dir / filename
+        assert path.is_file(), f"missing {path}"
+        table = _read_far(path)
+        assert list(table.columns) == list(run_step2._FAR_TABLE_COLUMNS)
+        assert list(table["label"]) == ["0", "1", "2", "pooled"]
+        per_label = table[table["label"] != "pooled"]
+        assert not per_label["excluded"].any()
+        assert (per_label["n_scored"] > 0).all()
+
+    # Scoring in the session-normalized space must actually CHANGE the thresholds
+    # vs the un-normed baseline (same labels, same window sets -- different space).
+    for filename in ("far_table_frozen.csv", "far_table_recalibrate.csv"):
+        base = _read_far(_out_dir(tmp_path) / filename).set_index("label")
+        norm = _read_far(out_dir / filename).set_index("label")
+        base_thr = base.loc[[str(lid) for lid in range(_K)], "threshold"].to_numpy()
+        norm_thr = norm.loc[[str(lid) for lid in range(_K)], "threshold"].to_numpy()
+        assert not np.allclose(base_thr, norm_thr), filename
+
+    notes = (out_dir / "notes.md").read_text()
+    assert "session" in notes.lower()
+    assert "deferred" in notes.lower()  # within-day/cross-day wiring deferral, documented
+    assert "confound" in notes.lower()  # the A3.5 state-mix caveat travels with results
+
+
+def test_session_norm_uses_per_run_stats(tmp_path, monkeypatch) -> None:
+    """Per-run stats are BINDING (Task 4: "per-run stats for pool members!") -- the
+    CLI must fit session stats exactly once per run (2 fit runs + the test run),
+    each on that run's OWN feature matrix, at the requested norm minutes."""
+    prepared = _pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
+
+    import run_step2
+
+    calls: list[tuple[np.ndarray, float]] = []
+    real_fit = run_step2.fit_session_stats
+
+    def spy(features, valid_mask, grid, *, norm_minutes):
+        calls.append((features, norm_minutes))
+        return real_fit(features, valid_mask, grid, norm_minutes=norm_minutes)
+
+    monkeypatch.setattr(run_step2, "fit_session_stats", spy)
+
+    assert run_step2.main([*_SNORM_ARGS, "--norm-minutes", "5"]) == 0
+    assert len(calls) == 3  # fit-a, fit-b, test-c -- once each
+    assert {minutes for _, minutes in calls} == {5.0}
+    for name in (*_FIT_RUN_NAMES, _TEST_RUN_NAME):
+        assert any(feats is prepared[name].features for feats, _ in calls), name
+    # The N goes into the leaf name too (N-sweep separability).
+    assert (_snorm_out_dir(tmp_path, "5") / "far_table_frozen.csv").is_file()
+
+
+def test_session_norm_snapshot_stores_pool_global_stats_and_raw_references(
+    tmp_path, monkeypatch
+) -> None:
+    """Task 4's pooled-snapshot design decision: references stay RAW (the
+    MonitorSnapshot field contract), `session_stats` = pool-global median/MAD over
+    the RAW pooled fit matrix (`norm_minutes == 0.0` sentinel), and the stored
+    conformal scores/thresholds are SELF-CONSISTENT in the exact space the monitor
+    reconstructs (scorer on stats-transformed references, stats-transformed
+    conformal rows) -- deliberately NOT far_table_frozen.csv's per-run-normalized
+    thresholds (FAR-level-only comparability, A3.5)."""
+    prepared = _pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
+
+    import run_step2
+
+    from rowii.anomaly.normalize import apply_session_norm
+
+    snap_path = tmp_path / "snapshots" / "pool_snorm.npz"
+    assert run_step2.main([*_SNORM_ARGS, "--save-snapshot", str(snap_path)]) == 0
+
+    loaded = load_snapshot(snap_path)
+    stats = loaded.session_stats
+    assert stats is not None
+    assert stats.norm_minutes == 0.0  # pool-global sentinel
+
+    hand = _hand_pipeline(prepared)
+    center = np.median(hand.pool_fit.features, axis=0)
+    mad = np.median(np.abs(hand.pool_fit.features - center), axis=0)
+    scale = np.maximum(mad * 1.4826, 1e-8)
+    np.testing.assert_array_equal(stats.center, center)
+    np.testing.assert_array_equal(stats.scale, scale)
+    assert stats.n_windows == hand.pool_fit.features.shape[0]
+
+    for lid in range(_K):
+        raw_reference = hand.pool_fit.features[hand.fit_labels == lid]
+        np.testing.assert_array_equal(loaded.references[lid], raw_reference)
+        # Self-consistency in the monitor-reconstructed space, bitwise.
+        scorer = KnnScorer().fit(apply_session_norm(raw_reference, stats))
+        conf_raw = hand.pool_conformal.features[hand.conformal_labels == lid]
+        expected_scores = scorer.score(apply_session_norm(conf_raw, stats))
+        np.testing.assert_array_equal(loaded.calibration_scores[lid], expected_scores)
+        assert loaded.thresholds[lid] == calibrate(expected_scores, 0.05)
+
+    sidecar = json.loads(snap_path.with_suffix(".json").read_text())
+    assert sidecar["provenance"]["session_norm"]["norm_minutes"] == 20.0
+    assert sidecar["provenance"]["session_norm"]["pool_stats_n_windows"] == stats.n_windows
+
+
+def test_norm_minutes_requires_session_norm(tmp_path, monkeypatch, capsys) -> None:
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main([*_BASE_ARGS, "--norm-minutes", "5"])
+    assert exc_info.value.code == 2
+    assert "--session-norm" in capsys.readouterr().err
+
+
+def test_norm_minutes_must_be_positive(tmp_path, monkeypatch, capsys) -> None:
+    _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main([*_SNORM_ARGS, "--norm-minutes", "0"])
+    assert exc_info.value.code == 2
+    assert "> 0" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--session-norm"], ["--session-norm", "--norm-minutes", "5"]],
+)
+def test_session_norm_requires_cross_day_pooled_protocol(
+    tmp_path, monkeypatch, capsys, extra
+) -> None:
+    """Task 4 wires --session-norm into cross-day-pooled ONLY (the plan's
+    within-day/cross-day wiring is DEFERRED) -- other protocols must refuse."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    (tmp_path / "data").mkdir()
+
+    import run_step2
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_step2.main(["--protocol", "within-day", "--variant", "fusion", *extra])
+    assert exc_info.value.code == 2
+    assert "cross-day-pooled" in capsys.readouterr().err

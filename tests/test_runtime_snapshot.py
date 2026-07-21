@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from rowii.anomaly.conformal import ConformalThreshold, calibrate
+from rowii.anomaly.normalize import SessionStats, apply_session_norm
 from rowii.anomaly.references import split_by_segments
 from rowii.anomaly.scorers import KnnScorer
 from rowii.anomaly.sweep import SweepConfig
@@ -199,7 +200,7 @@ def test_snapshot_npz_has_no_pickle(tmp_path: Path) -> None:
         assert all(data[name].dtype != object for name in data.files)
         meta = json.loads(str(data["meta"][0]))
 
-    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 1
+    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 2  # v2 since package-7 Task 4
     assert meta["scorer"] == "knn"
     assert meta["variant"] == "fusion"
     assert meta["fit_run"] == "fit-day"
@@ -208,7 +209,7 @@ def test_snapshot_npz_has_no_pickle(tmp_path: Path) -> None:
     # The human-readable sidecar carries the same metadata.
     sidecar = path.with_suffix(".json")
     assert sidecar.is_file()
-    assert json.loads(sidecar.read_text())["format_version"] == 1
+    assert json.loads(sidecar.read_text())["format_version"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +666,7 @@ def test_save_snapshot_provenance_round_trip(tmp_path: Path) -> None:
     with np.load(path, allow_pickle=False) as data:
         meta = json.loads(str(data["meta"][0]))
     assert meta["provenance"] == provenance
-    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 1  # additive metadata
+    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 2  # additive metadata
     sidecar = json.loads(path.with_suffix(".json").read_text())
     assert sidecar["provenance"] == provenance
 
@@ -683,3 +684,121 @@ def test_save_snapshot_provenance_round_trip(tmp_path: Path) -> None:
         bare_meta = json.loads(str(data["meta"][0]))
     assert "provenance" not in bare_meta
     assert "provenance" not in json.loads(bare_path.with_suffix(".json").read_text())
+
+
+# ---------------------------------------------------------------------------
+# 12. Format v2: session stats (package-7 Task 4, spec D3/A3.5) -- round trips
+#     with and without stats, v1-FILE compatibility, geometry refusal
+# ---------------------------------------------------------------------------
+
+
+def _session_stats_2f() -> SessionStats:
+    return SessionStats(
+        center=np.array([0.5, -1.25]),
+        scale=np.array([2.0, 0.75]),
+        n_windows=42,
+        norm_minutes=20.0,
+    )
+
+
+def test_v2_round_trip_with_session_stats(tmp_path: Path) -> None:
+    prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    stats = _session_stats_2f()
+    snapshot = _from_parts(
+        detector, references, cal_scores, thresholds, session_stats=stats
+    )
+    assert snapshot.format_version == SNAPSHOT_FORMAT_VERSION == 2
+    assert snapshot.session_stats is stats
+
+    path = tmp_path / "v2_stats.npz"
+    save_snapshot(path, snapshot)
+
+    with np.load(path, allow_pickle=False) as data:
+        assert "session_center" in data.files
+        assert "session_scale" in data.files
+        meta = json.loads(str(data["meta"][0]))
+    assert meta["format_version"] == 2
+    assert meta["session_stats"] == {"n_windows": 42, "norm_minutes": 20.0}
+
+    loaded = load_snapshot(path)
+    assert loaded.session_stats is not None
+    np.testing.assert_array_equal(loaded.session_stats.center, stats.center)
+    np.testing.assert_array_equal(loaded.session_stats.scale, stats.scale)
+    assert loaded.session_stats.n_windows == 42
+    assert loaded.session_stats.norm_minutes == 20.0
+    # The scoring/detector halves are untouched by the stats members.
+    assert loaded.thresholds == snapshot.thresholds
+    np.testing.assert_array_equal(
+        to_detector(loaded).apply(prepared.features, prepared.grid).frame_labels,
+        detector.apply(prepared.features, prepared.grid).frame_labels,
+    )
+
+
+def test_v2_without_stats_carries_no_session_members(tmp_path: Path) -> None:
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    assert snapshot.session_stats is None  # fit_snapshot never fits session stats
+    assert snapshot.format_version == 2  # NEW saves are v2 either way (Task 4)
+
+    path = tmp_path / "v2_bare.npz"
+    save_snapshot(path, snapshot)
+    with np.load(path, allow_pickle=False) as data:
+        assert not any(name.startswith("session_") for name in data.files)
+        meta = json.loads(str(data["meta"][0]))
+    assert meta["format_version"] == 2
+    assert "session_stats" not in meta
+
+    loaded = load_snapshot(path)
+    assert loaded.session_stats is None
+    assert loaded.format_version == 2
+
+
+def test_v1_file_loads_with_session_stats_none(tmp_path: Path) -> None:
+    """A pre-package-7 snapshot FILE (format_version 1, no session members) must
+    keep loading -- the reader accepts {1, 2}; refusing v1 is the MONITOR's job,
+    and only under --session-norm (tests/test_monitor_cli.py)."""
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    path = tmp_path / "v1_file.npz"
+    save_snapshot(path, snapshot)
+    _rewrite_meta(path, format_version=1)  # simulate the pre-v2 on-disk artifact
+
+    loaded = load_snapshot(path)
+    assert loaded.format_version == 1
+    assert loaded.session_stats is None
+    assert loaded.thresholds == snapshot.thresholds
+    features_valid = prepared.features[prepared.valid_mask]
+    for label in snapshot.thresholds:
+        np.testing.assert_array_equal(
+            scorer_for_label(loaded, label).score(features_valid),
+            scorer_for_label(snapshot, label).score(features_valid),
+        )
+
+
+def test_from_parts_session_stats_geometry_refusal() -> None:
+    _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    three_wide = SessionStats(
+        center=np.zeros(3), scale=np.ones(3), n_windows=5, norm_minutes=20.0
+    )
+    with pytest.raises(ValueError, match="session"):
+        _from_parts(
+            detector, references, cal_scores, thresholds, session_stats=three_wide
+        )
+
+
+def test_scorer_for_label_session_stats_transforms_the_reference() -> None:
+    """`scorer_for_label(..., session_stats=...)` must fit on the session-normalized
+    reference (the monitor's reference-side transform seam, D3/A3.5) -- parity with
+    a hand-transformed KnnScorer, bitwise."""
+    prepared = _two_state_prepared()
+    snapshot, _ = _fit(prepared)
+    stats = _session_stats_2f()
+    query = prepared.features[prepared.valid_mask][:50]
+    for label, reference in snapshot.references.items():
+        expected = (
+            KnnScorer(k=1, metric="cosine")
+            .fit(apply_session_norm(reference, stats))
+            .score(query)
+        )
+        got = scorer_for_label(snapshot, label, session_stats=stats).score(query)
+        np.testing.assert_array_equal(got, expected)
