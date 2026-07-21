@@ -263,3 +263,275 @@ def test_era_step_marks_unmatched_day_and_gates_080726(tmp_path, monkeypatch, ca
     assert set(table2["run"]) == {"dayGT", "dayNoGT", "080726-pu_strikes"}
     strikes_rows = table2[table2["run"] == "080726-pu_strikes"]
     assert strikes_rows["matched"].all()
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (plan docs/superpowers/plans/2026-07-21-step2-package8-modebank-
+# explain.md): `mode-signatures`, `tonal-table`, `pillar3-figure`, `digest` --
+# three more pure helpers (`_tonal_contrast`, `_mode_profile`, `_tpr_by_alpha`,
+# all explicitly named "Pure helper" in the plan's own Task 9 Interfaces
+# section) + their subcommands, going through the SAME `_run_features_and_gt`/
+# `_RunFeatures` seam Task 8 built (mode-signatures/tonal-table) or reading
+# `results/pillar3/**/event_eval.csv` directly (pillar3-figure, no seam
+# needed, mirrors rotations-heatmap's own direct-filesystem-read style).
+# ---------------------------------------------------------------------------
+
+
+def test_tonal_contrast_is_band_minus_floor() -> None:
+    assert ad._tonal_contrast(band_energy=-30.0, octave_floor=-45.0) == 15.0  # our own definition
+
+
+# ---------------------------------------------------------------------------
+# Task 9 extension 1: `_mode_profile` + `_band_octave_columns` pure helpers,
+# `mode-signatures` subcommand (per-day artifact-shape; plan's own RED block
+# names the subcommand test literally -- extended here to two days to also
+# pin the "one PNG per RUN, not per variant" file-naming contract).
+# ---------------------------------------------------------------------------
+
+
+def test_band_octave_columns_excludes_log_rms_and_shape_columns() -> None:
+    names = [
+        "s::ch0_log_rms", "s::ch0_band_shaft", "s::ch0_octave_125",
+        "s::ch0_spectral_centroid", "s::ch0_rolloff95",
+    ]
+    assert ad._band_octave_columns(names) == [1, 2]
+
+
+def test_mode_profile_reports_median_and_iqr_per_mode_excluding_unknown() -> None:
+    # 3 columns; mode 'turbine' rows all at 0.0, mode 'pump' rows all at 10.0,
+    # a GT 'unknown' row is present but must never surface as its own mode.
+    features = np.array(
+        [
+            [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [10.0, 10.0, 10.0], [10.0, 10.0, 10.0],
+            [99.0, 99.0, 99.0],
+        ]
+    )
+    gt = np.array(["turbine", "turbine", "pump", "pump", "unknown"], dtype=object)
+    table = ad._mode_profile(features, gt, level_cols=[0, 2])
+    assert set(table["mode"]) == {"turbine", "pump"}
+    assert set(table["column"]) == {0, 2}
+    turbine_col0 = table[(table["mode"] == "turbine") & (table["column"] == 0)].iloc[0]
+    assert turbine_col0["median"] == 0.0
+    assert turbine_col0["q25"] == 0.0 and turbine_col0["q75"] == 0.0
+    assert turbine_col0["n_windows"] == 2
+    pump_col2 = table[(table["mode"] == "pump") & (table["column"] == 2)].iloc[0]
+    assert pump_col2["median"] == 10.0
+
+
+_MODESIG_NAMES = [f"s::ch0_octave_{fc}" for fc in (125, 250)] + ["s::ch0_band_shaft"]
+
+
+def _modesig_run(run_name: str, seed: int) -> ad._RunFeatures:
+    rng = np.random.default_rng(seed)
+    n_per = 30
+    feats = np.vstack([rng.normal(0.0, 0.1, (n_per, 3)), rng.normal(8.0, 0.1, (n_per, 3))])
+    gt = np.array((["turbine"] * n_per) + (["pump"] * n_per), dtype=object)
+    return ad._RunFeatures(
+        run_name=run_name, features=feats, gt_states=gt,
+        segment_ids=np.arange(2 * n_per) // 10, feature_names=list(_MODESIG_NAMES), has_gt=True,
+    )
+
+
+def test_mode_signatures_subcommand_writes_artifacts(tmp_path, monkeypatch) -> None:
+    fake = {"290626-tu": _modesig_run("290626-tu", 0)}
+    _install_features_and_gt(monkeypatch, ad, ["290626-tu"], fake, tmp_path / "results")
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(
+        ["mode-signatures", "--runs", "290626-tu", "--variant", "audio", "--out", str(out)]
+    )
+    assert code == 0
+    assert (out / "mode-signatures" / "290626-tu.png").is_file()
+    csv_path = out / "mode-signatures" / "290626-tu.csv"
+    assert csv_path.is_file()
+    table = pd.read_csv(csv_path)
+    assert {"mode", "feature", "median", "q25", "q75", "n_windows"} <= set(table.columns)
+    assert set(table["mode"]) == {"turbine", "pump"}
+
+
+def test_mode_signatures_writes_one_png_per_run(tmp_path, monkeypatch) -> None:
+    fake = {"dayA": _modesig_run("dayA", 1), "dayB": _modesig_run("dayB", 2)}
+    _install_features_and_gt(monkeypatch, ad, ["dayA", "dayB"], fake, tmp_path / "results")
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(
+        ["mode-signatures", "--runs", "dayA,dayB", "--variant", "audio", "--out", str(out)]
+    )
+    assert code == 0
+    assert (out / "mode-signatures" / "dayA.png").is_file()
+    assert (out / "mode-signatures" / "dayB.png").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Task 9 extension 2: `_nearest_octave_hz` + `_tonal_table` pure/impure
+# helpers, `tonal-table` subcommand (artifact-shape).
+# ---------------------------------------------------------------------------
+
+
+def test_nearest_octave_hz_picks_closest_by_absolute_distance() -> None:
+    assert ad._nearest_octave_hz(43.75, [31.5, 63.0, 125.0]) == 31.5
+    assert ad._nearest_octave_hz(125.0, [31.5, 63.0, 125.0, 250.0]) == 125.0
+    with pytest.raises(ValueError, match="empty"):
+        ad._nearest_octave_hz(6.25, [])
+
+
+_TONAL_NAMES = [
+    "RAWGeneratorMic__0::ch0_band_shaft",
+    "RAWGeneratorMic__0::ch0_octave_31",
+    "RAWGeneratorMic__0::ch0_octave_63",
+]
+
+
+def _tonal_run(
+    run_name: str, *, shaft: float, floor: float, has_gt: bool = True
+) -> ad._RunFeatures:
+    n = 20
+    features = np.zeros((n, 3), dtype=np.float64)
+    features[:, 0] = shaft  # ch0_band_shaft
+    features[:, 1] = floor  # ch0_octave_31 -- nearest neighbour to MACHINE_HZ['shaft']=6.25
+    features[:, 2] = floor + 50.0  # ch0_octave_63 -- must NOT be picked as the floor
+    gt = np.array((["turbine"] if has_gt else ["unknown"]) * n, dtype=object)
+    return ad._RunFeatures(
+        run_name=run_name, features=features, gt_states=gt,
+        segment_ids=np.arange(n) // 5, feature_names=list(_TONAL_NAMES), has_gt=has_gt,
+    )
+
+
+def test_tonal_table_contrasts_machine_band_against_nearest_octave() -> None:
+    rf = _tonal_run("dayA", shaft=-30.0, floor=-45.0)
+    table = ad._tonal_table([rf])
+    row = table[(table["band"] == "shaft") & (table["mode"] == "turbine")].iloc[0]
+    assert row["stream"] == "RAWGeneratorMic__0"
+    assert row["band_energy"] == pytest.approx(-30.0)
+    assert row["octave_floor"] == pytest.approx(-45.0)
+    assert row["octave_floor_hz"] == pytest.approx(31.0)  # parsed from '_octave_31'
+    assert row["tonal_contrast"] == pytest.approx(15.0)
+    # only 'shaft' has a '_band_*' column in this fixture -- blade_pass/guide_vane_pass absent.
+    assert set(table["band"]) == {"shaft"}
+
+
+def test_tonal_table_excludes_non_gt_runs() -> None:
+    rf_no_gt = _tonal_run("dayNoGT", shaft=-30.0, floor=-45.0, has_gt=False)
+    table = ad._tonal_table([rf_no_gt])
+    assert table.empty
+
+
+def test_tonal_table_subcommand_writes_artifacts(tmp_path, monkeypatch) -> None:
+    fake = {"dayA": _tonal_run("dayA", shaft=-30.0, floor=-45.0)}
+    _install_features_and_gt(monkeypatch, ad, ["dayA"], fake, tmp_path / "results")
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(["tonal-table", "--runs", "dayA", "--variant", "audio", "--out", str(out)])
+    assert code == 0
+    assert (out / "tonal-table" / "audio.png").is_file()
+    table = pd.read_csv(out / "tonal-table" / "audio.csv")
+    assert {"run", "mode", "stream", "band", "tonal_contrast"} <= set(table.columns)
+
+
+# ---------------------------------------------------------------------------
+# Task 9 extension 3: `_tpr_by_alpha` pure helper + `pillar3-figure`
+# subcommand -- the REAL on-disk `event_eval.csv` schema verified against
+# `results/pillar3/080726-{pu,st}_strikes/**/event_eval.csv` on this branch:
+# `row_type == "summary"`, columns n_events/n_detected/event_tpr/
+# realized_window_far (`scripts/eval_events.py`'s own `_CSV_COLUMNS`).
+# ---------------------------------------------------------------------------
+
+
+def test_tpr_by_alpha_pivots_representation_by_alpha() -> None:
+    table = pd.DataFrame(
+        [
+            {"representation": "audio", "alpha": 0.01, "event_tpr": 0.5},
+            {"representation": "audio", "alpha": 0.05, "event_tpr": 0.8},
+            {"representation": "fusion", "alpha": 0.01, "event_tpr": 0.6},
+        ]
+    )
+    m = ad._tpr_by_alpha(table)
+    assert m.loc["audio", 0.01] == 0.5
+    assert m.loc["audio", 0.05] == 0.8
+    assert m.loc["fusion", 0.01] == 0.6
+    assert np.isnan(m.loc["fusion", 0.05])
+
+
+def _write_event_eval(
+    path: Path, *, n_events: float, n_detected: float, event_tpr: float, realized_window_far: float
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "row_type": "summary", "n_events": n_events, "n_detected": n_detected,
+                "event_tpr": event_tpr, "false_alarm_windows": 4.0,
+                "false_alarm_rate_per_hour": 10.0, "realized_window_far": realized_window_far,
+                "tolerance_s": 5.0, "start_utc": "", "end_utc": "", "kind": "", "detected": "",
+                "latency_s": "",
+            },
+            {
+                "row_type": "event", "n_events": "", "n_detected": "", "event_tpr": "",
+                "false_alarm_windows": "", "false_alarm_rate_per_hour": "",
+                "realized_window_far": "", "tolerance_s": "",
+                "start_utc": "2026-07-08 10:00:00+00:00", "end_utc": "2026-07-08 10:01:00+00:00",
+                "kind": "plate-gen_0", "detected": "True", "latency_s": 3.0,
+            },
+        ]
+    ).to_csv(path / "event_eval.csv", index=False)
+
+
+def test_pillar3_figure_subcommand_writes_artifacts_and_skips_non_alpha_leaves(tmp_path) -> None:
+    root = tmp_path / "results" / "pillar3"
+    _write_event_eval(
+        root / "080726-pu_strikes" / "fusion-a0.01",
+        n_events=10.0, n_detected=6.0, event_tpr=0.6, realized_window_far=0.01,
+    )
+    _write_event_eval(
+        root / "080726-pu_strikes" / "audio-a0.05",
+        n_events=10.0, n_detected=10.0, event_tpr=1.0, realized_window_far=0.06,
+    )
+    _write_event_eval(
+        root / "080726-st_strikes" / "fusion-a0.01",
+        n_events=10.0, n_detected=9.0, event_tpr=0.9, realized_window_far=0.02,
+    )
+    # 'fusion-frozen' carries no '-a<alpha>' suffix -- not part of the alpha
+    # grid this figure compares, must be silently skipped.
+    _write_event_eval(
+        root / "080726-st_strikes" / "fusion-frozen",
+        n_events=10.0, n_detected=10.0, event_tpr=1.0, realized_window_far=0.03,
+    )
+
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(["pillar3-figure", "--root", str(root), "--out", str(out)])
+    assert code == 0
+    assert (out / "pillar3-figure" / "pillar3.png").is_file()
+    table = pd.read_csv(out / "pillar3-figure" / "pillar3.csv")
+    assert {
+        "session", "representation", "alpha", "n_events", "n_detected",
+        "event_tpr", "realized_window_far",
+    } <= set(table.columns)
+    assert set(table["representation"]) == {"fusion", "audio"}  # 'fusion-frozen' excluded
+    assert len(table) == 3
+
+
+def test_pillar3_figure_missing_root_exits_1(tmp_path, capsys) -> None:
+    code = ad.main(
+        ["pillar3-figure", "--root", str(tmp_path / "nope"), "--out", str(tmp_path / "out")]
+    )
+    assert code == 1
+    assert "nope" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Task 9 extension 4: `digest` (plan's own RED block, extended to also check
+# every subcommand name and the discovered-PNG link are present).
+# ---------------------------------------------------------------------------
+
+
+def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
+    out = tmp_path / "results" / "analysis-days"
+    (out / "rotations-heatmap").mkdir(parents=True)
+    (out / "rotations-heatmap" / "audio-frozen.png").write_bytes(b"x")
+    assert ad.main(["digest", "--out", str(out)]) == 0
+    readme = (out / "README.md").read_text()
+    assert "Rodrigues & Zhang (2026)" in readme  # attribution present
+    assert "z-score" in readme and "fusion" in readme  # A1.1 finding documented
+    assert "rotations-heatmap/audio-frozen.png" in readme  # figure actually linked
+    for name in (
+        "rotations-heatmap", "feature-stability", "era-step",
+        "mode-signatures", "tonal-table", "pillar3-figure",
+    ):
+        assert name in readme
