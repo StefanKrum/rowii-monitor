@@ -1,0 +1,58 @@
+{
+  "clips": [
+    {
+      "file": "state_cluster0.wav",
+      "kind": "state",
+      "label": "0",
+      "start_utc": "2026-07-08T14:19:42.410000+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-pu_strikes",
+      "description": "Unüberwacht erkannter Zustand 0 (11 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+    },
+    {
+      "file": "state_cluster1.wav",
+      "kind": "state",
+      "label": "1",
+      "start_utc": "2026-07-08T12:15:54.910000+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-pu_strikes",
+      "description": "Unüberwacht erkannter Zustand 1 (6740 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+    },
+    {
+      "file": "state_cluster3.wav",
+      "kind": "state",
+      "label": "3",
+      "start_utc": "2026-07-08T13:15:54.910000+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-pu_strikes",
+      "description": "Unüberwacht erkannter Zustand 3 (6076 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+    },
+    {
+      "file": "strike_pump_plate_tur_0.wav",
+      "kind": "strike",
+      "label": "plate-tur_0",
+      "start_utc": "2026-07-08T12:54:00+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-pu_strikes",
+      "description": "Induzierter Schonhammer-Schlag \"plate-tur_0\" (Referenzplatte Turbinenseite, 0°) während des Pumpbetriebs – SCADA-bestätigt bei ca. −279 MW / −377.8 U/min."
+    },
+    {
+      "file": "strike_standstill_plate_gen_0.wav",
+      "kind": "strike",
+      "label": "plate-gen_0",
+      "start_utc": "2026-07-08T10:17:00+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-st_strikes",
+      "description": "Induzierter Schonhammer-Schlag \"plate-gen_0\" (Referenzplatte Generatorseite, 0°) im Stillstand (Kalibrierungs-Session)."
+    },
+    {
+      "file": "strike_standstill_vane_sweep.wav",
+      "kind": "strike",
+      "label": "vane-sweep",
+      "start_utc": "2026-07-08T10:24:00+00:00",
+      "duration_s": 10.0,
+      "source_run": "080726-st_strikes",
+      "description": "Vane-Sweep – strukturübertragene Anregung am Leitschaufeldeckel, erste 10 s der rund dreiminütigen Sweep-Session (Stillstand)."
+    }
+  ]
+}
