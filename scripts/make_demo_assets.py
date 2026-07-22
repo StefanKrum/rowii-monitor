@@ -1,18 +1,27 @@
 """Build real-audio assets for the interactive live demo (`docs/demo/demo_live.html`):
 short WAV clips cut from the 080726 induced-Schonhammer-strike campaign day, plus the
-manifest describing them, plus (second subcommand) the self-contained demo page itself.
+manifest describing them, plus (second/third subcommand) the pipeline-overview
+figures and the self-contained demo page itself.
 
-Two subcommands:
+Three subcommands:
 
-    extract-clips   Read real 080726 data (via the existing `rowii.io.dataset.discover`
-                     / `rowii.io.gantner.read_gantner` seams) and write
-                     `docs/demo/assets/*.wav` + `docs/demo/assets/manifest.json`.
-    build-html       Template-inject the clips (as base64 data-URIs + waveform
-                     sparklines) and the EXISTING `demo_080726_pu.html` state/score/
-                     report data model into `docs/demo/demo_live_template.html`,
-                     producing `docs/demo/demo_live.html`. Never touches real data --
-                     pure file/template assembly, so this half is fast and reproducible
-                     from `docs/demo/assets/` alone.
+    extract-clips     Read real 080726 data (via the existing `rowii.io.dataset.
+                       discover`/`rowii.io.gantner.read_gantner` seams) and write
+                       `docs/demo/assets/*.wav` + `docs/demo/assets/manifest.json`.
+    render-figures    Render the four Section-1 pipeline PNGs (waveform, spectrogram,
+                       feature-bars, score-histogram; see `render_figures`) from one
+                       already-extracted clip WAV + the real fusion feature cache +
+                       the existing demo's `demo-data` trace, and write them into
+                       `docs/demo/assets/figures/*.png`.
+    build-html        Template-inject the clips (as base64 data-URIs + waveform
+                       sparklines), the four `render-figures` PNGs, and the EXISTING
+                       `demo_080726_pu.html` state/score/report data model into
+                       `docs/demo/demo_live_template.html`, producing
+                       `docs/demo/demo_live.html`. Never touches real data -- pure
+                       file/template assembly, so this step is fast and reproducible
+                       from `docs/demo/assets/` alone (`render-figures`' PNG output
+                       included, since those are themselves tracked files under
+                       `assets/`, not a live real-data read).
 
 Clip selection (six clips total):
 
@@ -56,8 +65,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import bisect
 import gc
 import html
+import io
 import json
 import logging
 import re
@@ -65,8 +76,9 @@ import sys
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -337,6 +349,168 @@ def peak_normalize(samples: np.ndarray, target_dbfs: float = TARGET_DBFS) -> np.
         return x
     target_linear = 10.0 ** (target_dbfs / 20.0)
     return np.asarray(x * (target_linear / peak), dtype=np.float64)
+
+
+def quantile_threshold(scores: Sequence[float], alpha: float) -> float:
+    """The (1 - alpha) quantile of *scores* -- the illustrative, POOLED-across-the-
+    whole-day conformal-style threshold line drawn on the Section-1 score-histogram
+    figure (`render_figures`, Aufgabe A #4). This is NOT the literal per-state
+    operational threshold: the real pipeline (`monitor_notes.md` for e.g. this demo's
+    own `audio-beats-a0.01` run) fits one threshold PER detected state on that state's
+    own calibration-side windows -- 0.0498 for state 1 vs. 0.0679 for state 3 on this
+    exact run/day. Pooling every scored window across the day into one line is a
+    deliberate simplification for the pipeline-OVERVIEW figure, not a reproduction of
+    that per-state calibration (the figure/caption say so explicitly).
+
+    Args:
+        scores: Scored-window scores, any order (not required to be pre-sorted).
+        alpha: Miscoverage level, strictly between 0 and 1 (e.g. 0.01).
+
+    Raises:
+        ValueError: if *scores* is empty, or *alpha* is not in the open interval
+            (0, 1).
+    """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    values = np.asarray(list(scores), dtype=np.float64)
+    if values.size == 0:
+        raise ValueError("scores must be non-empty")
+    return float(np.quantile(values, 1.0 - alpha))
+
+
+def nearest_sorted_index(times: Sequence[float], target: float) -> int:
+    """The index into ascending-sorted *times* whose value is closest to *target* --
+    `bisect.bisect_left` alone only gives the FIRST index `>= target` (the insertion
+    point), which is wrong whenever the PRECEDING entry is actually nearer; this
+    compares both straddling neighbors and picks the closer one (a tie -- equal
+    distance either side -- keeps the EARLIER index, `bisect_left`'s own convention).
+
+    This is the reference implementation for this demo's two Aufgabe-B/A call sites
+    that both need "closest entry to a given instant in a monotonically increasing
+    but IRREGULARLY spaced array of times": (1) here, in `render_figures`, to pick
+    which real `demo-data` trace row backs the Section-1 feature-bars figure's example
+    window (the fusion cache is a dense uniform 1 Hz grid, but the TRACE array is
+    sparse -- it excludes calibration-consumed/unscored windows -- so a naive
+    round-to-nearest-second can land on a window with no matching trace entry).
+    (2) Hand-ported (kept algorithmically identical on purpose) into the live-replay
+    JavaScript in `demo_live_template.html`'s playhead, which runs the same lookup
+    against `D.trace` at animation-frame rate (~60 fps) to drive the live panel --
+    JS has no test runner in this project, so THIS function, tested here, is the
+    verified spec that port is checked against by hand, not a separate
+    implementation.
+
+    Raises:
+        ValueError: if *times* is empty.
+    """
+    if len(times) == 0:
+        raise ValueError("times must be non-empty")
+    i = bisect.bisect_left(times, target)
+    if i == 0:
+        return 0
+    if i == len(times):
+        return len(times) - 1
+    before, after = times[i - 1], times[i]
+    return i - 1 if (target - before) <= (after - target) else i
+
+
+def column_zscore_stats(
+    features: np.ndarray, valid_mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-column mean/std of *features*, computed over only the `valid_mask`-true
+    ROWS -- the day-level reference distribution `top_k_abs_z_indices` scores one
+    window's own row against for the Section-1 "Feature-Balken" figure
+    (`render_figures`). `ddof=0` (population std, numpy's own default and every other
+    z-score in this codebase).
+
+    Raises:
+        ValueError: if *features*/`valid_mask` disagree on row count, or no row is
+            valid at all (mean/std would be undefined).
+    """
+    if features.shape[0] != valid_mask.shape[0]:
+        raise ValueError(
+            f"features has {features.shape[0]} rows but valid_mask has "
+            f"{valid_mask.shape[0]}"
+        )
+    if not valid_mask.any():
+        raise ValueError("valid_mask has no True entries -- no rows to compute stats over")
+    valid_rows = features[valid_mask]
+    return valid_rows.mean(axis=0), valid_rows.std(axis=0)
+
+
+def top_k_abs_z_indices(row: np.ndarray, mean: np.ndarray, std: np.ndarray, k: int) -> list[int]:
+    """Indices of the *k* columns of *row* with the largest |z|-score
+    `(row - mean) / std`, sorted DESCENDING by |z| -- the pure selection logic behind
+    the Section-1 "Feature-Balken" figure (which columns of one real 243-feature
+    fusion window deviate most from `column_zscore_stats`' day-level reference).
+    Columns with `std == 0` (constant across every valid window that day -- none
+    occur in the real `080726-pu_strikes` fusion cache, but the contract must still be
+    well-defined) get z == 0, i.e. they can never be selected unless *k* exceeds the
+    number of non-constant columns.
+
+    Raises:
+        ValueError: if `row`/`mean`/`std` do not all share one shape, or `k <= 0`.
+    """
+    if not (row.shape == mean.shape == std.shape):
+        raise ValueError(
+            f"row/mean/std must share one shape, got {row.shape}/{mean.shape}/{std.shape}"
+        )
+    if k <= 0:
+        raise ValueError(f"k must be positive, got {k}")
+    safe_std = np.where(std == 0.0, 1.0, std)
+    z = np.where(std == 0.0, 0.0, (row - mean) / safe_std)
+    order = np.argsort(-np.abs(z))
+    return [int(i) for i in order[: min(k, len(row))]]
+
+
+_FEATURE_NAME_RE = re.compile(r"^RAW(\w+?)__(\d+)::ch(\d+)_(.+)$")
+_STREAM_ABBREV = {"Generator": "Gen", "Turbine": "Tur"}
+
+
+def shorten_feature_name(name: str) -> str:
+    """A short, chart-label-friendly form of a real `feature_names` entry from the
+    fusion cache, e.g. `"RAWGeneratorMic__0::ch0_log_rms"` -> `"GenMic0.ch0.log_rms"`
+    -- pure string transform for the Section-1 "Feature-Balken" figure's bar labels
+    (`render_figures`). Strips the `RAW` prefix, abbreviates the `Generator`/`Turbine`
+    stream-name component (`_STREAM_ABBREV`), and swaps the `::`/`ch<i>_` separators
+    for a compact dotted form. A name that does not match the expected
+    `RAW<Stream>__<n>::ch<i>_<feature>` shape (the real cache's own inventory, module
+    docstring) is returned UNCHANGED -- defensive fallback, this must never raise.
+    """
+    m = _FEATURE_NAME_RE.match(name)
+    if m is None:
+        return name
+    stream, stream_idx, ch, feat = m.groups()
+    for long, short in _STREAM_ABBREV.items():
+        stream = stream.replace(long, short)
+    return f"{stream}{stream_idx}.ch{ch}.{feat}"
+
+
+def extract_window_samples(
+    pcm: np.ndarray, sample_rate_hz: int, start_s: float, duration_s: float
+) -> np.ndarray:
+    """The `[start_s, start_s + duration_s)` slice of *pcm* (samples, any dtype --
+    typically the int16 array `scipy.io.wavfile.read` returns for one of this demo's
+    own clip WAVs), converted to `float64`. The pure "which samples feed the figure"
+    contract behind the Section-1 waveform/spectrogram renderers (Aufgabe A #1/#2,
+    `render_figures`), kept separate from those two so the slice arithmetic is
+    unit-testable without matplotlib (mirrors this module's existing IO-touching vs.
+    pure-helper split, module docstring).
+
+    Raises:
+        ValueError: if the requested window falls even partially outside `[0,
+            len(pcm))` at *sample_rate_hz* -- a caller bug (an out-of-range constant
+            in `render_figures`), not a real runtime condition, so this fails loudly
+            rather than silently clamping/padding.
+    """
+    start_idx = round(start_s * sample_rate_hz)
+    end_idx = round((start_s + duration_s) * sample_rate_hz)
+    if start_idx < 0 or end_idx > len(pcm) or end_idx <= start_idx:
+        raise ValueError(
+            f"window [{start_s}, {start_s + duration_s}) s -> samples "
+            f"[{start_idx}, {end_idx}) is out of range for pcm of length {len(pcm)} "
+            f"at {sample_rate_hz} Hz"
+        )
+    return np.asarray(pcm[start_idx:end_idx], dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -725,28 +899,341 @@ def _clip_card_html(clip: dict[str, Any], wav_bytes: bytes, pcm: np.ndarray) -> 
     description = html.escape(str(clip["description"]))
     start_utc = html.escape(str(clip["start_utc"]))
     source_run = html.escape(str(clip["source_run"]))
+    duration_s = html.escape(str(clip["duration_s"]))
     anchor_id = f"clip-{kind}-{_ANCHOR_SANITIZE_RE.sub('_', label_raw)}"
     kind_de = _CLIP_KIND_LABEL_DE.get(kind, kind)
     kind_attr = html.escape(kind)
+    # `data-start-utc`/`data-duration-s` (feat/demo-replay, Aufgabe B #4/#5): the
+    # live-replay JS reads these to align this clip's own audio.currentTime onto the
+    # shared `demo-data` trace time axis (`(new Date(data-start-utc) - t0) / 1000`)
+    # when its "Live mitverfolgen" button is clicked -- kept as machine-readable
+    # attributes rather than re-parsing the already-escaped, human-formatted
+    # `.clip-time` text.
     return (
         f'<div class="clip" id="{anchor_id}" data-kind="{kind_attr}" data-label="{label}" '
-        f'data-run="{source_run}">\n'
+        f'data-run="{source_run}" data-start-utc="{start_utc}" data-duration-s="{duration_s}">\n'
         f'  <div class="clip-head"><span class="badge">{kind_de} {label}</span>'
         f'<span class="clip-time">{start_utc} · {source_run}</span></div>\n'
-        f'  <img class="clip-wave" src="data:image/png;base64,{sparkline_b64}" alt="Waveform">\n'
+        f'  <div class="clip-wave-wrap">\n'
+        f'    <img class="clip-wave" src="data:image/png;base64,{sparkline_b64}" alt="Waveform">\n'
+        f'    <canvas class="clip-live-canvas" hidden></canvas>\n'
+        f'    <div class="clip-live-cursor" hidden></div>\n'
+        f"  </div>\n"
         f'  <audio controls preload="none" src="data:audio/wav;base64,{audio_b64}"></audio>\n'
         f'  <p class="clip-desc">{description}</p>\n'
+        f'  <button class="clip-live-btn" type="button">&#9654; Live mitverfolgen</button>\n'
         f"</div>"
     )
 
 
+# ---------------------------------------------------------------------------
+# Figure rendering (render-figures) -- real fusion-cache/WAV/demo-data reads,
+# matplotlib. The real-data-touching counterpart of `extract_clips` (module
+# docstring): writes four PNGs into `docs/demo/assets/figures/`, tracked in git like
+# the clip WAVs, so `build_html` below can stay real-data-free (it only ever reads
+# already-rendered PNG bytes off disk, the same kind of "assets/ only" read as its
+# existing clip-WAV reads -- never touches the fusion cache or `ROWII_DATA_ROOT`
+# itself). Not unit-tested (matplotlib rendering, disk IO) -- see the module
+# docstring's own pure-helper/IO-touching split; the DATA feeding each figure
+# (`top_k_abs_z_indices`, `column_zscore_stats`, `quantile_threshold`,
+# `nearest_sorted_index`, `extract_window_samples`) is the separately tested part.
+# ---------------------------------------------------------------------------
+
+DEFAULT_FUSION_CACHE = REPO_ROOT / "results" / "cache" / f"{PU_RUN_NAME}--fusion.npz"
+"""Only present in a checkout with real (gitignored) `results/` -- this task's own
+worktree has none (module docstring's own `extract_clips`/`ROWII_DATA_ROOT` parallel:
+a fresh checkout/worktree never has either). Pass `--fusion-cache` explicitly from
+one that does not."""
+DEFAULT_FIGURES_DIR = DEFAULT_ASSETS_DIR / "figures"
+DEFAULT_FIGURE_STATE_CLIP = "state_cluster1.wav"
+"""Zustand 1 (Pumpbetrieb, SCADA-verified 98.6% pure on this run -- see
+`demo_live_template.html`'s own live-panel legend) -- the cleanest single-mode state
+clip to anchor the Section-1 waveform/spectrogram/feature-bars figures to one real,
+nameable moment."""
+FIGURE_WINDOW_OFFSET_S = 4.0
+"""Seconds into the 10 s state clip where the illustrated 1 s window starts -- clear
+of both edges (`center_window`'s own dodge/collision slack sits at the clip
+boundaries, module docstring)."""
+FIGURE_WINDOW_DURATION_S = 1.0
+TOP_K_FEATURES = 10
+
+_FIG_BG = "#0f1420"  # --bg
+_FIG_INK = "#e8ecf4"  # --ink
+_FIG_MUTED = "#8b96ad"  # --muted
+_FIG_GRID = "#2a3348"  # --grid
+_FIG_ACCENT = "#4c8dff"  # --s0
+_FIG_ALARM = "#ff5c5c"  # --alarm
+"""Mirror `demo_live_template.html`'s own `:root` CSS custom properties so the four
+figures blend into the dark page instead of looking like a foreign export."""
+
+
+def _pyplot() -> ModuleType:
+    """Local, Agg-backend-safe `matplotlib.pyplot` import shared by the four figure
+    renderers below -- same rationale, and the same three-line sequence, as the
+    pre-existing `_render_sparkline_png_base64` (that function's own docstring):
+    matplotlib stays a required dependency (`pyproject.toml`) but only these cosmetic
+    renderers need it, so the import (and Agg backend selection) stays scoped to
+    callers that actually render a figure.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
+def _strip_axes_frame(ax: Any, *, keep: str = "bottom") -> None:
+    """Hide every spine except *keep* (or all of them, `keep=""`) and color the
+    survivor `_FIG_GRID` -- the "Achsen minimal" look (Aufgabe A) shared by all four
+    figures below."""
+    for side in ("top", "right", "left", "bottom"):
+        spine = ax.spines[side]
+        if side == keep:
+            spine.set_color(_FIG_GRID)
+        else:
+            spine.set_visible(False)
+
+
+def _render_waveform_png_bytes(
+    samples: np.ndarray, sample_rate_hz: int, *, width_px: int = 320, height_px: int = 110
+) -> bytes:
+    """A minimal-axis 1 s waveform figure (amplitude vs. time) for the Section-1
+    "Rohsignal" pipe-step tile -- real samples (one of this demo's own
+    `docs/demo/assets/*.wav` clips), not synthetic. Unlike the pre-existing per-clip
+    sparkline (`_render_sparkline_png_base64`, a bare axis-less envelope), this keeps
+    a small time axis: Aufgabe A calls these four figures "echte Mini-Grafiken",
+    distinct from that purely cosmetic sparkline.
+    """
+    plt = _pyplot()
+    t = np.arange(len(samples)) / sample_rate_hz
+    fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+    ax = fig.add_axes((0.10, 0.24, 0.88, 0.72))
+    ax.plot(t, samples, color=_FIG_ACCENT, linewidth=0.6)
+    ax.set_xlim(0, t[-1] if len(t) else 1.0)
+    ax.set_yticks([])
+    ax.set_xlabel("s", color=_FIG_MUTED, fontsize=8, labelpad=2)
+    ax.tick_params(axis="x", colors=_FIG_MUTED, labelsize=7, length=2)
+    _strip_axes_frame(ax)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _render_spectrogram_png_bytes(
+    samples: np.ndarray, sample_rate_hz: int, *, width_px: int = 320, height_px: int = 110
+) -> bytes:
+    """A minimal-axis spectrogram of the SAME 1 s window `_render_waveform_png_bytes`
+    plots, for the Section-1 "1-s-Fenster" pipe-step tile -- `Axes.specgram` (Aufgabe
+    A instruction: "matplotlib specgram reicht"), not a reproduction of this
+    codebase's real feature/BEATs frontend (`rowii.features`/`rowii.encoders.ssl`
+    elsewhere) -- a cosmetic pipeline-overview figure only.
+    """
+    plt = _pyplot()
+    fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+    ax = fig.add_axes((0.11, 0.24, 0.86, 0.72))
+    nfft = 512
+    ax.specgram(samples, NFFT=nfft, Fs=sample_rate_hz, noverlap=nfft // 2, cmap="magma")
+    ax.set_xlabel("s", color=_FIG_MUTED, fontsize=8, labelpad=2)
+    ax.set_ylabel("Hz", color=_FIG_MUTED, fontsize=8, labelpad=2)
+    ax.tick_params(colors=_FIG_MUTED, labelsize=7, length=2)
+    _strip_axes_frame(ax, keep="")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _render_feature_bars_png_bytes(
+    names: Sequence[str], z_values: Sequence[float], *, width_px: int = 420, height_px: int = 190
+) -> bytes:
+    """Horizontal top-|z| feature-bar chart for the Section-1 "Features" pipe-step
+    tile -- *names*/*z_values* are already selected+ordered by `top_k_abs_z_indices`
+    (this function only draws; that selection is the separately unit-tested pure
+    contract). Bar color encodes SIGN (this window's value above/below that column's
+    own day-mean, `column_zscore_stats`); bar length encodes |z|. Wider than the other
+    three figures (`width_px`): the longest real `shorten_feature_name` output (e.g.
+    `"GenVib2.ch2.band_guide_vane_pass"`, ~33 chars) needs the extra room even at a
+    small font, or it clips against the left edge of the canvas.
+    """
+    plt = _pyplot()
+    fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+    ax = fig.add_axes((0.53, 0.05, 0.44, 0.88))
+    y = np.arange(len(names))
+    colors = [_FIG_ALARM if v >= 0 else _FIG_ACCENT for v in z_values]
+    ax.barh(y, z_values, color=colors, height=0.62)
+    ax.set_yticks(y)
+    ax.set_yticklabels(names, color=_FIG_INK, fontsize=6.3)
+    ax.invert_yaxis()
+    ax.axvline(0, color=_FIG_GRID, linewidth=0.8)
+    ax.set_xlabel("z", color=_FIG_MUTED, fontsize=8, labelpad=2)
+    ax.tick_params(axis="x", colors=_FIG_MUTED, labelsize=7, length=2)
+    ax.tick_params(axis="y", length=0)
+    _strip_axes_frame(ax)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _render_histogram_png_bytes(
+    scores: Sequence[float],
+    threshold: float,
+    alpha: float,
+    *,
+    width_px: int = 320,
+    height_px: int = 190,
+) -> bytes:
+    """Score histogram + the pooled `quantile_threshold` line for the Section-1
+    "Split-Conformal-Schwelle" pipe-step tile -- see that helper's own docstring for
+    why the single line is a pooled-across-the-day illustrative simplification, not
+    the literal per-state operational threshold.
+    """
+    plt = _pyplot()
+    fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+    ax = fig.add_axes((0.09, 0.24, 0.88, 0.72))
+    ax.hist(scores, bins=30, color=_FIG_ACCENT, alpha=0.85)
+    ax.axvline(threshold, color=_FIG_ALARM, linewidth=1.1)
+    # Anchored to the AXES corner (`ax.transAxes`), not the threshold's own data
+    # x-position: the pooled quantile can land anywhere in [min(scores), max(scores)]
+    # depending on the day's own score distribution, and a data-coordinate label can
+    # run past the canvas edge when the threshold sits close to the right tail (as it
+    # does on the real 080726-pu_strikes/audio-beats run this demo embeds).
+    ax.text(
+        0.97,
+        0.94,
+        f"Conformal-Schwelle (α={alpha:g})\n≈ {threshold:.3f}",
+        transform=ax.transAxes,
+        color=_FIG_ALARM,
+        fontsize=6.3,
+        va="top",
+        ha="right",
+    )
+    ax.set_xlabel("Score", color=_FIG_MUTED, fontsize=8, labelpad=2)
+    ax.tick_params(axis="x", colors=_FIG_MUTED, labelsize=7, length=2)
+    ax.set_yticks([])
+    _strip_axes_frame(ax)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_figures(
+    assets_dir: Path,
+    fusion_cache_path: Path,
+    source_demo_path: Path,
+    state_clip_name: str,
+    out_dir: Path,
+) -> dict[str, Path]:
+    """Render the four Section-1 pipeline-overview PNGs (waveform, spectrogram,
+    feature-bars, score-histogram) and write them into *out_dir*. Reads exactly one
+    already-extracted clip WAV from *assets_dir* (no new burst-file access -- Aufgabe
+    A #1: "kein Neuzugriff auf Bursts nötig"), the fusion feature cache (real data,
+    *fusion_cache_path* -- see `DEFAULT_FUSION_CACHE`'s own docstring on why this
+    needs to be passed explicitly from a checkout that actually has it), and the
+    `demo-data` trace embedded in *source_demo_path* (the same source `build_html`
+    already copies its own data block from, byte for byte).
+
+    The SAME real moment backs three of the four figures: `state_clip_name`'s own
+    start time + `FIGURE_WINDOW_OFFSET_S` picks an absolute instant; the closest
+    ACTUALLY-SCORED `demo-data` trace row to that instant (`nearest_sorted_index` --
+    the fusion cache's own grid is dense/uniform, but the trace is sparse, excluding
+    calibration-consumed/unscored windows) fixes the exact second used for both the
+    waveform/spectrogram (from the WAV) and the feature-bars window (the fusion
+    cache's row for that same second) -- "this exact moment's raw signal AND its 243
+    features", not two arbitrary, unrelated windows.
+
+    Returns the four PNG paths, keyed by figure name (`"waveform"`, `"spectrogram"`,
+    `"features"`, `"histogram"`).
+
+    Raises:
+        ValueError: if *state_clip_name* is not in *assets_dir*'s manifest, or the
+            trace-matched second maps to an out-of-range or `valid_mask`-false fusion
+            cache row (should not happen on real data -- the trace only ever contains
+            scored, hence valid, windows -- but this fails loudly rather than
+            silently drawing a chart from garbage).
+    """
+    manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
+    clip_entries = {c["file"]: c for c in manifest["clips"]}
+    if state_clip_name not in clip_entries:
+        available = ", ".join(sorted(clip_entries))
+        raise ValueError(f"{state_clip_name!r} not in manifest.json (have: {available})")
+    clip_meta = clip_entries[state_clip_name]
+    clip_start_utc = datetime.fromisoformat(str(clip_meta["start_utc"]))
+
+    rate_hz, pcm = wavfile.read(assets_dir / state_clip_name)
+    window_samples = extract_window_samples(
+        np.asarray(pcm), int(rate_hz), FIGURE_WINDOW_OFFSET_S, FIGURE_WINDOW_DURATION_S
+    )
+
+    demo_data = json.loads(_extract_demo_data_block(source_demo_path))
+    t0_utc = datetime.fromisoformat(str(demo_data["t0_utc"]))
+    alpha = float(demo_data["alpha"])
+    trace = demo_data["trace"]  # [[t_s, score, state, alarm, p], ...], sorted by t_s
+    trace_times = [float(row[0]) for row in trace]
+    scores = [float(row[1]) for row in trace]
+
+    target_s = (clip_start_utc - t0_utc).total_seconds() + FIGURE_WINDOW_OFFSET_S
+    trace_idx = nearest_sorted_index(trace_times, target_s)
+    feature_window_s = round(trace_times[trace_idx])
+
+    with np.load(fusion_cache_path, allow_pickle=True) as npz:
+        features = np.asarray(npz["features"])
+        valid_mask = np.asarray(npz["valid_mask"])
+        feature_names = [str(n) for n in npz["feature_names"]]
+        grid_t0_ns = int(npz["grid_t0_ns"][0])
+
+    grid_t0_utc = datetime.fromtimestamp(grid_t0_ns / 1e9, tz=UTC)
+    fusion_row_idx = feature_window_s + round((t0_utc - grid_t0_utc).total_seconds())
+    if not (0 <= fusion_row_idx < features.shape[0]):
+        raise ValueError(
+            f"feature window at t0+{feature_window_s}s (fusion cache row "
+            f"{fusion_row_idx}) is outside the fusion cache's own "
+            f"{features.shape[0]} rows"
+        )
+    if not valid_mask[fusion_row_idx]:
+        raise ValueError(
+            f"fusion cache row {fusion_row_idx} (t0+{feature_window_s}s) is marked "
+            f"invalid -- the demo-data trace point it was matched to should always "
+            f"be a genuinely scored (hence valid) window"
+        )
+
+    mean, std = column_zscore_stats(features, valid_mask)
+    row = features[fusion_row_idx]
+    top_idx = top_k_abs_z_indices(row, mean, std, TOP_K_FEATURES)
+    bar_names = [shorten_feature_name(feature_names[i]) for i in top_idx]
+    bar_z = [float((row[i] - mean[i]) / std[i]) if std[i] != 0.0 else 0.0 for i in top_idx]
+
+    threshold = quantile_threshold(scores, alpha)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    png_bytes_by_name = {
+        "waveform": _render_waveform_png_bytes(window_samples, int(rate_hz)),
+        "spectrogram": _render_spectrogram_png_bytes(window_samples, int(rate_hz)),
+        "features": _render_feature_bars_png_bytes(bar_names, bar_z),
+        "histogram": _render_histogram_png_bytes(scores, threshold, alpha),
+    }
+    paths: dict[str, Path] = {}
+    for name, png_bytes in png_bytes_by_name.items():
+        path = out_dir / f"{name}.png"
+        path.write_bytes(png_bytes)
+        paths[name] = path
+        logger.info("make_demo_assets: wrote %s (%d bytes)", path, len(png_bytes))
+    return paths
+
+
 def build_html(
-    assets_dir: Path, template_path: Path, source_demo_path: Path, out_path: Path
+    assets_dir: Path, template_path: Path, source_demo_path: Path, figures_dir: Path, out_path: Path
 ) -> Path:
     """Render `demo_live.html` from *template_path* by injecting the clip player
-    cards (from *assets_dir*'s `manifest.json` + WAVs) and the `demo_080726_pu.html`
-    data block (from *source_demo_path*) -- reproducible from `docs/demo/assets/`
-    alone, no real ROWII data access.
+    cards (from *assets_dir*'s `manifest.json` + WAVs), the `demo_080726_pu.html`
+    data block (from *source_demo_path*), and the four Section-1 pipeline PNGs (from
+    *figures_dir* -- `render_figures`' own output) -- reproducible from
+    `docs/demo/assets/` alone, no real ROWII data access (reading an already-rendered
+    PNG off disk is the same kind of "assets/ only" read as the existing clip-WAV
+    reads just above, not a new real-data touch).
     """
     manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
     cards = []
@@ -760,9 +1247,26 @@ def build_html(
     data_block = _extract_demo_data_block(source_demo_path)
 
     template = template_path.read_text(encoding="utf-8")
-    if "__CLIPS_HTML__" not in template or "__DATA__" not in template:
-        raise ValueError(f"{template_path} is missing the __CLIPS_HTML__ or __DATA__ placeholder")
+    figure_placeholders = {
+        "waveform": "__FIG_WAVEFORM__",
+        "spectrogram": "__FIG_SPECTROGRAM__",
+        "features": "__FIG_FEATURES__",
+        "histogram": "__FIG_HISTOGRAM__",
+    }
+    required_placeholders = ["__CLIPS_HTML__", "__DATA__", *figure_placeholders.values()]
+    missing = [p for p in required_placeholders if p not in template]
+    if missing:
+        raise ValueError(f"{template_path} is missing placeholder(s): {', '.join(missing)}")
+
     rendered = template.replace("__CLIPS_HTML__", clips_html).replace("__DATA__", data_block)
+    for fig_name, placeholder in figure_placeholders.items():
+        png_path = figures_dir / f"{fig_name}.png"
+        if not png_path.exists():
+            raise FileNotFoundError(
+                f"{png_path} not found -- run `render-figures` before `build-html`"
+            )
+        fig_b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
+        rendered = rendered.replace(placeholder, fig_b64)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(rendered, encoding="utf-8")
@@ -794,6 +1298,36 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Output directory for WAVs + manifest.json (default: {DEFAULT_ASSETS_DIR}).",
     )
 
+    render = sub.add_parser(
+        "render-figures",
+        help="Render the four Section-1 pipeline PNGs (waveform, spectrogram, "
+        "feature-bars, score-histogram) from real assets + the fusion cache.",
+    )
+    render.add_argument(
+        "--assets-dir", type=Path, default=DEFAULT_ASSETS_DIR,
+        help=f"Directory holding the WAVs + manifest.json (default: {DEFAULT_ASSETS_DIR}).",
+    )
+    render.add_argument(
+        "--fusion-cache", type=Path, default=DEFAULT_FUSION_CACHE,
+        help=f"Fusion feature cache .npz for the {PU_RUN_NAME} run (default: "
+             f"{DEFAULT_FUSION_CACHE} -- only present in a checkout with real, "
+             f"gitignored results/; pass explicitly from a fresh worktree).",
+    )
+    render.add_argument(
+        "--source-demo", type=Path, default=DEFAULT_SOURCE_DEMO,
+        help=f"Existing demo page to read the <script id=demo-data> trace/alpha from "
+             f"(default: {DEFAULT_SOURCE_DEMO}).",
+    )
+    render.add_argument(
+        "--state-clip", type=str, default=DEFAULT_FIGURE_STATE_CLIP,
+        help="Which assets-dir state-clip WAV backs the waveform/spectrogram/"
+             f"feature-window figures (default: {DEFAULT_FIGURE_STATE_CLIP}).",
+    )
+    render.add_argument(
+        "--out-dir", type=Path, default=DEFAULT_FIGURES_DIR,
+        help=f"Output directory for the four PNGs (default: {DEFAULT_FIGURES_DIR}).",
+    )
+
     build = sub.add_parser(
         "build-html", help="Render demo_live.html from the template + assets + manifest."
     )
@@ -803,13 +1337,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build.add_argument(
         "--template", type=Path, default=DEFAULT_TEMPLATE,
-        help=f"HTML template with __CLIPS_HTML__/__DATA__ placeholders "
+        help=f"HTML template with __CLIPS_HTML__/__DATA__/__FIG_*__ placeholders "
              f"(default: {DEFAULT_TEMPLATE}).",
     )
     build.add_argument(
         "--source-demo", type=Path, default=DEFAULT_SOURCE_DEMO,
         help=f"Existing demo page to copy the <script id=demo-data> block from "
              f"(default: {DEFAULT_SOURCE_DEMO}).",
+    )
+    build.add_argument(
+        "--figures-dir", type=Path, default=DEFAULT_FIGURES_DIR,
+        help=f"Directory holding the four render-figures PNGs (default: "
+             f"{DEFAULT_FIGURES_DIR}).",
     )
     build.add_argument(
         "--out", type=Path, default=DEFAULT_OUT_HTML,
@@ -829,7 +1368,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"make_demo_assets: wrote {len(clips)} clip(s) to {args.out_dir}")
         return 0
 
-    out_path = build_html(args.assets_dir, args.template, args.source_demo, args.out)
+    if args.command == "render-figures":
+        paths = render_figures(
+            args.assets_dir, args.fusion_cache, args.source_demo, args.state_clip, args.out_dir
+        )
+        print(f"make_demo_assets: wrote {len(paths)} figure(s) to {args.out_dir}")
+        return 0
+
+    out_path = build_html(
+        args.assets_dir, args.template, args.source_demo, args.figures_dir, args.out
+    )
     print(f"make_demo_assets: wrote {out_path}")
     return 0
 
