@@ -379,6 +379,7 @@ from rowii.anomaly.sweep import (  # noqa: E402
     scores_and_candidates,
 )
 from rowii.config import Config, load_config  # noqa: E402
+from rowii.eval.metrics import derive_state_names  # noqa: E402
 from rowii.io.dataset import (  # noqa: E402
     RecordingIndex,
     Run,
@@ -3337,6 +3338,18 @@ def _pool_row_labels(pool: PoolResult, labels_per_run: dict[str, np.ndarray]) ->
     return out
 
 
+def _pool_row_gt_labels(pool: PoolResult, gt_by_run: dict[str, np.ndarray]) -> np.ndarray:
+    """Per stacked pool row, the GT mode-name STRING of its source window -- the
+    object-dtype sibling of `_pool_row_labels` (duplicated from
+    `scripts/run_modebank.py::_pool_gt_labels`, script-sibling rule). Feeds
+    `derive_state_names` at snapshot save (D2)."""
+    out = np.empty(pool.features.shape[0], dtype=object)
+    for member_idx, member in enumerate(pool.members):
+        mask = pool.run_index == member_idx
+        out[mask] = gt_by_run[member.run_name][pool.window_index[mask]]
+    return out
+
+
 def _session_norm_pool(
     pool: PoolResult, stats_by_run: dict[str, SessionStats]
 ) -> np.ndarray:
@@ -4007,6 +4020,24 @@ def _run_cross_day_pooled(
                 snapshot_references[label] = raw_reference
                 snapshot_cal_scores[label] = scores
                 snapshot_thresholds[label] = calibrate(scores, alpha)
+
+        # D2/A1.8: the commissioning-time cluster-id -> operating-mode-name map,
+        # derived from the POOLED FIT side's own detected labels + GT state
+        # strings (the same pooled fit side the detector/references were fit
+        # on). `None` when any fit run lacks Betriebsdaten (the GT-skip seam
+        # `missing_fit_scada` already established above) -- a name derivation
+        # needs GT for every fit run, not just a subset.
+        state_names: dict[int, str] | None = None
+        if not missing_fit_scada:
+            gt_state_by_run: dict[str, np.ndarray] = {}
+            for name in fit_run_names:
+                scada_fit_gt = scada_by_run[name]
+                assert scada_fit_gt is not None  # guarded by missing_fit_scada above
+                gt_state_by_run[name] = _gt_state_labels(scada_fit_gt, cfg)
+            pool_fit_gt = _pool_row_gt_labels(pool_fit, gt_state_by_run)
+            state_fitted_ids = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
+            state_names = derive_state_names(pool_fit_gt, pool_fit_labels, state_fitted_ids)
+
         snapshot = fit_snapshot_from_parts(
             detector,
             snapshot_references,
@@ -4023,6 +4054,7 @@ def _run_cross_day_pooled(
             checkpoints=checkpoints,
             session_stats=snapshot_session_stats,
             level_recal_medians=level_recal_anchor_used,
+            state_names=state_names,
         )
         provenance: dict[str, object] = {
             "protocol": "cross-day-pooled",

@@ -1267,3 +1267,35 @@ def test_first_n_minutes_rows_matches_fit_session_stats_window_membership() -> N
     expected_scale = np.maximum(expected_mad * 1.4826, 1e-8)
     np.testing.assert_array_equal(stats.center, expected_center)
     np.testing.assert_array_equal(stats.scale, expected_scale)
+
+
+# ---------------------------------------------------------------------------
+# T2 (P9 D2/A1.8): --save-snapshot's state_names computation -- the A1.8
+# GT-skip seam (missing_fit_scada -> None) and the object-dtype pool-row GT
+# gather `_pool_row_gt_labels` (duplicated from `run_modebank.py::_pool_gt_labels`,
+# script-sibling rule).
+# ---------------------------------------------------------------------------
+
+
+def test_save_snapshot_state_names_none_without_gt(tmp_path, monkeypatch) -> None:
+    """Default fixture has no Betriebsdaten (missing_fit_scada) -> state_names=None (A1.8)."""
+    import run_step2
+
+    from rowii.runtime.snapshot import load_snapshot
+    prepared = _pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
+    snap_path = _out_dir(tmp_path) / "snap.npz"
+    assert run_step2.main([*_BASE_ARGS, "--save-snapshot", str(snap_path)]) == 0
+    assert load_snapshot(snap_path).state_names is None
+
+
+def test_pool_row_gt_labels_object_dtype_alignment() -> None:
+    import run_step2
+    prepared = _pooled_prepared()
+    hand = _hand_pipeline(prepared)  # existing helper -> pooled fit sides
+    gt_by_run = {name: np.array(["turbine"] * len(p.features), dtype=object)
+                 for name, p in prepared.items()}
+    out = run_step2._pool_row_gt_labels(hand.pool_fit, gt_by_run)
+    assert out.dtype == object
+    assert out.shape[0] == hand.pool_fit.features.shape[0]
+    assert set(out.tolist()) == {"turbine"}

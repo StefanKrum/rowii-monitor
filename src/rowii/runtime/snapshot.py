@@ -110,6 +110,26 @@ level-only recalibration are different scoring-space transforms, and
 the `meta` JSON, present under a `"level_recal_medians"` key exactly when the
 snapshot carries it. Refusing a medians-less snapshot under `--level-recal` is
 the MONITOR's job (mirrors `session_stats`' A3.5 precedent), not the reader's.
+
+**Format v2 (cont'd): state_names (package-9 Task 2, spec D2/A1.8).** A
+snapshot may ALSO carry `state_names` (`dict[int, str]`, keyed over the
+detector's FITTED label ids -- `rowii.eval.metrics.derive_state_names`'s
+output) -- the commissioning-time cluster-id -> operating-mode-name map D2
+persists so the monitor can surface named states instead of bare cluster ids.
+A THIRD, independent OPTIONAL v2 member -- NO version bump (same v2 format as
+`session_stats`/`level_recal_medians`) and NO mutual-exclusivity with either
+(a naming layer, not a scoring-space transform, so it coexists with
+`session_stats` OR `level_recal_medians` OR neither). Unlike `level_recal_medians`
+(name-keyed over LEVEL columns), `state_names` is keyed over the FITTED-ID
+space, which is orthogonal to the threshold-label subset (`references`/
+`calibration_scores`/`thresholds`' key-agreement invariant does not apply to
+it -- a cluster can carry a name without ever having a calibrated threshold).
+Like `level_recal_medians`, it needs no npz array member -- the whole dict
+lives in the `meta` JSON under a `"state_names"` key, present exactly when the
+snapshot carries names. `fit_snapshot_from_parts` validates every key against
+the detector's own `fitted_ids` (the geometry-guard posture, mirroring the
+`level_recal_medians` -> `feature_names` check) -- a stray key would promise a
+name for a state the snapshot's detector never fitted.
 """
 from __future__ import annotations
 
@@ -253,6 +273,18 @@ class MonitorSnapshot:
     (mirrors `session_stats`' A3.5 refusal precedent). Mutually exclusive with
     `session_stats` by fit path (A1.10): the two normalization mechanisms are
     never both stored in one snapshot, enforced by `fit_snapshot_from_parts`."""
+    state_names: dict[int, str] | None = None
+    """Fit-side cluster-id -> operating-mode-name map (format v2, package-9 Task 2,
+    spec D2/A1.8), keyed over the detector's FITTED label ids (`fitted_ids`) --
+    NOT the threshold-label subset (`references`/`calibration_scores`/
+    `thresholds`' key-agreement invariant does not apply here; a cluster can
+    carry a name without ever having a calibrated threshold). OPTIONAL v2
+    member (no version bump, module docstring), `None` for a snapshot fitted
+    without a name derivation (e.g. `rowii.eval.metrics.derive_state_names`
+    was never run, or every fit run lacked SCADA ground truth -- the A1.8
+    GT-skip seam `scripts/run_step2.py --save-snapshot` implements). NO
+    mutual-exclusivity with `session_stats` or `level_recal_medians` (a naming
+    layer, not a scoring-space transform -- coexists with either)."""
 
 
 def _runtime_scorer(name: str) -> Scorer:
@@ -565,12 +597,14 @@ def fit_snapshot_from_parts(
     checkpoints: dict[str, str],
     session_stats: SessionStats | None = None,
     level_recal_medians: dict[str, float] | None = None,
+    state_names: dict[int, str] | None = None,
 ) -> MonitorSnapshot:
     """Assemble a `MonitorSnapshot` from ALREADY-COMPUTED parts -- the pooled
     counterpart to `fit_snapshot` (Step-2 package-7 spec `docs/superpowers/specs/
     2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3; the
     `session_stats` kwarg is Task 4's D3/A3.5 extension; the `level_recal_medians`
-    kwarg is package-8 Task 7's D2/A1.4/A1.10 extension).
+    kwarg is package-8 Task 7's D2/A1.4/A1.10 extension; the `state_names` kwarg
+    is package-9 Task 2's D2/A1.8 extension).
 
     `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
     references, thresholds). Pooled artifacts derive those parts across runs
@@ -629,6 +663,17 @@ def fit_snapshot_from_parts(
             EXCLUSIVE with *session_stats* (A1.10): session-normalization and
             level-only recalibration are different fit paths and are never both
             stored in one snapshot.
+        state_names: Optional fit-side cluster-id -> operating-mode-name map
+            (format v2, package-9 Task 2, spec D2/A1.8), keyed over the
+            detector's FITTED label ids -- typically `rowii.eval.metrics.
+            derive_state_names`'s output, e.g. `scripts/run_step2.py
+            --save-snapshot`'s pooled-fit-side name derivation (`None` when
+            the A1.8 GT-skip seam applies -- any fit run lacking Betriebsdaten).
+            Every key must be one of *detector*'s own fitted ids (the
+            geometry-guard posture, mirroring the `level_recal_medians` ->
+            `feature_names` check) -- NO mutual-exclusivity with
+            *session_stats*/*level_recal_medians* (a naming layer, not a
+            scoring-space transform, coexists with either).
 
     Returns:
         A `MonitorSnapshot` at the CURRENT format version -- `save_snapshot`/
@@ -650,7 +695,10 @@ def fit_snapshot_from_parts(
             if *session_stats* AND *level_recal_medians* are BOTH given (A1.10
             fit-path exclusivity); if *level_recal_medians* names a key that is
             not one of *feature_names* (the same geometry-guard posture -- a
-            stray key would promise an anchor the snapshot cannot back).
+            stray key would promise an anchor the snapshot cannot back); if
+            *state_names* names a key that is not one of the detector's own
+            fitted ids (same geometry-guard posture -- a stray key would
+            promise a name for a state the snapshot's detector never fitted).
         RuntimeError: from `_hmm_arrays` if the detector's component/id invariant
             is violated (see its docstring).
     """
@@ -710,6 +758,16 @@ def fit_snapshot_from_parts(
     smoother = detector.smoother
     assert smoother._fitted_ids is not None  # every FittedDetector constructor fits it
     fitted_ids = np.asarray(smoother._fitted_ids, dtype=np.int64)
+    if state_names is not None:
+        fitted_set = {int(i) for i in fitted_ids.tolist()}
+        stray = sorted(int(k) for k in state_names if int(k) not in fitted_set)
+        if stray:
+            raise ValueError(
+                f"state_names key(s) {stray} are not fitted label ids "
+                f"{sorted(fitted_set)} -- a stored name must key onto a real "
+                f"detected state (D2/A1.5); state_names is orthogonal to the "
+                f"threshold-label subset but still lives in the fitted-id space"
+            )
     startprob, transmat, means, covars_diag = _hmm_arrays(smoother, fitted_ids)
 
     return MonitorSnapshot(
@@ -742,6 +800,7 @@ def fit_snapshot_from_parts(
         level_recal_medians=(
             dict(level_recal_medians) if level_recal_medians is not None else None
         ),
+        state_names=(dict(state_names) if state_names is not None else None),
     )
 
 
@@ -804,7 +863,9 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
     the center/scale ARRAYS live in their own npz members) is added exactly when
     the snapshot carries stats; a `level_recal_medians` entry (the WHOLE dict --
     no npz array member, package-8 Task 7) is added exactly when the snapshot
-    carries medians."""
+    carries medians; a `state_names` entry (the WHOLE dict, string-keyed --
+    no npz array member, package-9 Task 2) is added exactly when the snapshot
+    carries names."""
     meta: dict[str, object] = {
         "format_version": snapshot.format_version,
         "min_dwell_s": snapshot.min_dwell_s,
@@ -840,6 +901,8 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
         }
     if snapshot.level_recal_medians is not None:
         meta["level_recal_medians"] = dict(snapshot.level_recal_medians)
+    if snapshot.state_names is not None:
+        meta["state_names"] = {str(k): v for k, v in snapshot.state_names.items()}
     return meta
 
 
@@ -1015,6 +1078,13 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             # presence corruption state to guard against here.
             level_recal_medians = {str(k): float(v) for k, v in raw_medians.items()}
 
+        state_names: dict[int, str] | None = None
+        raw_names = meta.get("state_names")
+        if raw_names is not None:
+            # Keys are label ids (stringified for JSON), unlike level_recal_medians'
+            # column NAMES -- restored to int here (module docstring: fitted-id space).
+            state_names = {int(k): str(v) for k, v in raw_names.items()}
+
         return MonitorSnapshot(
             mean=data["mean"],
             std=data["std"],
@@ -1043,4 +1113,5 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
             format_version=version,
             session_stats=session_stats,
             level_recal_medians=level_recal_medians,
+            state_names=state_names,
         )
