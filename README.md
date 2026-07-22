@@ -1550,3 +1550,84 @@ with the contract guard refusing the drifted fusion/vibration columns (by
 design — audio-beats is the drift-free representation there); no partner
 number enters any computation; ST vibration-frozen failure and the level-recal
 falsification are reported as measured.
+
+## Step 2 package-9 evidence (2026-07-22): once-calibrated operation, named states, transitions
+
+Stefan's three directives answered with numbers: calibrate ONCE per plant
+(drift-triggered recalibration instead of daily), name the states, and ground
+the no-1-second-modes intuition in data. Artifacts:
+`results/step2/once-calibrated/<rep>/`, `results/analysis-days/transitions/`,
+`results/step2/min-dwell-sweep/`.
+
+### D1 — once-calibrated + drift-triggered recalibration: the era boundary IS caught
+
+Two label-free sentinels, thresholds derived from the B1 commissioning pool
+alone (s1: 97.5th pct of B=1000 segment-block bootstrap of the audio-beats
+bank's no-mode-fits rate -> 0.081 vs baseline 0.040; s2: mic-level step
+> 3·(1.4826·MAD) vs the pooled anchor). Chronological replay, per-day
+decision, identical sentinel verdicts across all three scored representations:
+
+- **s1 fires on every foreign-era day**: both era-A days (rates 0.18-0.25)
+  AND the sentinel-only 270626 (0.33) AND era-C 080726 (0.195) — after the
+  era-B commissioning, the ONE post-commissioning day (080726) triggers
+  correctly. It also fires on 290626-pu (0.67 — a same-era day whose mode mix
+  departs from the pool), a conservative extra trigger that costs one
+  recalibration and never hurts FAR. The one near-miss: 290626-tu sits at
+  0.0767, just under 0.0805 — harmless for fusion (frozen FAR 0.075) but the
+  expensive case for audio-beats (frozen 0.233 kept). Threshold sensitivity
+  documented, not post-hoc retuned.
+- **s2 never fires**: the known 1.6-2.6 dB era mic step stays inside
+  3·(1.4826·MAD) ≈ 0.92 log10 of the B1 between-block scatter — the level
+  sentinel at this margin is deaf to steps of that size; s1 carries the
+  detection alone. Reported as measured (a tighter margin is future work, not
+  a silent retune).
+- **Regime FARs (fusion, alpha=0.05, common-window population; 080726
+  event-free per eval_events):** once+triggered holds 0.018-0.075 on every
+  day — vs always-frozen's 1.000 (250526-pu), 0.62 (080726) — at ~zero cost
+  vs always-recalibrate. Pillar-3 retention: once+triggered keeps the
+  recalibrate TPR exactly (PU 0.92, ST 1.00 for fusion; 0.85/1.00
+  audio-beats); frozen's nominal TPR 1.0 is trivial (it alarms on most
+  windows). Vibration replays confirm P8: frozen-vibration is the era-robust
+  arm (always-frozen 0.005-0.112 everywhere, 080726 event-free 0.041 at TPR
+  0.85 — where recalibrate DROPS vibration's strike TPR to 0.31); for a
+  vibration-first deployment, frozen + sentinel is already the best regime.
+- **The once-per-plant answer:** calibrate at commissioning; recalibrate only
+  when the rejection sentinel fires — which, on this campaign, happens exactly
+  on foreign-era/foreign-mix days. One calibration per instrumentation era,
+  and the sentinel TELLS you when an era ended.
+
+### D2 — named states end to end
+
+Snapshots now persist a commissioning-time cluster->mode map (majority vote
+over GT-known fit windows, {unknown, transition} masked, <50%-plurality and
+zero-GT clusters fall back to `cluster-<id>`): the B1 fusion/vibration/
+audio-beats snapshots are rebuilt as `*_named.npz`, and monitor's
+alarms.parquet (`state_name`), segments.csv (`mapped_mode`), timeline and
+notes all render "turbine / pump / phase_shifter" instead of bare ids. The
+bank path had native names all along; both arms now speak SCADA vocabulary
+with zero GT at monitor time.
+
+### D3 — transitions and the no-1-second-modes rule
+
+- **Taxonomy (our own SCADA-derived ramp/dwell statistics):** real machine
+  transitions take 20-138 s (pump->phase-shifter 20-21 s, standstill->
+  phase-shifter 107 s, phase-shifter->standstill 138 s); the frequent
+  turbine->turbine load-step blips have median ramps of 6-9 s (min 1 s) —
+  exactly the sub-scale flicker the duration filter exists to absorb.
+- **min_dwell sweep (5/10/20 s, re-fit per value):** 290626-tu ARI flat
+  (0.896->0.899) with FAR mildly improving (0.044->0.038); 250526-tu ARI
+  DEGRADES (0.407->0.371) as longer dwell over-smooths the cross-config day,
+  while FAR improves (0.103->0.085). No sweep value dominates: the 5 s
+  default stays, now data-grounded (the trade-off is documented, not
+  hand-waved).
+- **Monitor surfacing:** every alarms.parquet row carries `near_transition`
+  (±min_dwell along the valid subsequence, invalid blips never count as
+  changes); `--suppress-transition-alarms` (default OFF, an operator choice)
+  reports its suppressed count in the notes.
+
+Honesty: the replay is a retrospective day-granular simulation, not an online
+claim; sentinel thresholds come from B1 data alone (97.5/1000/3/1.4826 are
+named standard-statistics constants, nothing partner-derived); 010726 rows are
+in-sample (tagged); the s1 near-miss on 290626-tu and s2's deafness to the
+mic step are reported as measured; ST stays out of reach for operation-pool
+vibration snapshots (TPR <= 0.08) as in P8.
