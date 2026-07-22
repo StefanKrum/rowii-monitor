@@ -34,9 +34,17 @@ subprocess-invokes `scripts/monitor.py` in `--thresholds frozen` and
 `--thresholds recalibrate` (script-sibling rule: a script never imports another
 script's internals, so monitor.py runs as a real subprocess, behind the
 `_run_monitor` seam tests monkeypatch away, spec §5); (3) reports three FAR
-regimes -- always-frozen, always-recalibrate, once+triggered -- ALL on the
-common recalibrate scoring-split window population (A1.6 headline), with the
-full-population frozen FAR as a labeled secondary column.
+regimes -- always-frozen, always-recalibrate, once+triggered -- for NON-event
+days ALL on the common recalibrate scoring-split window population (A1.6
+headline), with the full-population frozen FAR as a labeled secondary column;
+for the EVENT-BEARING day (`080726-pu_strikes`) the headline instead sources
+all three arms from `scripts/eval_events.py`'s own event-free
+`realized_window_far` (T6-review F1 -- the common-window/raw-parquet reading
+silently includes the induced-strike windows, which correctly alarm,
+inflating it ~2.5-3x), labeled `far_basis="event-free per eval_events"`,
+keeping the raw scored-window FAR as the SAME labeled
+`frozen_far_full_population` secondary so the two readings are never
+conflated.
 
 **Pinned run set (A1.2, "no run enumeration by day root anywhere").** `_REPLAY`
 is the P7 rotation run set in true chronological order, including `270626`
@@ -46,21 +54,40 @@ Betriebsdaten, so it gets no monitor.py/FAR row at all, only a trigger-log entry
 cache exists on disk). `010726-tu_ph_tu`/`010726-pu` are B1 pool members, so
 their frozen/once monitoring is IN-SAMPLE and tagged `"in-sample"` (D1 honesty
 3) -- computed exactly like every other day, just labeled for interpretation.
-`080726-pu_strikes` (era C, the induced-strike day) gets the EVENT-FREE
-window-FAR (`--exclude-calibration-events docs/groundtruth/080726_events_pu.csv`,
-the P7 pillar-3 rule, A2.3.3) -- frozen mode ignores the flag with a warning
-(it draws no calibration from the monitored run at all), recalibrate mode
-actually applies it. `080726-st_strikes` is used ONLY for the pillar-3
-event-retention check below (A1.2), never a regime/trigger-log row of its own.
+`080726-pu_strikes` (era C, the induced-strike day) is EVENT-BEARING
+(`events_csv` set): `--exclude-calibration-events
+docs/groundtruth/080726_events_pu.csv` (the P7 pillar-3 rule, A2.3.3) is
+passed to every `monitor.py` call for it so the RECALIBRATE threshold is
+never contaminated by a strike window (frozen mode ignores the flag with a
+warning -- it draws no calibration from the monitored run at all, so there is
+nothing to protect there). That calibration protection is ORTHOGONAL to the
+regime FAR reported for this entry: the raw `alarms.parquet` scored-window
+mean is NOT event-free (the induced-strike windows are still scored -- under
+recalibrate they are moved from calibration onto the scoring side by monitor's
+own `_apply_calibration_exclusion`, and under frozen they were always scored
+regardless of the flag -- and they correctly alarm, inflating the raw reading
+~2.5-3x, T6-review F1). The genuinely event-free reading is
+`scripts/eval_events.py`'s own `realized_window_far` (computed over
+`role=="scored"` windows OUTSIDE every tolerance-padded strike interval,
+`rowii.eval.events.evaluate_events`'s contract) -- sourced here for ALL THREE
+regime arms and labeled `far_basis="event-free per eval_events"` in the
+regimes table/sidecar, with the raw scored-window FAR of the frozen arm kept
+visible as the SAME labeled `frozen_far_full_population` secondary so the two
+readings are never conflated. `080726-st_strikes` is used ONLY for the
+pillar-3 event-retention check below (A1.2), never a regime/trigger-log row of
+its own.
 
 **Pillar-3 TPR-retained readout.** For BOTH `080726` sessions (PU pumping, ST
 standstill) this driver reuses the SAME frozen/recalibrate alarms.parquet
-already produced for the FAR table (`080726-pu_strikes`) or produced once more
+already produced for the FAR table (`080726-pu_strikes`) -- and, for PU, the
+SAME `eval_events.py` summary already computed there for the T6-review F1
+event-free regime FAR (`event_eval_by_run`, never re-invoked as a second
+subprocess call for the identical alarms/events pair) -- or produced once more
 under the SAME era-C decision (`080726-st_strikes` -- A1.2 scopes it to this
 check alone, so it inherits era C's own trigger verdict rather than being
 independently sentineled: both sessions were recorded the same day under the
 same instrumentation era, so re-deriving an independent sentinel verdict for ST
-would not change anything this driver could act on differently) and feeds each
+would not change anything this driver could act on differently) and feeds ST
 through `scripts/eval_events.py` (subprocess, `_run_eval_events` seam) at the
 README pillar-3 tolerance (5 s) and this driver's own `--alpha`. Reporting BOTH
 the once+triggered (recalibrate) TPR and the frozen-arm TPR side by side is the
@@ -86,10 +113,13 @@ call feeding it, not eval_events.py itself, which has no alpha concept).
 Outputs (`_out_dir`, default `<results_root>/step2/once-calibrated/
 <representation>/`): `<representation>_trigger_log.csv` (one row per `_REPLAY`
 entry, sentinel-only included), `<representation>_regimes.csv` (one row per
-FAR-bearing entry: the three regimes + the labeled secondary), and
-`<representation>.json` (everything above plus the s1/s2 threshold derivations,
-the era-boundary-caught verdict, and the pillar-3 readout) -- every number
-traceable to a committed artifact, negative results included.
+FAR-bearing entry: the three regimes + the labeled `frozen_far_full_population`
+secondary + `far_basis` -- `"common-window"` for non-event days, `"event-free
+per eval_events"` for 080726, T6-review F1), and `<representation>.json`
+(everything above plus the s1/s2 threshold derivations -- including s1's
+`pct`/`n_boot`/`seed` bootstrap knobs, T6-review F2 -- the era-boundary-caught
+verdict, and the pillar-3 readout) -- every number traceable to a committed
+artifact, negative results included.
 """
 from __future__ import annotations
 
@@ -174,6 +204,23 @@ _BANK_K = 5
 """`ModeBank.fit`'s `knn` family neighbour count -- its own default, matching
 `scripts/run_modebank.py --k`'s default."""
 
+_S1_BOOTSTRAP_PCT = 97.5
+"""`rowii.anomaly.sentinels.s1_threshold`'s own internal bootstrap percentile
+(A1.1 pin) -- NOT one of `s1_threshold`'s parameters (the percentile is a
+fixed, named standard-statistics constant per A1.1, not a caller-configurable
+knob, so it cannot be "passed" to `s1_threshold`); kept here ONLY so the
+sidecar can echo the exact value `s1_threshold` uses internally, making the
+A1.1 bootstrap derivation fully self-documenting without a reader having to
+open `sentinels.py` (T6-review F2)."""
+_S1_BOOTSTRAP_N_BOOT = 1000
+"""Passed EXPLICITLY to `s1_threshold` (T6-review F2) -- equal to its own
+default, but stated as a named constant here so the sidecar's echoed value can
+never silently drift from the value actually used, even if `s1_threshold`'s
+own default ever changes."""
+_S1_BOOTSTRAP_SEED = 7
+"""Passed EXPLICITLY to `s1_threshold` (T6-review F2) -- see
+`_S1_BOOTSTRAP_N_BOOT`'s docstring; the same reproducibility argument."""
+
 _PILLAR3_TOLERANCE_S = 5.0
 """`scripts/eval_events.py --tolerance-s` value for the pillar-3 readout below --
 the README pillar-3 section's own "corrected ground truth, +-5 s tolerance"
@@ -186,6 +233,19 @@ _EVENTS_ST = _GROUNDTRUTH_DIR / "080726_events_st.csv"
 _TAG_SENTINEL_ONLY = "sentinel-only"
 _TAG_IN_SAMPLE = "in-sample"
 _TAG_EVENT_FREE_FAR = "event-free-far"
+
+_FAR_BASIS_COMMON_WINDOW = "common-window"
+"""`far_basis` value for a NON-event `_REPLAY` entry (A1.6): the frozen arm's
+FAR is subset onto the recalibrate arm's own scoring-split window population
+(`_far_on_windows`/`_scoring_windows`) before the two are compared."""
+_FAR_BASIS_EVENT_FREE = "event-free per eval_events"
+"""`far_basis` value for an EVENT-BEARING `_REPLAY` entry (`entry.events_csv`
+is not `None`, currently only `080726-pu_strikes`, T6-review F1): the raw
+`alarms.parquet` scored-window mean silently includes the induced-event
+windows too (they correctly alarm, inflating it ~2.5-3x for 080726) -- the
+correct event-free reading is `scripts/eval_events.py`'s own
+`realized_window_far` (`rowii.eval.events.EventEvalResult`, computed over
+non-event scored windows only), sourced here for ALL THREE regime arms."""
 
 _PILLAR3_ST_RUN = "080726-st_strikes"
 """era C's standstill strike session -- NOT a `_REPLAY` entry (A1.2: "for the
@@ -408,7 +468,10 @@ def _commission_s1(
         )
     conformal_assignment = bank.assign(pool_conformal.features)
     block_ids = _pool_block_ids(pool_conformal, prepared_fit)
-    threshold = s1_threshold(conformal_assignment.no_mode_fits, block_ids)
+    threshold = s1_threshold(
+        conformal_assignment.no_mode_fits, block_ids,
+        n_boot=_S1_BOOTSTRAP_N_BOOT, seed=_S1_BOOTSTRAP_SEED,
+    )  # T6-review F2: explicit, never s1_threshold's implicit defaults
     baseline_rate = (
         float(conformal_assignment.no_mode_fits.mean())
         if conformal_assignment.no_mode_fits.size
@@ -653,6 +716,23 @@ def _read_event_tpr(event_eval_csv: Path) -> float:
     return float(summary.iloc[0]["event_tpr"])
 
 
+def _read_realized_window_far(event_eval_csv: Path) -> float:
+    """The EVENT-FREE aggregate FAR out of one `event_eval.csv`'s summary row:
+    `realized_window_far` (`rowii.eval.events.EventEvalResult`'s own contract
+    -- false alarms restricted to `role == "scored"` windows OUTSIDE every
+    tolerance-padded event interval, `scripts/eval_events.py`'s own
+    `row_type == "summary"` contract). For an EVENT-BEARING `_REPLAY` entry
+    this is the ONLY correct "event-free window-FAR" reading -- `_read_
+    realized_far`/`_far_on_windows` over the raw `alarms.parquet` silently
+    score the induced-event windows too (they correctly alarm, inflating the
+    raw reading ~2.5-3x for 080726, T6-review F1)."""
+    df = pd.read_csv(event_eval_csv)
+    summary = df[df["row_type"] == "summary"]
+    if summary.empty:
+        return float("nan")
+    return float(summary.iloc[0]["realized_window_far"])
+
+
 # ---------------------------------------------------------------------------
 # Output paths
 # ---------------------------------------------------------------------------
@@ -832,7 +912,10 @@ def main(argv: list[str] | None = None) -> int:
 
     trigger_log: list[dict[str, object]] = []
     regimes: list[dict[str, object]] = []
-    alarms_by_run: dict[str, tuple[Path, Path]] = {}  # run -> (frozen, recalibrate)
+    # run -> (frozen, recalibrate) event_eval.csv paths, EVENT-BEARING entries
+    # only -- populated in the loop below and reused (never re-invoked) by the
+    # pillar-3 section for 080726-pu_strikes (T6-review F1).
+    event_eval_by_run: dict[str, tuple[Path, Path]] = {}
     for entry in _REPLAY:
         prepared_beats = prepared_by_variant["audio-beats"][entry.run]
         prepared_audio = prepared_by_variant["audio"][entry.run]
@@ -883,38 +966,75 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        alarms_by_run[entry.run] = (frozen_alarms, recal_alarms)
 
-        recal_far = _read_realized_far(recal_alarms)
-        scoring_windows = _scoring_windows(recal_alarms)
-        frozen_far_common = _far_on_windows(frozen_alarms, scoring_windows)
-        frozen_far_full = _read_realized_far(frozen_alarms)
-        once_far = _regime_far(frozen_far_common, recal_far, triggered=triggered)
+        # The raw scored-window FAR of the frozen arm -- the SAME reading
+        # regardless of entry type; for a NON-event day this IS its own
+        # full-population secondary (A1.6); for the EVENT-BEARING day this is
+        # the "raw scored-window FAR" T6-review F1(b) requires stay visible,
+        # labeled and distinct from the event-free headline computed below.
+        frozen_far_secondary = _read_realized_far(frozen_alarms)
+
+        if entry.events_csv is not None:
+            # EVENT-BEARING entry (T6-review F1): the raw alarms.parquet
+            # scored-window mean silently includes the induced-event windows
+            # (they correctly alarm -- under recalibrate they were moved from
+            # calibration onto the scoring side by monitor's own
+            # `_apply_calibration_exclusion`; under frozen they were always
+            # scored, flag or no flag), inflating it ~2.5-3x for 080726. The
+            # correct event-free reading is eval_events' own
+            # `realized_window_far`, sourced here for ALL THREE regime arms
+            # (never the parquet mean). Cached in `event_eval_by_run` so the
+            # pillar-3 section below reuses these exact CSVs instead of
+            # re-invoking eval_events.py a second time for the same pair.
+            try:
+                frozen_eval = _run_eval_events(
+                    frozen_alarms, entry.events_csv,
+                    out_dir / "eval_events" / entry.run / "frozen",
+                    tolerance_s=_PILLAR3_TOLERANCE_S,
+                )
+                recal_eval = _run_eval_events(
+                    recal_alarms, entry.events_csv,
+                    out_dir / "eval_events" / entry.run / "recalibrate",
+                    tolerance_s=_PILLAR3_TOLERANCE_S,
+                )
+            except subprocess.CalledProcessError as exc:
+                print(
+                    f"run_once_calibrated: eval_events.py failed for run "
+                    f"{entry.run!r} ({exc})",
+                    file=sys.stderr,
+                )
+                return 2
+            event_eval_by_run[entry.run] = (frozen_eval, recal_eval)
+            frozen_far_headline = _read_realized_window_far(frozen_eval)
+            recal_far_headline = _read_realized_window_far(recal_eval)
+            far_basis = _FAR_BASIS_EVENT_FREE
+        else:
+            recal_far_headline = _read_realized_far(recal_alarms)
+            scoring_windows = _scoring_windows(recal_alarms)
+            frozen_far_headline = _far_on_windows(frozen_alarms, scoring_windows)
+            far_basis = _FAR_BASIS_COMMON_WINDOW
+
+        once_far = _regime_far(frozen_far_headline, recal_far_headline, triggered=triggered)
 
         regimes.append({
             "day": entry.day, "era": entry.era, "run": entry.run, "tags": entry.tags,
-            "always_frozen_far": frozen_far_common,
-            "always_recalibrate_far": recal_far,
+            "always_frozen_far": frozen_far_headline,
+            "always_recalibrate_far": recal_far_headline,
             "once_triggered_far": once_far,
-            "frozen_far_full_population": frozen_far_full,
+            "frozen_far_full_population": frozen_far_secondary,
+            "far_basis": far_basis,
             "decision": decision,
         })
 
     # --- Pillar-3 TPR-retained readout (080726, PU + ST) -----------------------
-    pu_frozen_alarms, pu_recal_alarms = alarms_by_run["080726-pu_strikes"]
+    # PU's frozen/recalibrate eval_events summaries were already computed
+    # above (event-bearing entry, T6-review F1) -- reused here, never
+    # re-invoked as a second subprocess call for the identical alarms/events
+    # pair.
+    pu_frozen_eval, pu_recal_eval = event_eval_by_run["080726-pu_strikes"]
     era_c_row = next(r for r in regimes if r["run"] == "080726-pu_strikes")
     era_c_decision = str(era_c_row["decision"])
     try:
-        pu_recal_eval = _run_eval_events(
-            pu_recal_alarms, _EVENTS_PU,
-            out_dir / "eval_events" / "080726-pu_strikes" / "recalibrate",
-            tolerance_s=_PILLAR3_TOLERANCE_S,
-        )
-        pu_frozen_eval = _run_eval_events(
-            pu_frozen_alarms, _EVENTS_PU,
-            out_dir / "eval_events" / "080726-pu_strikes" / "frozen",
-            tolerance_s=_PILLAR3_TOLERANCE_S,
-        )
         st_recal_alarms = _run_monitor(
             args.snapshot, _PILLAR3_ST_RUN, "recalibrate",
             out_dir / "monitor" / _PILLAR3_ST_RUN / "recalibrate",
@@ -976,6 +1096,8 @@ def main(argv: list[str] | None = None) -> int:
         "s1": {
             "family": _BANK_FAMILY, "k": _BANK_K, "min_ref": _BANK_MIN_REF,
             "baseline_rate": s1.baseline_rate, "threshold": s1.threshold,
+            "pct": _S1_BOOTSTRAP_PCT, "n_boot": _S1_BOOTSTRAP_N_BOOT,
+            "seed": _S1_BOOTSTRAP_SEED,
             "low_confidence_modes": list(s1.bank.low_confidence_modes),
         },
         "s2": {
@@ -997,8 +1119,15 @@ def main(argv: list[str] | None = None) -> int:
             "JSON or number is read anywhere in this module. Retrospective, "
             "day-granular SIMULATION, never an online claim (D1 honesty 1). "
             "'once-calibrated' is scoped to 'once per instrumentation era' (D1 "
-            "honesty 2); the 010726 rows are IN-SAMPLE (tags), 080726 uses the "
-            "event-free window-FAR (P7 pillar-3 rule, A2.3.3)."
+            "honesty 2); the 010726 rows are IN-SAMPLE (tags). 080726's regime "
+            "FAR (far_basis='event-free per eval_events') is sourced from "
+            "scripts/eval_events.py's own realized_window_far -- computed over "
+            "role=='scored' windows OUTSIDE every tolerance-padded strike "
+            "interval -- for all three regime arms, NEVER the raw "
+            "alarms.parquet scored-window mean (which silently counts the "
+            "induced-strike windows too, since they correctly alarm; that raw "
+            "reading stays visible as the labeled frozen_far_full_population "
+            "secondary, T6-review F1)."
         ),
     }
     (out_dir / f"{args.representation}.json").write_text(json.dumps(sidecar, indent=2) + "\n")
