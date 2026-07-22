@@ -1582,14 +1582,16 @@ decision, identical sentinel verdicts across all three scored representations:
   detection alone. Reported as measured (a tighter margin is future work, not
   a silent retune).
 - **Regime FARs (fusion, alpha=0.05, common-window population; 080726
-  event-free per eval_events):** once+triggered holds 0.018-0.075 on every
-  day — vs always-frozen's 1.000 (250526-pu), 0.62 (080726) — at ~zero cost
-  vs always-recalibrate. Pillar-3 retention: once+triggered keeps the
+  event-free per eval_events):** once+triggered holds 0.027-0.075 on every
+  HELD-OUT day — vs always-frozen's 1.000 (250526-pu), 0.62 (080726) — at
+  ~zero cost vs always-recalibrate. The in-sample 010726-pu row is the
+  documented exception (0.192 under its frozen decision; recalibrate would
+  also miss alpha there at 0.096 — an in-sample PU peculiarity, tagged). Pillar-3 retention: once+triggered keeps the
   recalibrate TPR exactly (PU 0.92, ST 1.00 for fusion; 0.85/1.00
   audio-beats); frozen's nominal TPR 1.0 is trivial (it alarms on most
   windows). Vibration replays confirm P8: frozen-vibration is the era-robust
-  arm (always-frozen 0.005-0.112 everywhere, 080726 event-free 0.041 at TPR
-  0.85 — where recalibrate DROPS vibration's strike TPR to 0.31); for a
+  arm (always-frozen 0.005-0.112 on every held-out day — the in-sample
+  010726-pu floor is 0.002 — 080726 event-free 0.041 at TPR 0.85 — where recalibrate DROPS vibration's strike TPR to 0.31); for a
   vibration-first deployment, frozen + sentinel is already the best regime.
 - **The once-per-plant answer:** calibrate at commissioning; recalibrate only
   when the rejection sentinel fires — which, on this campaign, happens exactly
@@ -1603,16 +1605,19 @@ over GT-known fit windows, {unknown, transition} masked, <50%-plurality and
 zero-GT clusters fall back to `cluster-<id>`): the B1 fusion/vibration/
 audio-beats snapshots are rebuilt as `*_named.npz`, and monitor's
 alarms.parquet (`state_name`), segments.csv (`mapped_mode`), timeline and
-notes all render "turbine / pump / phase_shifter" instead of bare ids. The
-bank path had native names all along; both arms now speak SCADA vocabulary
-with zero GT at monitor time.
+notes render the mapped SCADA names instead of bare ids. Honest scope: on
+the B1 pool (pump is only ~12% of fit windows at k=4) the CLUSTERER isolates
+and names turbine/standstill only — pump windows collapse into a turbine
+cluster, faithfully reflecting the clustering, not a naming bug. Full
+four-mode naming (incl. pump/phase_shifter) is the BANK arm's native
+capability; both arms speak SCADA vocabulary with zero GT at monitor time.
 
 ### D3 — transitions and the no-1-second-modes rule
 
 - **Taxonomy (our own SCADA-derived ramp/dwell statistics):** real machine
   transitions take 20-138 s (pump->phase-shifter 20-21 s, standstill->
   phase-shifter 107 s, phase-shifter->standstill 138 s); the frequent
-  turbine->turbine load-step blips have median ramps of 6-9 s (min 1 s) —
+  turbine->turbine load-step blips have median DWELLS of 6-9 s (min 1 s) —
   exactly the sub-scale flicker the duration filter exists to absorb.
 - **min_dwell sweep (5/10/20 s, re-fit per value):** 290626-tu ARI flat
   (0.896->0.899) with FAR mildly improving (0.044->0.038); 250526-tu ARI
