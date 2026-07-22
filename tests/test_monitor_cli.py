@@ -57,12 +57,15 @@ _SEG_LEN = 30
 
 _ALARM_COLUMNS = [
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
-    "threshold_source",
+    "threshold_source", "near_transition", "state_name",
 ]
 """The plan's exact alarms.parquet column contract (order included) --
 `threshold_source` appended by package-7 Task 5 (spec D7/A3.2): per-window
 `rolling`/`fit_day_fallback` on rolling-mode scored rows, the constant mode name in
-the other modes, so the column exists uniformly."""
+the other modes, so the column exists uniformly. `near_transition`/`state_name`
+appended at the END by package-9 Task 3 (spec D3c/D2(c)/A1.4): BOTH ALWAYS present,
+regardless of whether the snapshot carries `state_names` (A1.3 test-contract
+update)."""
 
 
 # ---------------------------------------------------------------------------
@@ -1678,3 +1681,93 @@ def test_exclude_events_rolling_mode_scores_rescued_windows_via_fallback(
     assert (alarms.loc[burst, "role"] == "scored").all()
     assert (alarms.loc[burst, "threshold_source"] == "fit_day_fallback").all()
     assert alarms.loc[burst, "alarm"].all()
+
+
+# ---------------------------------------------------------------------------
+# 11. Named states (D2 surfacing) + near_transition / --suppress-transition-alarms
+#     (package-9 Task 3, spec D2(c)/D3c, amendment A1.4)
+# ---------------------------------------------------------------------------
+
+
+def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
+    import monitor
+    # labels: run of 0s, an invalid gap (-1), run of 1s. The 0->1 change is at the
+    # FIRST valid 1 (index 6); invalid window 3 is NOT a change (A1.8).
+    labels = np.array([0, 0, 0, -1, 1, 1, 1, 1], dtype=np.int64)
+    valid = np.array([1, 1, 1, 0, 1, 1, 1, 1], dtype=bool)
+    mask = monitor._near_transition_mask(labels, valid, window_ns=1_000_000_000, w_seconds=1.0)
+    assert mask[3] == False  # invalid window never flagged   # noqa: E712
+    assert mask[4] == True   # first valid 1 (boundary onset) # noqa: E712
+    assert mask[2] == True   # last valid 0, within 1 window of the boundary onset  # noqa: E712
+    assert mask[7] == False  # 3 valid windows past the boundary -> outside +-1  # noqa: E712
+
+
+def test_apply_transition_suppression_forces_false_and_counts() -> None:
+    import monitor
+    alarm = np.array([True, True, False, True], dtype=bool)
+    near = np.array([True, False, True, True], dtype=bool)
+    role = np.array(["scored", "scored", "scored", "consumed_for_calibration"], dtype=object)
+    n = monitor._apply_transition_suppression(alarm, near, role)
+    assert n == 1                                        # only window 0: near & scored & was-True
+    assert alarm.tolist() == [False, True, False, True]  # window 3 (consumed) untouched
+
+
+def test_state_name_column_always_present_fallback_cluster_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+    # snapshot WITHOUT state_names -> every alarm row's state_name is cluster-<id> (A1.4).
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_dir)]
+    ) == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet")
+    assert list(alarms.columns) == _ALARM_COLUMNS  # near_transition + state_name appended
+    assert alarms["state_name"].str.startswith("cluster-").all()
+    assert alarms["near_transition"].dtype == bool
+
+
+def test_named_snapshot_surfaces_state_name_and_mapped_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+    _path, snapshot = _make_snapshot(tmp_path)
+    labels = sorted(snapshot.thresholds)  # both fixture labels survive (module docstring)
+    named = replace(snapshot, state_names={labels[0]: "turbine", labels[1]: "pump"})
+    named_path = tmp_path / "named.npz"
+    save_snapshot(named_path, named)  # save_snapshot does not re-validate state_names
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        ["--snapshot", str(named_path), "--run", _MONITOR_RUN, "--out", str(out_dir)]
+    ) == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet")
+    assert set(alarms["state_name"].unique()) <= {"turbine", "pump"}
+    segments = pd.read_csv(out_dir / "segments.csv")
+    assert "mapped_mode" in segments.columns  # D2(c): present because state_names present
+    timeline = (out_dir / "timeline.md").read_text()
+    assert "(turbine)" in timeline or "(pump)" in timeline
+
+
+def test_suppress_transition_alarms_invariant_and_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+    out_dir = tmp_path / "out"
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_dir),
+         "--suppress-transition-alarms"]
+    ) == 0
+    alarms = pd.read_parquet(out_dir / "alarms.parquet")
+    scored = alarms[alarms["role"] == "scored"]
+    # invariant: no scored near_transition window remains an alarm; audit columns retained.
+    assert not bool((scored["alarm"] & scored["near_transition"]).any())
+    assert scored["score"].notna().any()
+    assert "suppressed_by_transition" in (out_dir / "monitor_notes.md").read_text()
