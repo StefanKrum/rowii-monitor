@@ -107,17 +107,40 @@ the snapshot's RAW references -- only the monitored run's scoring features
 shift. A zero-level-column snapshot feature contract (an embedding variant)
 raises inside `rowii.anomaly.levelrecal` and is caught here as exit 2 (A1.9).
 
-Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` +
-`timeline.md` (the state half, `scripts/apply_detector.py`'s conventions incl.
-scatter-back over `valid_mask`), `alarms.parquet` (one row per VALID window:
-`window, t_utc_ns, state, score, p_value, alarm, low_confidence, role,
-threshold_source` -- `threshold_source` is per-window `rolling`/`fit_day_fallback`
-on rolling-mode scored rows, `""` on rolling-mode rows without a verdict, and the
-constant mode name in the other modes, so the column exists uniformly),
-`alarm_segments.csv` (maximal alarm runs: `start_utc, end_utc, duration_s`), and
-`monitor_notes.md` (snapshot provenance, mode, per-state table, window accounting,
-and the standing honesty framing: NO fault labels exist -- alarms are candidates
-for operator review, never verified detections; spec §4).
+Named states end to end (package-9 Task 3, spec D2(c)) and transition visibility
+(spec D3c): the snapshot's OPTIONAL commissioning-time `state_names` member
+(`dict[int, str]`, `rowii.eval.metrics.derive_state_names`, `rowii.runtime.snapshot`)
+surfaces as `state_name` on EVERY `alarms.parquet` row (ALWAYS present -- fallback
+`cluster-<id>` when the snapshot carries no names, A1.4) and as an OPTIONAL
+`mapped_mode` column on `segments.csv` (present only when the snapshot carries names
+-- inventing a mapping the artifact cannot back would be a claim, not a fact, D2(c)).
+`timeline.md` and `monitor_notes.md`'s per-state table name states the same way when
+a name exists. `near_transition` (`alarms.parquet`, ALWAYS present, A1.4) is True for
+every VALID window within +-W seconds of a detected-state CHANGE found in the VALID
+subsequence (an invalid gap never counts as a change itself); `W` defaults to the
+snapshot's own `min_dwell_s` -- the same dwell scale package-9's `min_dwell` sweep
+grounds. The OPTIONAL `--suppress-transition-alarms` flag (default OFF, D3c
+ablation) then withholds alarms on near-transition SCORED windows
+(`alarm -> False`); `score`/`p_value`/`near_transition`/`role` stay recorded, so
+every suppressed alarm remains fully auditable from `alarms.parquet` alone, and the
+suppressed count is reported in `monitor_notes.md`. Suppression is an explicit
+OPERATOR choice this package makes visible, never a default behavior.
+
+Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` (+ an
+OPTIONAL `mapped_mode` column, D2(c)) + `timeline.md` (the state half,
+`scripts/apply_detector.py`'s conventions incl. scatter-back over `valid_mask`),
+`alarms.parquet` (one row per VALID window: `window, t_utc_ns, state, score,
+p_value, alarm, low_confidence, role, threshold_source, near_transition,
+state_name` -- `threshold_source` is per-window `rolling`/`fit_day_fallback` on
+rolling-mode scored rows, `""` on rolling-mode rows without a verdict, and the
+constant mode name in the other modes, so the column exists uniformly;
+`near_transition`/`state_name` are ALWAYS present regardless of mode, package-9
+Task 3), `alarm_segments.csv` (maximal alarm runs: `start_utc, end_utc, duration_s`
+-- reflects `--suppress-transition-alarms` when active, since it forces `alarm`
+values BEFORE this table is built), and `monitor_notes.md` (snapshot provenance,
+mode, per-state table, window accounting incl. the suppressed-alarm count when
+suppression ran, and the standing honesty framing: NO fault labels exist -- alarms
+are candidates for operator review, never verified detections; spec §4).
 
 Bootstrapping (config/env via `rowii.config.load_config`, run discovery via
 `rowii.io.dataset.discover`, unknown-run exit 2 listing every discovered run)
@@ -203,12 +226,16 @@ evaluation could credit as a detection."""
 
 _ALARM_COLUMNS: tuple[str, ...] = (
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
-    "threshold_source",
+    "threshold_source", "near_transition", "state_name",
 )
 """alarms.parquet's exact column contract (spec D2 / plan Task 2; `threshold_source`
-appended by package-7 Task 5, spec D7/A3.2), in this order. Downstream readers that
-select columns by name (`rowii.eval.events.evaluate_events`,
-`scripts/eval_events.py`) ignore the addition by construction."""
+appended by package-7 Task 5, spec D7/A3.2; `near_transition` then `state_name`
+appended at the END by package-9 Task 3, spec D3c/D2(c)/A1.4), in this order. BOTH
+new columns are ALWAYS present, never conditional on the snapshot carrying
+`state_names` (A1.4 retracts the old "exactly as today" sentence for these two
+columns). Downstream readers that select columns by name
+(`rowii.eval.events.evaluate_events`, `scripts/eval_events.py`) ignore the addition
+by construction."""
 
 SOURCE_ROLLING = "rolling"
 """`threshold_source` value: the window's threshold/p-value came from its own
@@ -364,6 +391,16 @@ def build_parser() -> argparse.ArgumentParser:
              f"interval (default {_DEFAULT_EXCLUDE_TOLERANCE_S:g}, mirroring "
              f"eval_events' matching tolerance). Only valid together with "
              f"--exclude-calibration-events.",
+    )
+    parser.add_argument(
+        "--suppress-transition-alarms", action="store_true",
+        help="Withhold alarms on windows within the near-transition band (spec "
+             "D3c ablation, default OFF): forces alarm=False on SCORED windows "
+             "where near_transition is True (+-min_dwell_s seconds of a detected-"
+             "state change). score/p_value/near_transition/role stay recorded in "
+             "alarms.parquet for a full audit trail; the suppressed count is "
+             "reported in monitor_notes.md. An explicit operator choice -- this "
+             "package makes the trade-off visible, it does not adopt it.",
     )
     parser.add_argument(
         "--no-cache", action="store_true",
@@ -926,17 +963,94 @@ def _assert_roles_complete(role: np.ndarray, valid_mask: np.ndarray) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Transitions + named states (package-9 Task 3, spec D2(c)/D3c, amendment A1.4)
+# ---------------------------------------------------------------------------
+
+
+def _near_transition_mask(
+    labels: np.ndarray, valid_mask: np.ndarray, window_ns: int, w_seconds: float
+) -> np.ndarray:
+    """(W,) bool, True for every VALID window within `+-round(w_seconds/window_s)`
+    STEPS -- counted along the VALID subsequence, not raw grid index -- of a
+    detected-state CHANGE found in that same valid subsequence (spec D3c/A1.8).
+
+    Invalid windows are filtered FIRST; a change is any label difference between
+    consecutive entries of the compacted valid-only label sequence, so a
+    valid->invalid->valid blip is NEVER a change (the invalid run in between never
+    participates in the comparison). Distance is then measured in valid-sequence
+    STEPS rather than wall-clock grid steps: this mirrors `FittedDetector._finish`'s
+    own `min_dwell` filter, which duration-filters the SAME compacted valid
+    sequence the Viterbi decoder actually saw (`_apply_detector_labels` decodes
+    `features[valid_mask]` against a grid of exactly `valid_mask.sum()` windows) --
+    counting through an invalid gap as if it were real elapsed time would put
+    `near_transition` on a different clock than the dwell filter it is meant to
+    match. Invalid windows are always False (never flagged)."""
+    out = np.zeros(labels.shape[0], dtype=bool)
+    valid_idx = np.flatnonzero(valid_mask)
+    if valid_idx.size < 2:
+        return out
+    valid_labels = labels[valid_idx]
+    # Position (within the compacted valid subsequence) of every new-state onset.
+    change_positions = np.flatnonzero(valid_labels[1:] != valid_labels[:-1]) + 1
+    if change_positions.size == 0:
+        return out
+    w_windows = int(round(w_seconds / (window_ns / 1e9)))
+    positions = np.arange(valid_idx.shape[0])
+    near = np.zeros(valid_idx.shape[0], dtype=bool)
+    for cp in change_positions.tolist():
+        near |= np.abs(positions - cp) <= w_windows
+    out[valid_idx[near]] = True
+    return out
+
+
+def _state_name_for(state_id: int, state_names: dict[int, str] | None) -> str:
+    """The A1.4 naming convention shared by every surfacing site: `"invalid"` for
+    `_INVALID_LABEL`; the snapshot's own name when *state_names* carries one for
+    *state_id*; else the bare `cluster-<id>` fallback (D2(a)'s convention, matching
+    `rowii.eval.metrics.derive_state_names`' own fallback)."""
+    if state_id == _INVALID_LABEL:
+        return "invalid"
+    if state_names is not None and state_id in state_names:
+        return state_names[state_id]
+    return f"cluster-{state_id}"
+
+
+def _apply_transition_suppression(
+    alarm: np.ndarray, near_transition: np.ndarray, role: np.ndarray
+) -> int:
+    """`--suppress-transition-alarms` (spec D3c ablation): in place, force
+    `alarm=False` on every SCORED window that is both currently an alarm and
+    `near_transition` -- returns the count actually flipped
+    (`suppressed_by_transition`, the notes' reported number). `score`/`p_value`/
+    `role`/`near_transition` are left untouched (the full-audit-trail rule: a
+    suppressed alarm must remain reconstructable from `alarms.parquet` alone).
+    In-place array mutation is the established codebase idiom for `_Verdicts`
+    (`_mark_unknown_states`); only SCORED windows are eligible -- consumed/
+    unknown-state/no-conformal-data windows are never alarmed in the first place."""
+    target = near_transition & (role == ROLE_SCORED) & alarm
+    n = int(target.sum())
+    alarm[target] = False
+    return n
+
+
+# ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 
 
 def _alarms_frame(
-    prepared: PreparedRun, labels: np.ndarray, verdicts: _Verdicts
+    prepared: PreparedRun,
+    labels: np.ndarray,
+    verdicts: _Verdicts,
+    near_transition: np.ndarray,
+    state_names: dict[int, str] | None,
 ) -> pd.DataFrame:
     """One row per VALID window, ascending, exactly `_ALARM_COLUMNS`. `t_utc_ns` is
     the window's grid left edge (`rowii.anomaly.overlap.to_utc_ns`'s own
     `t0_ns + window * window_ns` convention, reused directly -- it lives in `src`,
-    not in a sibling script)."""
+    not in a sibling script). `near_transition`/`state_name` are ALWAYS present
+    (A1.4) -- the latter via `_state_name_for`, so an unmapped state still gets its
+    `cluster-<id>` fallback name rather than a missing/empty cell."""
     idx = np.flatnonzero(prepared.valid_mask).astype(np.int64)
     frame = pd.DataFrame(
         {
@@ -948,6 +1062,10 @@ def _alarms_frame(
             "low_confidence": verdicts.low_confidence[idx],
             "role": verdicts.role[idx].astype(str),
             "threshold_source": verdicts.threshold_source[idx].astype(str),
+            "near_transition": near_transition[idx],
+            "state_name": np.array(
+                [_state_name_for(int(labels[i]), state_names) for i in idx], dtype=object
+            ),
         }
     )
     frame = to_utc_ns(frame, prepared.grid.t0_ns, prepared.grid.window_ns)
@@ -964,13 +1082,23 @@ def _alarm_segments(alarm: np.ndarray, grid: WindowGrid) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def _state_segments(labels: np.ndarray, grid: WindowGrid) -> pd.DataFrame:
+def _state_segments(
+    labels: np.ndarray, grid: WindowGrid, state_names: dict[int, str] | None
+) -> pd.DataFrame:
     """`segments.csv`'s table: `to_segments` over the full-length label array
     (`_INVALID_LABEL` segments included, visibly), `cluster` renamed to
-    `cluster_id` -- `scripts/apply_detector.py`'s convention (minus its
-    `mapped_mode`: the snapshot carries no cluster-id -> mode-name mapping, and
-    inventing one here would be a claim the artifact cannot back)."""
-    return to_segments(labels, grid).rename(columns={"cluster": "cluster_id"})
+    `cluster_id` -- `scripts/apply_detector.py`'s convention. `mapped_mode`
+    (D2(c)) is added ONLY when *state_names* is not None -- a nameless snapshot
+    still carries no cluster-id -> mode-name mapping, and inventing one here would
+    be a claim the artifact cannot back; this keeps the column conditional, unlike
+    `alarms.parquet`'s ALWAYS-present `state_name` (A1.4)."""
+    segments = to_segments(labels, grid).rename(columns={"cluster": "cluster_id"})
+    if state_names is not None:
+        segments["mapped_mode"] = [
+            _state_name_for(int(cluster_id), state_names)
+            for cluster_id in segments["cluster_id"]
+        ]
+    return segments
 
 
 def _timeline_markdown(
@@ -997,7 +1125,10 @@ def _timeline_markdown(
         if cluster_id == _INVALID_LABEL:
             desc = "invalid windows (no usable features)"
         elif cluster_id in snapshot.thresholds:
-            desc = f"state {cluster_id}"
+            if snapshot.state_names is not None:
+                desc = f"state {cluster_id} ({_state_name_for(cluster_id, snapshot.state_names)})"
+            else:
+                desc = f"state {cluster_id}"
         else:
             desc = f"state {cluster_id} (unknown to the snapshot -- never alarmed)"
         lines.append(
@@ -1140,6 +1271,7 @@ def _notes_markdown(
     level_recal_offsets_used: dict[str, float] | None = None,
     rolling_minutes: float | None = None,
     exclusion_note: str | None = None,
+    suppressed_by_transition: int | None = None,
 ) -> str:
     n_windows = int(prepared.features.shape[0])
     n_valid = int(prepared.valid_mask.sum())
@@ -1235,8 +1367,13 @@ def _notes_markdown(
         rate = f"{row.n_alarms / row.n_scored:.4f}" if row.n_scored else "n/a"
         low_conf = "n/a" if row.low_confidence is None else str(row.low_confidence)
         threshold = "n/a" if math.isnan(row.threshold) else f"{row.threshold:.6g}"
+        state_cell = (
+            f"{row.state} ({_state_name_for(row.state, snapshot.state_names)})"
+            if snapshot.state_names is not None
+            else str(row.state)
+        )
         lines.append(
-            f"| {row.state} | {row.n_windows} | {row.n_scored} | {row.n_alarms} "
+            f"| {state_cell} | {row.n_windows} | {row.n_scored} | {row.n_alarms} "
             f"| {rate} | {low_conf} | {threshold} | {row.n_consumed} | {row.status} |"
         )
     if mode == "rolling":
@@ -1277,6 +1414,15 @@ def _notes_markdown(
         f"- {ROLE_NO_CONFORMAL_DATA}: {n_no_conformal} (snapshot-known state with "
         "zero calibration-side windows on this run; never alarmed)",
     ]
+    if suppressed_by_transition is not None:
+        lines.append(
+            f"- suppressed_by_transition: {suppressed_by_transition} (scored "
+            "alarm(s) withheld by --suppress-transition-alarms because their "
+            "window sits within the near-transition band, spec D3c; score/"
+            "p_value/near_transition/role stay recorded above for a full audit "
+            "trail -- every suppressed alarm remains reconstructable from "
+            "alarms.parquet alone)"
+        )
     if verdicts.unknown_counts:
         lines.append("- unknown detected states:")
         lines.extend(
@@ -1574,14 +1720,27 @@ def main(argv: list[str] | None = None) -> int:
 
     _assert_roles_complete(verdicts.role, prepared.valid_mask)
 
+    # Package-9 Task 3 (spec D3c/A1.8): near_transition is computed for every run
+    # (ALWAYS-present column, A1.4); --suppress-transition-alarms then optionally
+    # forces alarm=False on near-transition SCORED windows BEFORE any output is
+    # built, so segments/alarms/alarm_segments/notes all see the suppressed set.
+    near_transition = _near_transition_mask(
+        labels, prepared.valid_mask, prepared.grid.window_ns, snapshot.min_dwell_s
+    )
+    n_suppressed = (
+        _apply_transition_suppression(verdicts.alarm, near_transition, verdicts.role)
+        if args.suppress_transition_alarms
+        else None
+    )
+
     out_dir = args.out if args.out is not None else cfg.results_root / "monitor" / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    segments = _state_segments(labels, prepared.grid)
+    segments = _state_segments(labels, prepared.grid, snapshot.state_names)
     segments.to_csv(out_dir / "segments.csv", index=False)
     (out_dir / "timeline.md").write_text(_timeline_markdown(args.run, snapshot, segments))
 
-    alarms = _alarms_frame(prepared, labels, verdicts)
+    alarms = _alarms_frame(prepared, labels, verdicts, near_transition, snapshot.state_names)
     alarms.to_parquet(out_dir / "alarms.parquet", engine="pyarrow", index=False)
 
     _alarm_segments(verdicts.alarm, prepared.grid).to_csv(
@@ -1595,6 +1754,7 @@ def main(argv: list[str] | None = None) -> int:
             session_stats=session_stats, run_stats=run_stats,
             level_recal_offsets_used=level_recal_offsets_used,
             rolling_minutes=rolling_minutes, exclusion_note=exclusion_note,
+            suppressed_by_transition=n_suppressed,
         )
     )
 
