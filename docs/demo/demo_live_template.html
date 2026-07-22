@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROWII Monitor — Live-Demo (echte Audioclips + Pipeline, 08.07.2026)</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171e2e; --ink: #e8ecf4; --muted: #8b96ad;
+    --s0: #4c8dff; --s1: #37c992; --s2: #b48cff; --s3: #ffb84c;
+    --alarm: #ff5c5c; --gt: #ffd166; --grid: #2a3348; --step: #131a29;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 "SF Pro Text", system-ui, sans-serif; padding: 28px; }
+  h1 { font-size: 21px; font-weight: 650; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 6px 0 22px; max-width: 950px; }
+  .badge { display: inline-block; background: #223052; color: #9fc0ff; border-radius: 5px; padding: 1px 8px; font-size: 12px; margin-right: 6px; }
+  .panel { background: var(--panel); border: 1px solid var(--grid); border-radius: 10px; padding: 16px 18px; margin-bottom: 18px; }
+  svg { display: block; width: 100%; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  .chip { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td { padding: 6px 10px; border-bottom: 1px solid #202940; font-variant-numeric: tabular-nums; }
+  tr.hit td { background: rgba(255, 209, 102, .07); }
+  tr:hover td { background: rgba(76, 141, 255, .10); cursor: default; }
+  tr.hit:hover td { cursor: pointer; }
+  .tag-hit { color: var(--gt); font-weight: 600; }
+  .tag-fa { color: var(--muted); }
+  .foot { color: var(--muted); font-size: 12.5px; max-width: 980px; }
+  .tt { position: fixed; pointer-events: none; background: #0b101c; border: 1px solid var(--grid); border-radius: 6px;
+        padding: 6px 9px; font-size: 12px; display: none; z-index: 9; white-space: nowrap; }
+
+  /* --- pipeline section --------------------------------------------------- */
+  .pipeline { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+  .pipe-step { flex: 1 1 170px; min-width: 170px; background: var(--step); border: 1px solid var(--grid);
+               border-radius: 8px; padding: 12px 14px; }
+  .pipe-num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+              border-radius: 50%; background: var(--s0); color: #06101f; font-size: 11px; font-weight: 700;
+              margin-bottom: 7px; }
+  .pipe-title { font-size: 13px; font-weight: 650; margin-bottom: 4px; }
+  .pipe-desc { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .pipe-arrow { display: flex; align-items: center; justify-content: center; color: var(--muted);
+                font-size: 18px; padding: 0 2px; flex: 0 0 auto; }
+
+  /* --- clips (audio players) ---------------------------------------------- */
+  .clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .clip { background: var(--step); border: 1px solid var(--grid); border-radius: 8px; padding: 12px 14px;
+          scroll-margin-top: 20px; box-shadow: 0 0 0 0 var(--gt); transition: box-shadow .4s ease; }
+  .clip.flash { box-shadow: 0 0 0 2px var(--gt); }
+  .clip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 7px; }
+  .clip-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .clip-wave { display: block; width: 100%; height: 36px; margin-bottom: 7px; border-radius: 4px; background: #0b101c; }
+  .clip audio { width: 100%; height: 32px; margin-bottom: 7px; }
+  .clip-desc { font-size: 12.5px; color: var(--ink); line-height: 1.42; margin: 0; }
+
+  @media (max-width: 640px) {
+    .pipe-step { flex-basis: 100%; }
+    .pipe-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<h1>ROWII Monitor — Live-Demo <span style="color:var(--muted);font-weight:400">(reale Audioclips + vollständige Pipeline)</span></h1>
+<p class="sub">
+  <span class="badge" id="b-run"></span><span class="badge" id="b-rep"></span>
+  <span class="badge" id="b-alpha"></span><span class="badge" id="b-t0"></span>
+  Maschine 1, Rodundwerk II — Messtag mit induzierten Schonhammer-Schlägen während des Pumpbetriebs.
+  Unten: die vollständige Pipeline vom Rohsignal bis zum Alarm-Report, zum Anhören sechs reale, unbearbeitete
+  10-Sekunden-Ausschnitte aus genau diesem Messtag. Zustands-Timeline, Score-Trace und Report stammen
+  unverändert aus der Pipeline; nur die Darstellung ist Mockup.
+</p>
+
+<div class="panel">
+  <h2>1 · Pipeline — vom Rohsignal zum Alarm</h2>
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-num">1</div>
+      <div class="pipe-title">Rohsignal</div>
+      <div class="pipe-desc">9 Mikrofonkanäle (4 generatorseitig, 5 turbinenseitig) bei 50 kHz + 2
+        Vibrations-Ringe (je bis zu 6 Achsen X/Y/Z) bei 10 kHz zeichnen kontinuierlich am Maschinensatz auf.</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">2</div>
+      <div class="pipe-title">1-s-Fenster</div>
+      <div class="pipe-desc">Jeder Kanal wird in nicht überlappende 1-Sekunden-Fenster geschnitten — die
+        Grundeinheit jeder weiteren Verarbeitung.</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">3</div>
+      <div class="pipe-title">Features</div>
+      <div class="pipe-desc">Pro Fenster entweder 243 handgefertigte Fusion-Features (Pegel- sowie
+        Maschinenfrequenz- und Oktavbänder je Kanal, dieser Run) oder ein eingefrorenes 768-dimensionales
+        BEATs-Embedding pro Mikrofonsignal.</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">4</div>
+      <div class="pipe-title">Step 1 — Zustand</div>
+      <div class="pipe-desc">KMeans (k=4) clustert, ein sticky HMM glättet zu stabilen Betriebszuständen
+        (min. Verweildauer 5 s) — alternativ ordnet eine Modellbank Fenster direkt SCADA-Zuständen zu
+        (Gaussian-, kNN- oder GMM-Familie je Zustand).</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">5</div>
+      <div class="pipe-title">Step 2 — Scoring</div>
+      <div class="pipe-desc">Pro erkanntem Zustand vergleicht ein kNN-Scorer (Kosinus, k=1) jedes Fenster
+        gegen die zustandseigenen Referenzfenster aus früheren Messtagen.</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">6</div>
+      <div class="pipe-title">Split-Conformal-Schwelle</div>
+      <div class="pipe-desc">Eine verteilungsfreie Schwelle wird pro Zustand auf Kalibrierungsfenstern
+        kalibriert; erst ab ⌈1/α⌉−1 Kalibrierungsfenstern ist α zertifizierbar — sonst bleibt der Zustand
+        ohne Schwelle (∞, nie ein Alarm).</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-num">7</div>
+      <div class="pipe-title">Alarm + Report</div>
+      <div class="pipe-desc">Ein Fenster mit p &lt; α wird zum Alarmkandidaten; benachbarte Alarme bilden
+        Episoden, die unten mit Zeitstempel im Report erscheinen.</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>2 · Anhören — reale Clips aus der 080726-Kampagne</h2>
+  <p class="sub" style="margin:0 0 12px">
+    Je ein 10-Sekunden-Ausschnitt pro erkanntem Betriebszustand (Mitte des längsten zusammenhängenden
+    Segments, schlagfrei geprüft) sowie drei induzierte Schonhammer-Schläge — unbearbeitet bis auf Resampling
+    auf 16 kHz und Pegel-Normalisierung auf −1 dBFS. Ein Klick auf eine Report-Zeile mit Ground-Truth-Treffer
+    unten springt, wenn der passende Schlag hier oben liegt, direkt zu dessen Player.
+  </p>
+  <div class="clips">__CLIPS_HTML__</div>
+</div>
+
+<div class="panel">
+  <h2>3 · Erkannte Betriebszustände (Step 1, unüberwacht)</h2>
+  <svg id="states" height="64" preserveAspectRatio="none"></svg>
+  <div class="legend" id="stateLegend"></div>
+</div>
+
+<div class="panel">
+  <h2>4 · Anomalie-Score je Fenster (Step 2, per-Zustand kNN) + Alarme + Schlag-Ground-Truth</h2>
+  <svg id="trace" height="240"></svg>
+  <div class="legend">
+    <span><span class="chip" style="background:var(--alarm)"></span>Alarmfenster (p &lt; α)</span>
+    <span><span class="chip" style="background:var(--gt)"></span>induzierter Schlag (Ground Truth, Minutenraster)</span>
+    <span><span class="chip" style="background:#5b6a8c"></span>Score (1-s-Fenster, per-Zustand-Referenzen)</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>5 · Alarm-Report (Kandidaten mit Zeitstempel — das Betreiber-Artefakt)</h2>
+  <table>
+    <thead><tr>
+      <th>#</th><th>Start (UTC)</th><th>Dauer</th><th>Zustand</th>
+      <th>Fenster</th><th>Peak-Score</th><th>min p</th><th>Abgleich Ground Truth</th>
+    </tr></thead>
+    <tbody id="report"></tbody>
+  </table>
+</div>
+
+<p class="foot">
+  Ehrlichkeit: Alle Audio-Clips oben sind reale, unbearbeitete Ausschnitte aus der 080726-Kampagne (nur
+  Resampling 50→16 kHz und Pegel-Normalisierung auf −1 dBFS); die Schläge sind <b>Surrogat-Anomalien</b>
+  (kein realer Maschinenfehler). Ground Truth ist minutengenau (Sekunden ausstehend); dieselbe Schlagklasse
+  (z. B. „plate-gen_0") wurde in Pump- UND Stillstands-Session induziert — die Report-Zeilen unten gehören
+  zur Pumpsession, ein Klick springt daher nur zu einem Player, dessen Clip AUS DERSELBEN Session stammt.
+  Bei α = 1 % alarmieren erwartungsgemäß ≈ 1 % der Normalfenster — unmatched Episoden sind diese kalibrierte
+  Grundrate, keine Fehler der Ground Truth. Zustands-Snapshot wurde ausschließlich auf früheren Messtagen
+  (Ära B) gefittet; dieser Tag ist zero-shot.
+  Quelle: <code>results/pillar3/080726-pu_strikes/audio-beats-a0.01/</code> (Zustände/Score/Report) und die
+  080726-Rohdaten (Audio-Clips).
+</p>
+<div class="tt" id="tt"></div>
+
+<script id="demo-data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById("demo-data").textContent);
+const COLORS = ["#4c8dff", "#37c992", "#b48cff", "#ffb84c"];
+const dur = D.duration_s;
+const t0 = new Date(D.t0_utc);
+const fmt = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 19) + " UTC";
+const fmtHM = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 16);
+
+document.getElementById("b-run").textContent = "Run " + D.run;
+document.getElementById("b-rep").textContent = "Repräsentation: " + D.rep + " (frozen)";
+document.getElementById("b-alpha").textContent = "α = " + D.alpha;
+document.getElementById("b-t0").textContent = "Start " + fmt(0);
+
+function svgEl(tag, attrs) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// --- 1. state band ---------------------------------------------------------
+const sv = document.getElementById("states");
+const W = sv.clientWidth || 1100, H1 = 64;
+sv.setAttribute("viewBox", `0 0 ${W} ${H1}`);
+for (const s of D.segments) {
+  const c = s.cluster_id < 0 ? "#3a4258" : COLORS[s.cluster_id % COLORS.length];
+  sv.appendChild(svgEl("rect", { x: s.start_s / dur * W, y: 8, width: Math.max(1, (s.end_s - s.start_s) / dur * W), height: 30, fill: c }));
+}
+for (let h = 0; h <= dur; h += 3600) {
+  const x = h / dur * W;
+  sv.appendChild(svgEl("line", { x1: x, y1: 40, x2: x, y2: 46, stroke: "#4a5570" }));
+  const t = svgEl("text", { x: x + 3, y: 58, fill: "#8b96ad", "font-size": 11 });
+  t.textContent = fmtHM(h); sv.appendChild(t);
+}
+const seen = [...new Set(D.segments.map(s => s.cluster_id).filter(c => c >= 0))].sort();
+document.getElementById("stateLegend").innerHTML =
+  seen.map(c => `<span><span class="chip" style="background:${COLORS[c % COLORS.length]}"></span>Zustand ${c}</span>`).join("") +
+  `<span><span class="chip" style="background:#3a4258"></span>ungültig/Übergang</span>` +
+  `<span style="margin-left:auto">Pump→Phasenschieber-Wechsel sichtbar um 13:05 UTC (≙ Protokoll „15:05 lokal")</span>`;
+
+// --- 2. score trace --------------------------------------------------------
+const tv = document.getElementById("trace"); const H2 = 240, PAD = 34;
+tv.setAttribute("viewBox", `0 0 ${W} ${H2}`);
+const smax = Math.max(...D.trace.map(p => p[1]));
+const Y = s => H2 - 24 - (s / smax) * (H2 - 24 - 14);
+for (const e of D.events)
+  tv.appendChild(svgEl("rect", { x: e.start_s / dur * W, y: 0, width: Math.max(1.5, (e.end_s - e.start_s) / dur * W), height: H2 - 22, fill: "rgba(255,209,102,.16)" }));
+let path = "";
+for (const [t, s] of D.trace.map(p => [p[0], p[1]])) path += (path ? "L" : "M") + (t / dur * W).toFixed(1) + " " + Y(s).toFixed(1);
+tv.appendChild(svgEl("path", { d: path, fill: "none", stroke: "#5b6a8c", "stroke-width": 1 }));
+for (const p of D.trace) if (p[3])
+  tv.appendChild(svgEl("circle", { cx: p[0] / dur * W, cy: Y(p[1]), r: 2.4, fill: "#ff5c5c" }));
+for (let h = 0; h <= dur; h += 3600) {
+  const x = h / dur * W;
+  tv.appendChild(svgEl("line", { x1: x, y1: 0, x2: x, y2: H2 - 22, stroke: "#222b41" }));
+  const t = svgEl("text", { x: x + 3, y: H2 - 8, fill: "#8b96ad", "font-size": 11 });
+  t.textContent = fmtHM(h); tv.appendChild(t);
+}
+
+// --- 3. report ---------------------------------------------------------
+// Report rows belong to the run in the badge above (D.run, "080726-pu_strikes"). A
+// row with a Ground-Truth hit (e.gt) links to a strike player card ONLY when that
+// card's own clip was cut from the SAME run -- the campaign reused several strike
+// "kind" labels (e.g. "plate-gen_0") across BOTH the pump and standstill sessions,
+// so a bare label match would sometimes scroll to a clip from a different physical
+// strike instant. See the footer.
+const tb = document.getElementById("report");
+D.episodes.forEach((e, i) => {
+  const tr = document.createElement("tr");
+  if (e.gt) {
+    tr.className = "hit";
+    tr.addEventListener("click", () => {
+      let target = null;
+      try {
+        target = document.querySelector(
+          `.clip[data-kind="strike"][data-label="${CSS.escape(e.gt)}"][data-run="${CSS.escape(D.run)}"]`
+        );
+      } catch (err) { /* CSS.escape unsupported: no-op, click simply does nothing */ }
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("flash");
+      setTimeout(() => target.classList.remove("flash"), 1600);
+    });
+  }
+  tr.innerHTML = `<td>${i + 1}</td><td>${fmt(e.start_s)}</td><td>${Math.round(e.end_s - e.start_s)} s</td>` +
+    `<td><span class="chip" style="background:${COLORS[e.state % COLORS.length]}"></span>${e.state}</td>` +
+    `<td>${e.n}</td><td>${e.peak.toFixed(3)}</td><td>${e.min_p}</td>` +
+    `<td>${e.gt ? `<span class="tag-hit">✔ Schlag: ${e.gt}</span>` : `<span class="tag-fa">— (kalibrierte α-Grundrate)</span>`}</td>`;
+  tb.appendChild(tr);
+});
+
+// --- tooltip on trace ------------------------------------------------------
+const tt = document.getElementById("tt");
+tv.addEventListener("mousemove", ev => {
+  const r = tv.getBoundingClientRect();
+  const t = (ev.clientX - r.left) / r.width * dur;
+  let best = null;
+  for (const p of D.trace) if (!best || Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+  if (!best) return;
+  tt.style.display = "block";
+  tt.style.left = (ev.clientX + 14) + "px"; tt.style.top = (ev.clientY + 10) + "px";
+  tt.textContent = `${fmt(best[0])} · Zustand ${best[2]} · Score ${best[1].toFixed(3)}` + (best[3] ? ` · ALARM (p=${best[4]})` : "");
+});
+tv.addEventListener("mouseleave", () => tt.style.display = "none");
+</script>
+</body>
+</html>
