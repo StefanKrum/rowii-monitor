@@ -47,6 +47,7 @@ turbine/pump windows to analyze.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -151,6 +152,46 @@ def _majority_mapping(gt_states: pd.Series, pred: np.ndarray) -> dict[int, str]:
         contingency.loc[state, int(cluster)] += 1
 
     return {cluster_id: str(contingency[cluster_id].idxmax()) for cluster_id in cluster_ids}
+
+
+_TRANSITION = "transition"
+_NAMING_EXCLUDED = (_UNKNOWN, _TRANSITION)
+
+
+def derive_state_names(
+    gt_states: np.ndarray,
+    pred: np.ndarray,
+    fitted_ids: Iterable[int],
+    *,
+    min_plurality: float = 0.5,
+) -> dict[int, str]:
+    """Cluster id -> operating-mode name, the commissioning-time map D2 persists as
+    an optional snapshot member (spec D2(a) + A1.5). Reuses `_majority_mapping`; the
+    {unknown, transition} windows are masked BEFORE the vote (A1.5, narrower than
+    `evaluate`'s unknown-only mask). A cluster keeps its majority name only when it
+    is present in the masked prediction AND its winner covers >= `min_plurality` of
+    its masked windows; otherwise -- absent from the masked pred, zero GT-known
+    windows, or a sub-plurality winner -- it falls back to the bare `cluster-<id>`
+    name (English, matching the repo's English-only artifact rule and the already-
+    English `labels.STATES` strings). The map is filled over ALL `fitted_ids` (a
+    cluster can carry a timeline name even without an alarming threshold)."""
+    gt_arr = np.asarray(gt_states, dtype=object)
+    pred_arr = np.asarray(pred)
+    keep = ~np.isin(gt_arr, _NAMING_EXCLUDED)
+    gt_m, pred_m = gt_arr[keep], pred_arr[keep]
+    mapping = _majority_mapping(pd.Series(gt_m), pred_m) if gt_m.size else {}
+    names: dict[int, str] = {}
+    for raw in fitted_ids:
+        cid = int(raw)
+        in_cluster = pred_m == cid
+        n_c = int(in_cluster.sum())
+        if n_c == 0 or cid not in mapping:
+            names[cid] = f"cluster-{cid}"
+            continue
+        winner = mapping[cid]
+        frac = float(np.mean(gt_m[in_cluster] == winner))
+        names[cid] = winner if frac >= min_plurality else f"cluster-{cid}"
+    return names
 
 
 def _state_change_indices(states: list[str]) -> list[int]:
