@@ -1289,6 +1289,53 @@ def test_save_snapshot_state_names_none_without_gt(tmp_path, monkeypatch) -> Non
     assert load_snapshot(snap_path).state_names is None
 
 
+def test_save_snapshot_state_names_populated_with_gt(tmp_path, monkeypatch) -> None:
+    """P9 hardening T2b: the positive counterpart to
+    test_save_snapshot_state_names_none_without_gt above -- with every fit run's
+    GT available, --save-snapshot must populate state_names over EVERY fitted id
+    (A1.8).
+
+    Monkeypatches the run_step2 GT seams directly (`_load_run_scada` +
+    `_gt_state_labels`/`_gt_composite_labels`) rather than building a real
+    Betriebsdaten fixture: none of the state_names/coverage-table plumbing under
+    test inspects `scada`'s actual columns, only its LENGTH -- `_load_run_scada`'s
+    replacement below keys that length to the exact prepared run it is handed, so
+    `_gt_state_labels`'s replacement can read a matching-length synthetic label
+    array back out (`_pool_row_gt_labels` then indexes it by `pool.window_index`,
+    same as `test_pool_row_gt_labels_object_dtype_alignment` below). The TEST run
+    is deliberately left GT-less (`_load_run_scada` returns None for it) so the
+    eval-side GT coverage path (`_gt_composite_labels` on `scada_test`) is never
+    exercised -- state_names depends on the FIT runs' GT only."""
+    import run_step2
+
+    prepared = _pooled_prepared()
+    _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
+
+    def fake_load_run_scada(prepared_run, run, index):
+        if run.name not in _FIT_RUN_NAMES:
+            return None  # test run stays GT-less -> skips the eval GT coverage path
+        return pd.DataFrame({"_n": np.zeros(prepared_run.features.shape[0])})
+
+    def fake_gt_state_labels(scada, cfg):
+        return np.array(["turbine"] * len(scada), dtype=object)
+
+    def fake_gt_composite_labels(scada, cfg):
+        return np.array(["turbine|0"] * len(scada), dtype=object)
+
+    monkeypatch.setattr(run_step2, "_load_run_scada", fake_load_run_scada)
+    monkeypatch.setattr(run_step2, "_gt_state_labels", fake_gt_state_labels)
+    monkeypatch.setattr(run_step2, "_gt_composite_labels", fake_gt_composite_labels)
+
+    snap_path = _out_dir(tmp_path) / "snap.npz"
+    assert run_step2.main([*_BASE_ARGS, "--save-snapshot", str(snap_path)]) == 0
+
+    loaded = load_snapshot(snap_path)
+    assert loaded.state_names is not None
+    hand = _hand_pipeline(prepared)
+    fitted_ids = {int(i) for i in np.asarray(hand.detector.smoother._fitted_ids)}
+    assert set(loaded.state_names.keys()) == fitted_ids
+
+
 def test_pool_row_gt_labels_object_dtype_alignment() -> None:
     import run_step2
     prepared = _pooled_prepared()

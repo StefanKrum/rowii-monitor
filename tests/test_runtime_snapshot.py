@@ -907,3 +907,20 @@ def test_state_names_coexists_with_level_recal_medians(tmp_path: Path) -> None:
     )
     assert snap.state_names == {fitted[0]: "turbine"}
     assert snap.level_recal_medians == {"f0": -40.0}
+
+
+def test_state_names_coexists_with_session_stats(tmp_path: Path) -> None:
+    """NO mutual-exclusivity (A1.5): state_names is a naming layer, not a
+    transform -- mirrors test_state_names_coexists_with_level_recal_medians for
+    the OTHER v2 scoring-space member state_names must coexist with (P9
+    hardening T2a)."""
+    _p, detector, references, cal_scores, thresholds = _detector_and_parts()
+    fitted = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
+    stats = _session_stats_2f()
+    snap = _from_parts(
+        detector, references, cal_scores, thresholds,
+        state_names={fitted[0]: "turbine"},
+        session_stats=stats,
+    )
+    assert snap.state_names == {fitted[0]: "turbine"}
+    assert snap.session_stats is stats

@@ -1945,9 +1945,14 @@ def _run_states_and_power(
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Full-length `(gt_states, power, window_s)` for *run_name* -- D3a's own
     seam (mirrors `_run_features_and_gt`'s resolve-then-load shape, and is
-    monkeypatched identically in CLI tests), but reads NO feature cache at
-    all: the taxonomy needs only the GT state sequence and the SCADA power
-    channel, both of which come from `_run_scada_or_none` + `gt_labels`. The
+    monkeypatched identically in CLI tests). `prepare_run` DOES read (or, on a
+    cold cache, compute and write) the full audio feature cache here -- this
+    function only avoids CONSUMING `prepared.features` afterward, not the
+    cache itself: the taxonomy needs only the GT state sequence and the SCADA
+    power channel, both of which come from `_run_scada_or_none` + `gt_labels`,
+    applied to `prepared.grid`. A warm cache (the common case -- every other
+    subcommand in this file already primed it) makes this cheap; a cold cache
+    still pays the full audio extraction cost purely to derive the grid. The
     grid a `PreparedRun` carries is variant-independent (any variant's window
     layout agrees, since `gt_labels`/SCADA never depend on audio/vibration
     features) -- fixed to the cheapest audio-only extraction here rather than
@@ -1958,6 +1963,10 @@ def _run_states_and_power(
             overlapping its own grid at all -- the taxonomy needs GT on
             every requested run (unlike `era-step`'s optional-GT "unmatched"
             point, a GT-free run cannot contribute a transition class here).
+        RuntimeError: `prepare_run` itself raises (too short/sparse for the
+            requested variant) -- propagated, `_run_transitions` catches it
+            per-run (P9 T4b hardening, mirrors `_run_features_and_gt`'s own
+            documented RuntimeError).
     """
     runs_by_name = {r.name: r for r in index.runs}
     run = runs_by_name[run_name]
@@ -2152,8 +2161,18 @@ def _run_transitions(args: argparse.Namespace) -> int:
     for name in run_names:
         try:
             states, power, window_s = _run_states_and_power(name, cfg, index)
-        except ValueError as exc:
-            print(f"transitions: {exc}", file=sys.stderr)
+        except (ValueError, RuntimeError) as exc:
+            # RuntimeError: prepare_run failed (P9 T4b hardening -- mirrors
+            # every other subcommand's own prepare_run guard in this file,
+            # e.g. feature-stability's `except RuntimeError`, and
+            # scripts/sweep_min_dwell.py's dedicated prepare_run guard).
+            # ValueError: _run_states_and_power's own no-Betriebsdaten refusal.
+            # {name!r} is interpolated explicitly (not left to the exception's
+            # own message) so a RuntimeError -- whose message never mentions
+            # the run, unlike the ValueError branch's -- still names it, the
+            # same "prepare_run failed for run X" clarity every sibling guard
+            # gives.
+            print(f"transitions: run {name!r}: {exc}", file=sys.stderr)
             return 2
         table = _transition_taxonomy(states, power, window_s)
         table.insert(0, "run", name)

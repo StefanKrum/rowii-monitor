@@ -570,6 +570,22 @@ def test_derive_state_names_fallback_sub_50pct_plurality() -> None:
     assert derive_state_names(gt_tie, pred, [0]) == {0: "cluster-0"}
 
 
+def test_derive_state_names_exact_50pct_plurality_keeps_name() -> None:
+    """Boundary pin (P9 hardening T1): `frac >= min_plurality` uses `>=`, so an
+    EXACT tie at the default 50% plurality KEEPS the majority name rather than
+    falling back -- the complement of test_derive_state_names_fallback_sub_50pct_
+    plurality's 40%-fallback / 60%-keep cases, neither of which touches the
+    boundary itself."""
+    from rowii.eval.metrics import derive_state_names
+    # cluster 0's masked windows split EXACTLY 2 turbine / 2 pump. _majority_mapping
+    # breaks the tie via pandas idxmax's first-in-(sorted)-index order -> "pump"
+    # (state_names sorted alphabetically: "pump" < "turbine"), whose own plurality
+    # is exactly 2/4 = 0.5 == min_plurality.
+    gt = np.array(["turbine", "turbine", "pump", "pump"], dtype=object)
+    pred = np.array([0, 0, 0, 0], dtype=np.int64)
+    assert derive_state_names(gt, pred, [0]) == {0: "pump"}
+
+
 def test_derive_state_names_fills_over_all_fitted_ids() -> None:
     from rowii.eval.metrics import derive_state_names
     gt = np.array(["turbine"] * 10, dtype=object)
