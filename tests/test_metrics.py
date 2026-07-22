@@ -530,3 +530,57 @@ def test_load_alignment_crosstab_shape_and_index_names() -> None:
     assert set(result.index) == {0, 1}
     assert set(result.columns) == {0, 1}
     assert "ari" in result.attrs
+
+
+def test_derive_state_names_maps_clean_two_mode() -> None:
+    from rowii.eval.metrics import derive_state_names
+    gt = np.array(["turbine"] * 30 + ["pump"] * 30, dtype=object)
+    pred = np.array([0] * 30 + [1] * 30, dtype=np.int64)
+    names = derive_state_names(gt, pred, fitted_ids=[0, 1])
+    assert names == {0: "turbine", 1: "pump"}
+
+
+def test_derive_state_names_masks_both_unknown_and_transition() -> None:
+    """A1.5: BOTH masked before the vote -- narrower than evaluate's unknown-only."""
+    from rowii.eval.metrics import derive_state_names
+    gt = np.array(["turbine", "transition", "unknown", "turbine", "turbine"], dtype=object)
+    pred = np.array([0, 0, 0, 0, 0], dtype=np.int64)
+    names = derive_state_names(gt, pred, fitted_ids=[0])
+    # only the 3 turbine windows count; cluster 0's plurality is 3/3 -> turbine.
+    assert names == {0: "turbine"}
+
+
+def test_derive_state_names_fallback_cluster_absent_from_masked_pred() -> None:
+    from rowii.eval.metrics import derive_state_names
+    # cluster 1 appears ONLY on transition/unknown windows -> zero GT-known -> fallback.
+    gt = np.array(["turbine", "turbine", "transition", "unknown"], dtype=object)
+    pred = np.array([0, 0, 1, 1], dtype=np.int64)
+    names = derive_state_names(gt, pred, fitted_ids=[0, 1])
+    assert names == {0: "turbine", 1: "cluster-1"}
+
+
+def test_derive_state_names_fallback_sub_50pct_plurality() -> None:
+    from rowii.eval.metrics import derive_state_names
+    # cluster 0's masked windows split 2 turbine / 3 pump -> winner (pump) = 3/5 = 60% >= 50%.
+    gt_ok = np.array(["turbine", "turbine", "pump", "pump", "pump"], dtype=object)
+    pred = np.array([0, 0, 0, 0, 0], dtype=np.int64)
+    assert derive_state_names(gt_ok, pred, [0]) == {0: "pump"}
+    # now a true <50% plurality: 2 turbine / 2 pump / 1 standstill -> max 2/5 = 40% -> fallback.
+    gt_tie = np.array(["turbine", "turbine", "pump", "pump", "standstill"], dtype=object)
+    assert derive_state_names(gt_tie, pred, [0]) == {0: "cluster-0"}
+
+
+def test_derive_state_names_fills_over_all_fitted_ids() -> None:
+    from rowii.eval.metrics import derive_state_names
+    gt = np.array(["turbine"] * 10, dtype=object)
+    pred = np.array([0] * 10, dtype=np.int64)
+    # fitted id 2 never appears in pred -> filled as its bare name.
+    names = derive_state_names(gt, pred, fitted_ids=[0, 1, 2])
+    assert names == {0: "turbine", 1: "cluster-1", 2: "cluster-2"}
+
+
+def test_derive_state_names_all_fallback_when_no_gt_known() -> None:
+    from rowii.eval.metrics import derive_state_names
+    gt = np.array(["unknown", "transition", "unknown"], dtype=object)
+    pred = np.array([0, 1, 0], dtype=np.int64)
+    assert derive_state_names(gt, pred, [0, 1]) == {0: "cluster-0", 1: "cluster-1"}
