@@ -864,3 +864,46 @@ def test_from_parts_level_recal_medians_geometry_refusal() -> None:
             detector, references, cal_scores, thresholds,
             level_recal_medians={"f0": 1.0, "not_a_real_column": 2.0},
         )
+
+
+# ---------------------------------------------------------------------------
+# 14. Format v2 (cont'd): state_names (Step-2 package-9 Task 2, spec D2/A1.8) --
+#     OPTIONAL v2 member, NO version bump, keyed over FITTED ids (not the
+#     threshold-label subset), NO mutual-exclusivity with level_recal_medians.
+# ---------------------------------------------------------------------------
+
+
+def test_v2_round_trip_with_state_names(tmp_path: Path) -> None:
+    prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
+    fitted = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
+    names = {fitted[0]: "turbine"}  # a subset of fitted ids is legal (orthogonality)
+    snapshot = _from_parts(detector, references, cal_scores, thresholds, state_names=names)
+    assert snapshot.state_names == names
+    assert snapshot.session_stats is None
+    path = tmp_path / "names.npz"
+    save_snapshot(path, snapshot)
+    meta = json.loads((path.with_suffix(".json")).read_text())
+    assert meta["state_names"] == {str(fitted[0]): "turbine"}
+    loaded = load_snapshot(path)
+    assert loaded.state_names == names  # int keys restored
+    assert loaded.format_version == SNAPSHOT_FORMAT_VERSION  # no bump
+
+
+def test_state_names_keys_must_be_fitted_ids(tmp_path: Path) -> None:
+    _p, detector, references, cal_scores, thresholds = _detector_and_parts()
+    bad = 9999  # never a fitted id
+    with pytest.raises(ValueError, match="state_names"):
+        _from_parts(detector, references, cal_scores, thresholds, state_names={bad: "x"})
+
+
+def test_state_names_coexists_with_level_recal_medians(tmp_path: Path) -> None:
+    """NO mutual-exclusivity (A1.5): state_names is a naming layer, not a transform."""
+    _p, detector, references, cal_scores, thresholds = _detector_and_parts()
+    fitted = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
+    snap = _from_parts(
+        detector, references, cal_scores, thresholds,
+        state_names={fitted[0]: "turbine"},
+        level_recal_medians={"f0": -40.0},
+    )
+    assert snap.state_names == {fitted[0]: "turbine"}
+    assert snap.level_recal_medians == {"f0": -40.0}
