@@ -305,3 +305,68 @@ branch races).
 **Scope note.** Small package: six code tasks (steps 1–6) + synthesis. The real new cost is
 D1 (two sentinels + the replay driver); D2 rides an existing mapping primitive and the
 established optional-snapshot-member pattern; D3 is one monitor column + two analysis drivers.
+
+## Amendment A1 (adversarial spec review, 2026-07-22 — all findings adopted)
+
+**A1.1 (F1, blocker) — sentinel margins pinned, reproducibly and firewall-safe.**
+s1 threshold = the **97.5th percentile of B=1000 segment-block bootstrap
+resamples** of the B1 CONFORMAL-side `no_mode_fits` rate (blocks =
+`segment_ids`; seeded rng(7)). s2 threshold = trigger when
+`|day_median − anchor_median| > 3 · MAD` where the MAD is computed over the
+B1 CONFORMAL-side per-`segment_ids`-block medians of the mic-level columns
+(same held-out side as s1 for anchor discipline). The factor 3 is the
+standard robust-outlier criterion, derived from nothing partner-published;
+NO fixed dB/log10 headroom constant exists anywhere (that slot was the
+A1.8 exposure). Both thresholds are persisted in the driver's sidecar with
+their derivation inputs.
+
+**A1.2 (F2, blocker) — replay run set pinned.** Monitored runs per day are
+exactly the P7 rotation runs: 250526-tu, 250526-pu-morning (era A;
+**250526-pu-afternoon is EXCLUDED** — only its fusion cache exists on disk),
+270626-pu_ph_pu_ph_pu_ph-1 (chronologically between 250526 and 290626,
+sentinel-only: no Betriebsdaten → no GT/FAR row), 290626-tu, 290626-pu,
+010726-tu_ph_tu, 010726-pu, 080726-pu_strikes (+ 080726-st_strikes for the
+event-retention check only). No run enumeration by day root anywhere.
+
+**A1.3 (F3) — explicit task item:** update the exact-equality
+`_ALARM_COLUMNS` assertions in tests/test_monitor_cli.py (local list line
+~58; asserts ~198/949/1092) and the segments.csv column asserts (~238/467)
+— the P7 `threshold_source` precedent.
+
+**A1.4 (F4) — `state_name` is ALWAYS present** (string column; fallback
+value `cluster-<id>` when the snapshot carries no `state_names`), and the
+"exactly as today" sentence is retracted. Appended column order at the END
+of `_ALARM_COLUMNS`: `near_transition`, then `state_name`.
+
+**A1.5 (F5) — naming wrapper specified.** New `derive_state_names(gt,
+pred, fitted_ids)`: (1) mask `{unknown, transition}` windows BEFORE the
+vote; (2) inner vote = existing `_majority_mapping` on the masked pair;
+(3) fallback `cluster-<id>` when a cluster is absent from the masked pred,
+has zero GT-known windows, or its plurality winner covers <50% of its
+masked windows; (4) fill over ALL `fitted_ids`. `_majority_mapping` itself
+is unchanged.
+
+**A1.6 (F6) — FAR population comparability.** The headline once+triggered
+table reports every arm's FAR **on the common recalibrate scoring-split
+window set** (the frozen arm scores all valid windows anyway — subset it);
+the full-population frozen FAR is a secondary column, labeled.
+
+**A1.7 (F7) — snapshot build commands** gain the required
+`--test-run 290626-tu` (any non-B1 run; A3.1-conform).
+
+**A1.8 (underspecified points, all pinned):** s2 anchor side = B1
+CONFORMAL (A1.1); run_step2 stores `state_names=None` when any fit run
+lacks Betriebsdaten (existing GT-skip seam), stated in the docstring; D3a
+counts transition runs not bracketed by two KNOWN states as an explicit
+`unbracketed` category; `near_transition` filters invalid/-1 windows FIRST,
+finds state-change boundaries in the valid subsequence, then maps back to
+grid indices (a valid→invalid→valid blip is NOT a change); the s2
+vibration cross-check uses **RAWGeneratorVib__2 only** (RAWTurbineVib__3 is
+std≈0 through 01.07 — P8 D4); the swept `min_dwell` default also feeding
+`--smooth` and `near_transition`'s W is a stated transplantation, not
+separately optimized; 270626 sits at its true chronological position in
+every table.
+
+**Scope note (review):** D1 is the cost center (two sentinels + replay
+driver); D3b is two drivers; D2's run_step2 wiring includes the A1.5
+wrapper — the plan sizes accordingly.
