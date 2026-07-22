@@ -775,7 +775,7 @@ def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
     assert "rotations-heatmap/audio-frozen.png" in readme  # figure actually linked
     for name in (
         "rotations-heatmap", "feature-stability", "era-step",
-        "mode-signatures", "tonal-table", "pillar3-figure",
+        "mode-signatures", "tonal-table", "pillar3-figure", "transitions",
     ):
         assert name in readme
 
@@ -992,3 +992,151 @@ def test_digest_pillar3_section_annotates_fusion_snorm_as_session_norm_side_arm(
     assert "fusion-snorm" in section
     assert "session-norm" in section
     assert "base representation" in section  # explicitly disclaims this framing
+
+
+# ---------------------------------------------------------------------------
+# Package-9 D3a (plan docs/superpowers/plans/
+# 2026-07-22-step2-package9-once-naming-transitions.md, Task 4): `transitions`
+# subcommand -- the SCADA transition taxonomy on OUR OWN `gt_labels` output
+# (`rowii.scada.labels`'s `"transition"` state). Plan's own RED tests (verbatim)
+# plus the subcommand's own CLI-level artifact-shape tests, mirroring every
+# other subcommand's `test_*_subcommand_writes_artifacts` pattern in this file.
+# ---------------------------------------------------------------------------
+
+
+def test_transition_segments_bracketing_and_unbracketed() -> None:
+    states = np.array(
+        ["standstill", "transition", "transition", "turbine", "transition", "unknown"],
+        dtype=object,
+    )
+    segs = ad._transition_segments(states)
+    assert segs[0] == ("standstill", "turbine", 1, 3)   # bracketed
+    assert segs[1] == ("turbine", None, 4, 5)           # to_state is unknown -> None
+    assert ad._transition_class(*segs[0][:2]) == "standstill->turbine"
+    assert ad._transition_class(*segs[1][:2]) == "unbracketed"
+
+
+def test_transition_taxonomy_counts_dwell_and_ramp() -> None:
+    states = np.array(
+        ["standstill", "transition", "transition", "turbine", "turbine",
+         "transition", "standstill"], dtype=object,
+    )
+    power = np.array([0.0, 5.0, 20.0, 60.0, 60.0, 20.0, 0.0], dtype=np.float64)
+    tax = ad._transition_taxonomy(states, power, window_s=1.0)
+    row = tax.set_index("transition_class")
+    assert int(row.loc["standstill->turbine", "n_segments"]) == 1
+    assert float(row.loc["standstill->turbine", "dwell_s_median"]) == 2.0  # 2 windows @ 1s
+    assert float(row.loc["standstill->turbine", "median_abs_dpdt"]) > 0.0
+
+
+# --- `transitions` subcommand: CLI-level artifact-shape tests, mirroring the
+# other five subcommands' own `_install_features_and_gt`-style seam install
+# (`_run_states_and_power` monkeypatched directly, D3a's own seam). ----------
+
+
+def _install_states_and_power(
+    monkeypatch,
+    mod,
+    run_names: list[str],
+    fake_by_run: dict[str, tuple[np.ndarray, np.ndarray, float]],
+    results_root: Path,
+) -> None:
+    runs = [Run(name=n, files={}, day_root=Path(f"/d/{n}")) for n in run_names]
+    monkeypatch.setattr(
+        mod, "discover",
+        lambda dr: RecordingIndex(runs=runs, betriebsdaten=[], betriebsdaten_by_day={}),
+    )
+    monkeypatch.setattr(
+        mod, "load_config",
+        lambda: Config(data_root=Path("/d"), results_root=results_root, detect=DetectConfig()),
+    )
+    monkeypatch.setattr(
+        mod, "_run_states_and_power",
+        lambda run_name, cfg, index: fake_by_run[run_name],
+    )
+
+
+def _transitions_run(*, turbine_power: float = 60.0) -> tuple[np.ndarray, np.ndarray, float]:
+    """One run's (states, power, window_s): standstill -> turbine -> standstill,
+    each transition bracketed by KNOWN states on both sides -- two transition
+    classes, both real (finite) ramp/dwell stats."""
+    states = np.array(
+        ["standstill", "transition", "transition", "turbine", "turbine", "turbine",
+         "transition", "standstill"],
+        dtype=object,
+    )
+    power = np.array(
+        [0.0, 5.0, 20.0, turbine_power, turbine_power, turbine_power, 20.0, 0.0],
+        dtype=np.float64,
+    )
+    return states, power, 1.0
+
+
+def test_transitions_subcommand_writes_artifacts_across_runs(tmp_path, monkeypatch) -> None:
+    fake = {"dayA": _transitions_run(), "dayB": _transitions_run(turbine_power=80.0)}
+    _install_states_and_power(monkeypatch, ad, ["dayA", "dayB"], fake, tmp_path / "results")
+    out = tmp_path / "results" / "analysis-days"
+    code = ad.main(["transitions", "--runs", "dayA,dayB", "--out", str(out)])
+    assert code == 0
+
+    csv_path = out / "transitions" / "transitions.csv"
+    png_path = out / "transitions" / "transitions.png"
+    assert csv_path.is_file() and png_path.is_file()
+
+    table = pd.read_csv(csv_path)
+    assert {
+        "run", "transition_class", "n_segments", "dwell_s_mean", "dwell_s_median",
+        "dwell_s_min", "dwell_s_max", "median_abs_dpdt",
+    } <= set(table.columns)
+    assert set(table["run"]) == {"dayA", "dayB"}
+    assert "standstill->turbine" in set(table["transition_class"])
+    assert "turbine->standstill" in set(table["transition_class"])
+    assert (table["n_segments"] >= 1).all()
+
+
+def test_transitions_unknown_run_name_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    fake = {"dayA": _transitions_run()}
+    _install_states_and_power(monkeypatch, ad, ["dayA"], fake, tmp_path / "results")
+    code = ad.main(["transitions", "--runs", "dayA,nope", "--out", str(tmp_path / "out")])
+    assert code == 2
+    assert "nope" in capsys.readouterr().err
+
+
+def test_transitions_run_without_scada_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    """`_run_states_and_power` raises ValueError for a run with no Betriebsdaten
+    coverage (D3a's own interface contract) -- the CLI must fail loudly, never
+    silently drop the run (unlike era-step's optional-GT "unmatched" point,
+    the taxonomy needs GT on every requested run)."""
+    runs = [Run(name="dayNoGT", files={}, day_root=Path("/d/dayNoGT"))]
+    monkeypatch.setattr(
+        ad, "discover",
+        lambda dr: RecordingIndex(runs=runs, betriebsdaten=[], betriebsdaten_by_day={}),
+    )
+    monkeypatch.setattr(
+        ad, "load_config",
+        lambda: Config(
+            data_root=Path("/d"), results_root=tmp_path / "results", detect=DetectConfig()
+        ),
+    )
+
+    def _raise(
+        run_name: str, cfg: Config, index: RecordingIndex
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        raise ValueError(
+            f"run {run_name!r} has no Betriebsdaten coverage overlapping its own grid"
+        )
+
+    monkeypatch.setattr(ad, "_run_states_and_power", _raise)
+    code = ad.main(["transitions", "--runs", "dayNoGT", "--out", str(tmp_path / "out")])
+    assert code == 2
+    assert "dayNoGT" in capsys.readouterr().err
+
+
+def test_transitions_digest_section_carries_attribution(tmp_path) -> None:
+    """A1.8/spec §4: the SCADA transition taxonomy echoes the partner's own
+    transition/dwell analysis -- the digest section carries the same one-line
+    attribution pattern every other partner-inspired analysis type does here."""
+    text = ad._render_digest(tmp_path / "analysis-days")
+    section = text.split("## transitions")[1]
+    assert "Rodrigues & Zhang (2026)" in section
+    assert "our own" in section.lower() or "our caches" in section.lower()

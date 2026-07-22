@@ -4,12 +4,15 @@ A1.11, plan `docs/superpowers/plans/2026-07-21-step2-package8-modebank-explain.m
 Tasks 8+9): publication-grade figures + underlying CSVs from EXISTING artifacts/
 warm caches -- no new sweeps, no partner JSON/number read by any code here.
 
-This module ships all six of the D3 suite's analysis subcommands plus a
-markdown digest. Five of the six share ONE read seam (`_run_features_and_gt`/
-`_RunFeatures`) for everything that reads warm feature caches + GT;
-`pillar3-figure` instead reads existing `results/pillar3/**/event_eval.csv`
-artifacts directly (mirrors `rotations-heatmap`'s own direct-filesystem-read
-style), and `digest` only reads THIS module's own output tree:
+This module ships six Package-8 D3 analysis subcommands, a Package-9 D3a
+addition (`transitions`), and a markdown digest. Five of the first six share
+ONE read seam (`_run_features_and_gt`/`_RunFeatures`) for everything that
+reads warm feature caches + GT; `pillar3-figure` instead reads existing
+`results/pillar3/**/event_eval.csv` artifacts directly (mirrors
+`rotations-heatmap`'s own direct-filesystem-read style), `transitions` reads
+GT + the SCADA power channel only, through its OWN seam
+(`_run_states_and_power`, no feature cache involved), and `digest` only reads
+THIS module's own output tree:
 
 1. `rotations-heatmap` -- day x day pooled flag-rate heatmap, read straight from
    `results/step2/cross-day-pooled/<test_run>/<variant>-pooled<leaf_suffix>/
@@ -108,16 +111,38 @@ style), and `digest` only reads THIS module's own output tree:
    numbers only; no partner attribution (like `rotations-heatmap`, this is
    Stefan's own comparison-readability motivation, not a replicated
    analysis type).
+7. `transitions` (Package-9 spec `docs/superpowers/specs/
+   2026-07-22-step2-package9-once-naming-transitions.md` §3.D3(a), plan
+   `docs/superpowers/plans/2026-07-22-step2-package9-once-naming-
+   transitions.md` Task 4) -- a SCADA transition-run taxonomy across
+   `--runs`, built ENTIRELY from OUR OWN `rowii.scada.labels.gt_labels`
+   output (the `"transition"` state `_apply_ramp` + `_apply_transition_buffer`
+   produce): every contiguous transition run is classed by the pair of KNOWN
+   states (`rowii.scada.labels.STATES` minus `"transition"`) bracketing it --
+   `"<from>-><to>"`, or the explicit `"unbracketed"` category (A1.8) when
+   either side is `"unknown"` or the run touches a grid edge. Per (run,
+   class) row: segment count, dwell-duration stats (seconds), and ramp
+   stats (median |dP/dt| via the SAME centred-difference formula
+   `rowii.scada.labels._apply_ramp` uses, over the SCADA power channel).
+   Read through its own seam, `_run_states_and_power` (GT + power only, no
+   feature cache -- unlike every subcommand above, the taxonomy needs no
+   audio/vibration features at all). An independent, our-own-derived
+   taxonomy of the same transition/dwell PHENOMENON the partner's own
+   monitoring work also characterizes (Rodrigues & Zhang, 2026) -- no
+   partner numeric constant appears anywhere as an expected value (A1.8
+   firewall); every count/dwell/ramp figure here is computed purely from
+   our own `gt_labels` + SCADA power readings.
 
-`digest` (Task 9) writes `results/analysis-days/README.md`: one section per
-subcommand above, a 2-3 sentence plain-language reading of that chart type, a
-markdown link to every PNG this module has actually written so far under
-that subcommand's own directory, the A1.8 attribution line for every
-partner-inspired analysis type (`feature-stability`, `era-step`,
-`mode-signatures`, `tonal-table`), and a dedicated paragraph documenting the
-A1.1 finding: `fuse()`'s built-in per-run z-score is an implicit session
-normalization that plausibly explains fusion's own cross-day FAR advantage.
-English only (`--lang de` not built, spec D3 -- thesis language).
+`digest` (Task 9, extended Package-9) writes `results/analysis-days/README.md`:
+one section per subcommand above, a 2-3 sentence plain-language reading of
+that chart type, a markdown link to every PNG this module has actually
+written so far under that subcommand's own directory, the A1.8 attribution
+line for every partner-inspired analysis type (`feature-stability`,
+`era-step`, `mode-signatures`, `tonal-table`, `transitions`), and a dedicated
+paragraph documenting the A1.1 finding: `fuse()`'s built-in per-run z-score is
+an implicit session normalization that plausibly explains fusion's own
+cross-day FAR advantage. English only (`--lang de` not built, spec D3 --
+thesis language).
 
 Every subcommand writes a PNG (matplotlib, Agg backend) + its underlying CSV
 under `results/analysis-days/<subcommand>/` (digest is the one exception: a
@@ -168,7 +193,12 @@ from rowii.io.dataset import (  # noqa: E402
 )
 from rowii.io.gantner import read_header  # noqa: E402
 from rowii.pipeline import PreparedRun, prepare_run, stream_columns  # noqa: E402
-from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
+from rowii.scada.labels import (  # noqa: E402
+    STATES,
+    _contiguous_true_runs,
+    gt_labels,
+    load_scada_window_means,
+)
 from rowii.signals.features import MACHINE_HZ  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
 
@@ -1894,6 +1924,260 @@ def _run_pillar3_figure(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand 7: transitions (Package-9 D3a, spec `docs/superpowers/specs/
+# 2026-07-22-step2-package9-once-naming-transitions.md` §3.D3(a), plan
+# `docs/superpowers/plans/2026-07-22-step2-package9-once-naming-
+# transitions.md` Task 4). Attribution (module docstring point 7): this
+# taxonomy independently characterizes the same transition/dwell phenomenon
+# the partner's own monitoring work reports on (Rodrigues & Zhang, 2026) --
+# every number below is computed purely from OUR OWN `rowii.scada.labels.
+# gt_labels` output and SCADA power readings (A1.8 firewall).
+# ---------------------------------------------------------------------------
+
+_KNOWN_GT_STATES: tuple[str, ...] = tuple(s for s in STATES if s != "transition")
+"""`rowii.scada.labels.STATES` minus `"transition"` -- the states a transition
+run can be BRACKETED by (`"unknown"` is not in `STATES` at all, so it can
+never bracket a run either; D3a's own `unbracketed` category, A1.8)."""
+
+
+def _run_states_and_power(
+    run_name: str, cfg: Config, index: RecordingIndex
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Full-length `(gt_states, power, window_s)` for *run_name* -- D3a's own
+    seam (mirrors `_run_features_and_gt`'s resolve-then-load shape, and is
+    monkeypatched identically in CLI tests), but reads NO feature cache at
+    all: the taxonomy needs only the GT state sequence and the SCADA power
+    channel, both of which come from `_run_scada_or_none` + `gt_labels`. The
+    grid a `PreparedRun` carries is variant-independent (any variant's window
+    layout agrees, since `gt_labels`/SCADA never depend on audio/vibration
+    features) -- fixed to the cheapest audio-only extraction here rather than
+    exposing a `variant` parameter this subcommand has no use for.
+
+    Raises:
+        ValueError: *run_name*'s day has no Betriebsdaten coverage
+            overlapping its own grid at all -- the taxonomy needs GT on
+            every requested run (unlike `era-step`'s optional-GT "unmatched"
+            point, a GT-free run cannot contribute a transition class here).
+    """
+    runs_by_name = {r.name: r for r in index.runs}
+    run = runs_by_name[run_name]
+    prepared = prepare_run(run, "audio", cfg, use_cache=True)
+    scada = _run_scada_or_none(prepared, run, index)
+    if scada is None:
+        raise ValueError(
+            f"run {run_name!r} has no Betriebsdaten coverage overlapping its "
+            f"own grid -- the transitions taxonomy needs GT on every "
+            f"requested run (D3a)"
+        )
+    window_s = cfg.window.window_s
+    gt_states = gt_labels(scada, cfg.gt, window_s=window_s)["state"].to_numpy()
+    power = scada["power"].to_numpy(dtype=np.float64)
+    return gt_states, power, window_s
+
+
+def _transition_segments(
+    states: np.ndarray,
+) -> list[tuple[str | None, str | None, int, int]]:
+    """`[(from_state, to_state, start, stop), ...]`, one entry per maximal
+    contiguous `"transition"` run `[start, stop)` in *states*
+    (`rowii.scada.labels._contiguous_true_runs`). *from_state*/*to_state* are
+    the KNOWN state (`_KNOWN_GT_STATES`) immediately bracketing the run on
+    each side, or `None` when that side is out of range (a run touching a
+    grid edge) or itself not a known state (e.g. `"unknown"`) -- `None` on
+    either side is D3a's `unbracketed` signal (`_transition_class`)."""
+    st = np.asarray(states, dtype=object)
+    out: list[tuple[str | None, str | None, int, int]] = []
+    for start, stop in _contiguous_true_runs(st == "transition"):
+        prev = st[start - 1] if start > 0 else None
+        nxt = st[stop] if stop < st.shape[0] else None
+        frm = str(prev) if prev in _KNOWN_GT_STATES else None
+        to = str(nxt) if nxt in _KNOWN_GT_STATES else None
+        out.append((frm, to, int(start), int(stop)))
+    return out
+
+
+def _transition_class(from_state: str | None, to_state: str | None) -> str:
+    """`"<from>-><to>"` when BOTH sides bracket a known state, else the
+    explicit `"unbracketed"` category (A1.8: a run touching a grid edge, or
+    bordering `"unknown"`, is counted and reported, never silently dropped)."""
+    if from_state is None or to_state is None:
+        return "unbracketed"
+    return f"{from_state}->{to_state}"
+
+
+def _run_abs_dpdt(power: np.ndarray, start: int, stop: int, window_s: float) -> float:
+    """Median |dP/dt| (MW/s) over ONE transition run's own `[start, stop)`
+    index range, via the SAME centred-difference formula `rowii.scada.
+    labels._apply_ramp` uses (`(power[i+1] - power[i-1]) / (2 * window_s)`).
+    `NaN` when the run has no interior window with two finite neighbours
+    (e.g. a single-window run flush against the array edge) -- the caller
+    aggregates per transition CLASS over however many segments do carry a
+    finite reading."""
+    p = np.asarray(power, dtype=np.float64)
+    vals = [
+        abs((p[i + 1] - p[i - 1]) / (2.0 * window_s))
+        for i in range(max(1, start), min(p.shape[0] - 1, stop))
+        if np.isfinite(p[i - 1]) and np.isfinite(p[i + 1])
+    ]
+    return float(np.median(vals)) if vals else float("nan")
+
+
+_TRANSITION_TAXONOMY_COLUMNS = [
+    "transition_class", "n_segments", "dwell_s_mean", "dwell_s_median",
+    "dwell_s_min", "dwell_s_max", "median_abs_dpdt",
+]
+
+
+def _transition_taxonomy(states: np.ndarray, power: np.ndarray, window_s: float) -> pd.DataFrame:
+    """One row per transition CLASS (`_transition_class`) found in *states*:
+    segment count, dwell-duration stats over `(stop - start) * window_s`
+    seconds, and `median_abs_dpdt` -- the median, ACROSS that class's own
+    segments, of each segment's own `_run_abs_dpdt` (a segment whose own
+    reading is `NaN` -- no interior window -- is excluded from that median;
+    a class whose every segment is `NaN` reports `NaN` itself, never a
+    silently-wrong zero). Sorted by `transition_class` for a deterministic
+    row order; empty (zero rows) when *states* carries no `"transition"`
+    window at all."""
+    segments = _transition_segments(states)
+    by_class: dict[str, list[tuple[int, int]]] = {}
+    for frm, to, start, stop in segments:
+        by_class.setdefault(_transition_class(frm, to), []).append((start, stop))
+
+    rows: list[dict[str, object]] = []
+    for cls in sorted(by_class):
+        bounds = by_class[cls]
+        dwell_s = np.array([(stop - start) * window_s for start, stop in bounds], dtype=np.float64)
+        per_segment_dpdt = np.array(
+            [_run_abs_dpdt(power, start, stop, window_s) for start, stop in bounds],
+            dtype=np.float64,
+        )
+        finite_dpdt = per_segment_dpdt[np.isfinite(per_segment_dpdt)]
+        rows.append(
+            {
+                "transition_class": cls,
+                "n_segments": len(bounds),
+                "dwell_s_mean": float(np.mean(dwell_s)),
+                "dwell_s_median": float(np.median(dwell_s)),
+                "dwell_s_min": float(np.min(dwell_s)),
+                "dwell_s_max": float(np.max(dwell_s)),
+                "median_abs_dpdt": (
+                    float(np.median(finite_dpdt)) if finite_dpdt.size else float("nan")
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=_TRANSITION_TAXONOMY_COLUMNS)
+
+
+def _plot_transitions(table: pd.DataFrame, out_path: Path) -> None:
+    """Grouped bar chart of `n_segments` per `transition_class`, one colour
+    per `run` -- the readability companion to `transitions.csv` (mirrors
+    `_plot_pillar3_figure`'s own grouped-bar shape/palette conventions)."""
+    if table.empty:
+        fig, ax = plt.subplots(figsize=(8.5, 3.0))
+        fig.patch.set_facecolor(_COLOR_SURFACE)
+        ax.set_facecolor(_COLOR_SURFACE)
+        ax.text(
+            0.5, 0.5, "no transition segment discovered in any requested run",
+            ha="center", va="center", color=_COLOR_TEXT_SECONDARY, fontsize=10,
+        )
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    runs = sorted(table["run"].unique())
+    classes = sorted(table["transition_class"].unique())
+    run_color = {r: _CATEGORICAL_HEX[i % len(_CATEGORICAL_HEX)] for i, r in enumerate(runs)}
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.2 * len(classes) + 2.0), 4.5))
+    fig.patch.set_facecolor(_COLOR_SURFACE)
+    ax.set_facecolor(_COLOR_SURFACE)
+
+    n_runs = max(len(runs), 1)
+    width = 0.8 / n_runs
+    x = np.arange(len(classes))
+    indexed = table.set_index(["run", "transition_class"])["n_segments"]
+    for i, run in enumerate(runs):
+        offset = (i - (n_runs - 1) / 2) * width
+        heights = [
+            float(indexed.get((run, cls), 0.0)) for cls in classes
+        ]
+        ax.bar(x + offset, heights, width=width, color=run_color[run], zorder=3, label=run)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(classes, rotation=30, ha="right", fontsize=8, color=_COLOR_TEXT_SECONDARY)
+    ax.set_ylabel("transition segments", color=_COLOR_TEXT_MUTED, fontsize=9)
+    ax.grid(axis="y", color=_COLOR_GRIDLINE, linewidth=1.0, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(_COLOR_STEM)
+    ax.spines["left"].set_color(_COLOR_STEM)
+    ax.tick_params(axis="both", colors=_COLOR_TEXT_MUTED, length=0)
+    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_title(
+        "SCADA transition taxonomy: segment count by class",
+        loc="left", fontsize=11, color="#0b0b0b",
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+
+
+def _run_transitions(args: argparse.Namespace) -> int:
+    """`transitions` subcommand entrypoint (D3a): one `_transition_taxonomy`
+    row set PER requested run (tagged by its own `run` column, mirroring
+    `era-step`/`tonal-table`'s own per-run-row convention rather than
+    collapsing already-aggregated per-run stats across runs, which cannot be
+    done correctly from summary stats alone), concatenated into one CSV +
+    one grouped-bar PNG."""
+    run_names = _resolve_run_names(str(args.runs))
+    if not run_names:
+        print("transitions: --runs got an empty run-name list", file=sys.stderr)
+        return 2
+
+    cfg = load_config()
+    index = discover(cfg.data_root)
+    unknown = _unknown_run_names(run_names, index)
+    if unknown:
+        available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+        print(
+            f"transitions: unknown run name(s): {', '.join(unknown)}; available "
+            f"runs: {available}",
+            file=sys.stderr,
+        )
+        return 2
+
+    per_run_tables: list[pd.DataFrame] = []
+    for name in run_names:
+        try:
+            states, power, window_s = _run_states_and_power(name, cfg, index)
+        except ValueError as exc:
+            print(f"transitions: {exc}", file=sys.stderr)
+            return 2
+        table = _transition_taxonomy(states, power, window_s)
+        table.insert(0, "run", name)
+        per_run_tables.append(table)
+
+    combined = pd.concat(per_run_tables, ignore_index=True) if per_run_tables else pd.DataFrame()
+    if combined.empty:
+        print("transitions: no transition segment found in any requested run", file=sys.stderr)
+        return 1
+
+    out_root = _resolve_out_root(args.out, cfg.results_root)
+    out_dir = out_root / "transitions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(out_dir / "transitions.csv", index=False)
+    _plot_transitions(combined, out_dir / "transitions.png")
+    print(
+        f"transitions: wrote {out_dir / 'transitions.csv'} and .png "
+        f"({len(run_names)} run(s), {int(combined['n_segments'].sum())} "
+        f"transition segment(s) total)"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # digest (Task 9, spec D3 closing paragraph)
 # ---------------------------------------------------------------------------
 
@@ -1981,6 +2265,18 @@ _FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
         "audio/vibration/fusion/audio-beats.",
         None,
     ),
+    "transitions": (
+        "One (run, transition-class) bar per SCADA transition run bracketed "
+        "by the two KNOWN operating states either side of it (e.g. "
+        "`standstill->turbine`), grouped by run and coloured by run; the "
+        "underlying CSV also carries each class's own dwell-duration stats "
+        "(seconds) and its median |dP/dt| ramp rate (MW/s, the SAME "
+        "centred-difference formula the GT ramp rule itself uses). A run "
+        "not bracketed by two known states on both sides (e.g. it touches a "
+        "recording edge, or borders an `unknown` window) is counted under "
+        "the explicit `unbracketed` category rather than silently dropped.",
+        "Rodrigues & Zhang (2026)",
+    ),
 }
 
 
@@ -2043,10 +2339,11 @@ def _run_digest(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "D3 explainability analysis suite (Package-8): publication-grade "
-            "figures + underlying CSVs from existing artifacts/warm caches -- "
-            "rotations-heatmap, feature-stability, era-step, mode-signatures, "
-            "tonal-table, pillar3-figure, digest (module docstring)."
+            "D3 explainability analysis suite (Package-8, + Package-9 D3a "
+            "'transitions'): publication-grade figures + underlying CSVs from "
+            "existing artifacts/warm caches -- rotations-heatmap, "
+            "feature-stability, era-step, mode-signatures, tonal-table, "
+            "pillar3-figure, transitions, digest (module docstring)."
         )
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2181,6 +2478,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="Output root (default: <results_root>/analysis-days)."
     )
 
+    p_trans = sub.add_parser(
+        "transitions",
+        help=(
+            "SCADA transition-run taxonomy (D3a): per (run, class) segment "
+            "count + dwell/ramp stats, from OUR OWN gt_labels output only."
+        ),
+    )
+    p_trans.add_argument(
+        "--runs", required=True,
+        help="Comma-separated GT-bearing run names (incl. 080726's changeover, if requested).",
+    )
+    p_trans.add_argument(
+        "--out", default=None, help="Output root (default: <results_root>/analysis-days)."
+    )
+
     p_digest = sub.add_parser(
         "digest",
         help="Write results/analysis-days/README.md linking every figure with a reading.",
@@ -2212,6 +2524,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_tonal_table(args)
     if args.command == "pillar3-figure":
         return _run_pillar3_figure(args)
+    if args.command == "transitions":
+        return _run_transitions(args)
     if args.command == "digest":
         return _run_digest(args)
     parser.error(f"unknown command: {args.command}")
