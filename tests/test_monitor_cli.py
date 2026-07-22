@@ -1702,6 +1702,25 @@ def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
     assert mask[7] == False  # 3 valid windows past the boundary -> outside +-1  # noqa: E712
 
 
+def test_near_transition_mask_floors_w_windows_at_one() -> None:
+    """P9 hardening T3a: `_near_transition_mask` must floor its w_windows
+    conversion at 1, for literal parity with `FittedDetector._finish`'s own
+    `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
+    `round()` truncates to 0 steps must still flag the immediate (+-1 step)
+    neighbours of a transition, not degenerate to "only the boundary window
+    itself"."""
+    import monitor
+    labels = np.array([0, 0, 0, 1, 1], dtype=np.int64)
+    valid = np.ones(5, dtype=bool)
+    # window_ns=1s, w_seconds=0.4 -> round(0.4) == 0 without the floor.
+    mask = monitor._near_transition_mask(labels, valid, window_ns=1_000_000_000, w_seconds=0.4)
+    assert mask[3] == True    # boundary onset itself                       # noqa: E712
+    assert mask[2] == True    # ONE step before onset -- floored in, not dropped  # noqa: E712
+    assert mask[4] == True    # ONE step after onset                        # noqa: E712
+    assert mask[1] == False   # TWO steps before -- still outside +-1       # noqa: E712
+    assert mask[0] == False   # TWO steps... clearly outside                # noqa: E712
+
+
 def test_apply_transition_suppression_forces_false_and_counts() -> None:
     import monitor
     alarm = np.array([True, True, False, True], dtype=bool)

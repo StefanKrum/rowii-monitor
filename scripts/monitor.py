@@ -116,11 +116,12 @@ surfaces as `state_name` on EVERY `alarms.parquet` row (ALWAYS present -- fallba
 -- inventing a mapping the artifact cannot back would be a claim, not a fact, D2(c)).
 `timeline.md` and `monitor_notes.md`'s per-state table name states the same way when
 a name exists. `near_transition` (`alarms.parquet`, ALWAYS present, A1.4) is True for
-every VALID window within +-W seconds of a detected-state CHANGE found in the VALID
-subsequence (an invalid gap never counts as a change itself); `W` defaults to the
-snapshot's own `min_dwell_s` -- the same dwell scale package-9's `min_dwell` sweep
-grounds. The OPTIONAL `--suppress-transition-alarms` flag (default OFF, D3c
-ablation) then withholds alarms on near-transition SCORED windows
+every VALID window within ≈W seconds, measured along the VALID subsequence (not
+wall-clock -- an invalid gap contributes no distance), of a detected-state CHANGE
+found in that same subsequence (an invalid gap never counts as a change itself
+either); `W` defaults to the snapshot's own `min_dwell_s` -- the same dwell scale
+package-9's `min_dwell` sweep grounds. The OPTIONAL `--suppress-transition-alarms`
+flag (default OFF, D3c ablation) then withholds alarms on near-transition SCORED windows
 (`alarm -> False`); `score`/`p_value`/`near_transition`/`role` stay recorded, so
 every suppressed alarm remains fully auditable from `alarms.parquet` alone, and the
 suppressed count is reported in `monitor_notes.md`. Suppression is an explicit
@@ -396,8 +397,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--suppress-transition-alarms", action="store_true",
         help="Withhold alarms on windows within the near-transition band (spec "
              "D3c ablation, default OFF): forces alarm=False on SCORED windows "
-             "where near_transition is True (+-min_dwell_s seconds of a detected-"
-             "state change). score/p_value/near_transition/role stay recorded in "
+             "where near_transition is True (≈±min_dwell_s seconds, measured "
+             "along the valid subsequence, of a detected-state change). "
+             "score/p_value/near_transition/role stay recorded in "
              "alarms.parquet for a full audit trail; the suppressed count is "
              "reported in monitor_notes.md. An explicit operator choice -- this "
              "package makes the trade-off visible, it does not adopt it.",
@@ -994,7 +996,12 @@ def _near_transition_mask(
     change_positions = np.flatnonzero(valid_labels[1:] != valid_labels[:-1]) + 1
     if change_positions.size == 0:
         return out
-    w_windows = int(round(w_seconds / (window_ns / 1e9)))
+    # max(1, ...) floor: literal parity with FittedDetector._finish's own
+    # `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
+    # round() truncates to 0 steps must still flag the immediate neighbours of a
+    # transition, not degenerate to "only the boundary window itself" (P9 T3a
+    # hardening).
+    w_windows = max(1, int(round(w_seconds / (window_ns / 1e9))))
     positions = np.arange(valid_idx.shape[0])
     near = np.zeros(valid_idx.shape[0], dtype=bool)
     for cp in change_positions.tolist():

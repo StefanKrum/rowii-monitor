@@ -29,12 +29,15 @@ the implementation plan flagged in its own write-time self-review.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import numpy as np
 
 from rowii.anomaly.levelrecal import level_columns
 from rowii.pipeline import stream_columns
+
+logger = logging.getLogger(__name__)
 
 _MAD_TO_SIGMA = 1.4826
 """Normal-consistency MAD->sigma factor -- the SAME named constant and precedent
@@ -43,22 +46,35 @@ as `rowii.anomaly.normalize._MAD_TO_SIGMA` (Step-2 package-7 `SessionNormalizer`
 sigma. Applied in `s2_anchor_mad` so `s2_fires`'s `k * mad` reads as the standard
 k-sigma-equivalent robust criterion (A1.1 pin)."""
 
+_SCALE_FLOOR = 1e-8
+"""The house divide-by-zero floor -- the SAME named constant, value, and
+precedent as `rowii.anomaly.normalize._SCALE_FLOOR` (`_center_scale`: `MAD *
+1.4826` floored at `1e-8` so a degenerate/constant estimation window never
+yields a raw zero scale). Applied in `s2_anchor_mad` (P9 T5c hardening) so a
+single-block (or otherwise MAD-degenerate) commissioning anchor can never
+yield `mad == 0.0`, which would make `s2_fires`'s `k * mad` margin zero and
+turn the sentinel into a hair-trigger that fires on any nonzero deviation."""
+
 
 def level_series(rows: np.ndarray, feature_names: list[str], streams: Sequence[str]) -> np.ndarray:
     """`(W,)` per-window mean of the intersection of *streams*' columns and the
     LEVEL columns of *feature_names* (the `analyze_days._levels_by_stream` rule,
     reimplemented here in `src/` since scripts never lend their internals to a
     module -- `rowii.pipeline.stream_columns` ∩ `rowii.anomaly.levelrecal.
-    level_columns`). A stream absent from *feature_names* is silently skipped
+    level_columns`). A stream absent from *feature_names* is skipped
     (`stream_columns`'s `ValueError`, caught) rather than raising -- s2 reads
     whichever of the two mic (or two vibration) streams are actually present in
-    the RAW cache; only a total absence of stream∩level columns is an error (see
-    Raises).
+    the RAW cache; a PARTIAL absence (some, not all, of *streams* missing) is
+    logged via `logger.warning` naming the skipped stream(s), never fully
+    silent (P9 T5b hardening); only a total absence of stream∩level columns is
+    an error (see Raises).
 
     Args:
         rows: `(W, F)` feature matrix, `F == len(feature_names)` -- pass VALID
             rows only (the `column_medians` convention); this function does not
-            itself filter by `valid_mask`.
+            itself filter by `valid_mask`. Enforced (P9 T5a hardening, mirroring
+            `rowii.anomaly.levelrecal.column_medians`'s own geometry posture):
+            see Raises.
         feature_names: Column names aligned with `rows`' columns.
         streams: Stream name(s) to average over (e.g. `("RAWGeneratorMic__0",
             "RAWTurbineMic__1")` for s2's mic-level series, or a single
@@ -73,22 +89,39 @@ def level_series(rows: np.ndarray, feature_names: list[str], streams: Sequence[s
             *streams* -- an embedding variant (`level_columns` returns `[]`), or
             none of *streams* is present in *feature_names* at all. s2 must read
             a RAW mic/vibration cache, never a representation where this is
-            structurally impossible (A1.1).
+            structurally impossible (A1.1). Also raised when `rows` is not 2-D
+            with `len(feature_names)` columns (loud geometry, the levelrecal
+            posture) -- a shape mismatch must never silently mis-slice.
     """
     level = set(level_columns(feature_names))
     cols: list[int] = []
+    skipped: list[str] = []
     for stream in streams:
         try:
             cols.extend(int(c) for c in stream_columns(feature_names, stream) if int(c) in level)
         except ValueError:
-            continue
+            skipped.append(stream)
+    if skipped and len(skipped) < len(streams):
+        # PARTIAL absence only -- a total absence falls through to the loud
+        # ValueError below instead (never both).
+        logger.warning(
+            "level_series: stream(s) %s not present in feature_names -- skipped "
+            "(reading whichever of streams=%s are actually present, A1.1)",
+            skipped, list(streams),
+        )
     if not cols:
         raise ValueError(
             f"level_series: no stream∩level column found across streams={list(streams)!r} "
             "(an embedding variant, or none of these streams is present in feature_names) "
             "-- s2 must read a RAW mic/vibration cache (A1.1)"
         )
-    return np.asarray(rows, dtype=np.float64)[:, sorted(set(cols))].mean(axis=1)
+    arr = np.asarray(rows, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] != len(feature_names):
+        raise ValueError(
+            f"level_series: rows must be 2-D with {len(feature_names)} column(s) "
+            f"(len(feature_names)), got shape {arr.shape}"
+        )
+    return arr[:, sorted(set(cols))].mean(axis=1)
 
 
 def _block_medians(values: np.ndarray, segment_ids: np.ndarray) -> np.ndarray:
@@ -142,18 +175,21 @@ def s1_fires(day_rate: float, threshold: float) -> bool:
 
 def s2_anchor_mad(level_values: np.ndarray, segment_ids: np.ndarray) -> tuple[float, float]:
     """The s2 anchor/band (A1.1 pin): `anchor = median(level_values)`; `mad =
-    1.4826 * median(|m - median(m)|)` over the per-`segment_ids`-block medians `m`
-    (`_block_medians`) -- the SAME `_MAD_TO_SIGMA` normal-consistency scaling as
+    max(1.4826 * median(|m - median(m)|), 1e-8)` over the per-`segment_ids`-block
+    medians `m` (`_block_medians`) -- the SAME `_MAD_TO_SIGMA` normal-consistency
+    scaling AND the SAME `1e-8` divide-by-zero floor (`_SCALE_FLOOR`, P9 T5c) as
     `rowii.anomaly.normalize`'s `SessionNormalizer` (`_center_scale`), so `k *
     mad` in `s2_fires` reads as the standard k-sigma-equivalent robust criterion
-    rather than a bare multiple of the raw MAD. Both statistics are computed on
-    the B1 CONFORMAL side (same held-out side as s1, A1.1/A1.8 anchor
-    discipline) -- the caller's responsibility, this function is agnostic to
-    which side its inputs came from."""
+    rather than a bare multiple of the raw MAD, and a degenerate (e.g.
+    single-block) anchor can never collapse that margin to zero and hair-trigger
+    on any nonzero deviation. Both statistics are computed on the B1 CONFORMAL
+    side (same held-out side as s1, A1.1/A1.8 anchor discipline) -- the caller's
+    responsibility, this function is agnostic to which side its inputs came
+    from."""
     v = np.asarray(level_values, dtype=np.float64)
     block_med = _block_medians(v, np.asarray(segment_ids))
     raw_mad = float(np.median(np.abs(block_med - np.median(block_med))))
-    return float(np.median(v)), _MAD_TO_SIGMA * raw_mad
+    return float(np.median(v)), max(_MAD_TO_SIGMA * raw_mad, _SCALE_FLOOR)
 
 
 def s2_fires(day_median: float, anchor: float, mad: float, *, k: float = 3.0) -> bool:

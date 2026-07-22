@@ -27,6 +27,7 @@ import analyze_days as ad  # noqa: E402
 
 from rowii.config import Config, DetectConfig  # noqa: E402
 from rowii.io.dataset import RecordingIndex, Run  # noqa: E402
+from rowii.pipeline import PreparedRun  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Plan's own RED tests (verbatim, docs/superpowers/plans/
@@ -1130,6 +1131,38 @@ def test_transitions_run_without_scada_exits_2(tmp_path, monkeypatch, capsys) ->
     code = ad.main(["transitions", "--runs", "dayNoGT", "--out", str(tmp_path / "out")])
     assert code == 2
     assert "dayNoGT" in capsys.readouterr().err
+
+
+def test_transitions_prepare_run_runtime_error_exits_2(tmp_path, monkeypatch, capsys) -> None:
+    """P9 hardening T4b: unlike the ValueError case above (raised INSIDE
+    `_run_states_and_power` itself), this drives the failure through
+    `_run_states_and_power`'s OWN internal `prepare_run` call -- NOT wrapped in
+    its own try/except there. Mirrors every other subcommand's guard in this
+    file (e.g. feature-stability's `except RuntimeError` around
+    `_run_features_and_gt`) and `scripts/sweep_min_dwell.py`'s own dedicated
+    prepare_run guard: a RuntimeError from prepare_run must exit 2, never
+    propagate as an uncaught traceback."""
+    runs = [Run(name="dayBad", files={}, day_root=Path("/d/dayBad"))]
+    monkeypatch.setattr(
+        ad, "discover",
+        lambda dr: RecordingIndex(runs=runs, betriebsdaten=[], betriebsdaten_by_day={}),
+    )
+    monkeypatch.setattr(
+        ad, "load_config",
+        lambda: Config(
+            data_root=Path("/d"), results_root=tmp_path / "results", detect=DetectConfig()
+        ),
+    )
+
+    def _raise_runtime(
+        run: Run, variant: str, cfg: Config, *, use_cache: bool = True
+    ) -> PreparedRun:
+        raise RuntimeError("too short/sparse for the requested variant")
+
+    monkeypatch.setattr(ad, "prepare_run", _raise_runtime)
+    code = ad.main(["transitions", "--runs", "dayBad", "--out", str(tmp_path / "out")])
+    assert code == 2
+    assert "dayBad" in capsys.readouterr().err
 
 
 def test_transitions_digest_section_carries_attribution(tmp_path) -> None:
