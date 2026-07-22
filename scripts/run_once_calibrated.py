@@ -1,0 +1,1015 @@
+"""D1 replay driver -- "calibrate once, recalibrate only on a label-free drift
+sentinel" (Step-2 package 9, design spec `docs/superpowers/specs/
+2026-07-22-step2-package9-once-naming-transitions.md` §3.D1 as amended by
+A1.1/A1.2/A1.6/A1.8, plan `docs/superpowers/plans/
+2026-07-22-step2-package9-once-naming-transitions.md` Task 6).
+
+**Framing (binding honesty, spec D1).** A retrospective, day-granular SIMULATION
+over the recorded days -- NOT an online detector, NOT a persistent recalibrated-
+baseline state machine (explicitly out of scope). The chronological order below
+drives WHEN a sentinel fires in the report, not a causal runtime decision:
+sentinels are label-free AT RUNTIME, but every threshold they fire against is
+derived ONCE from the commissioning (B1) pool alone (A1.1). "Once-calibrated" is
+scoped to "once per instrumentation era" -- a caught era boundary (the
+2026-06-29 `MeasName` changeover) IS the success criterion, not a failure of the
+"once" goal.
+
+**Pipeline.** One `--representation` (`fusion`/`vibration`/`audio-beats`) per
+invocation (the `run_step2` one-arm rule) scores FAR through a pre-built B1
+snapshot (`--snapshot`, built by `scripts/run_step2.py --protocol
+cross-day-pooled --save-snapshot`, plan Task 7). The two drift sentinels
+(`rowii.anomaly.sentinels`, Task 5) are REPRESENTATION-INDEPENDENT by design: s1
+always reads the **audio-beats** mode bank (spec D1: "the era-drift-robust
+representation whose columns are never refused by the contract guard across
+eras"); s2 always reads the RAW `audio`/`vibration` caches (never a
+representation's own, possibly z-scored, columns, A1.1). Both sentinels'
+thresholds are commissioned ONCE, on `--bank-fit-runs` (the B1 pool, era B --
+Task 7 always passes exactly `_B1_FIT_RUNS`) via its CONFORMAL (held-out) side,
+never a monitored day and never a partner figure (A1.1 firewall). Per monitored
+day this driver then: (1) evaluates s1 (`no_mode_fits` day-rate vs the B1
+bootstrap threshold) and s2 (raw mic/vibration day-median vs the B1 anchor+MAD
+band, with the `RAWGeneratorVib__2`-only vibration cross-check attributing the
+cause, A1.8) -- the SAME `s1 or s2` verdict gates all three FAR regimes; (2)
+subprocess-invokes `scripts/monitor.py` in `--thresholds frozen` and
+`--thresholds recalibrate` (script-sibling rule: a script never imports another
+script's internals, so monitor.py runs as a real subprocess, behind the
+`_run_monitor` seam tests monkeypatch away, spec §5); (3) reports three FAR
+regimes -- always-frozen, always-recalibrate, once+triggered -- ALL on the
+common recalibrate scoring-split window population (A1.6 headline), with the
+full-population frozen FAR as a labeled secondary column.
+
+**Pinned run set (A1.2, "no run enumeration by day root anywhere").** `_REPLAY`
+is the P7 rotation run set in true chronological order, including `270626`
+(era A, between `250526` and `290626`) as a SENTINEL-ONLY row: it has no
+Betriebsdaten, so it gets no monitor.py/FAR row at all, only a trigger-log entry
+(A1.2/A1.8). `250526-pu-afternoon` is deliberately EXCLUDED (only its fusion
+cache exists on disk). `010726-tu_ph_tu`/`010726-pu` are B1 pool members, so
+their frozen/once monitoring is IN-SAMPLE and tagged `"in-sample"` (D1 honesty
+3) -- computed exactly like every other day, just labeled for interpretation.
+`080726-pu_strikes` (era C, the induced-strike day) gets the EVENT-FREE
+window-FAR (`--exclude-calibration-events docs/groundtruth/080726_events_pu.csv`,
+the P7 pillar-3 rule, A2.3.3) -- frozen mode ignores the flag with a warning
+(it draws no calibration from the monitored run at all), recalibrate mode
+actually applies it. `080726-st_strikes` is used ONLY for the pillar-3
+event-retention check below (A1.2), never a regime/trigger-log row of its own.
+
+**Pillar-3 TPR-retained readout.** For BOTH `080726` sessions (PU pumping, ST
+standstill) this driver reuses the SAME frozen/recalibrate alarms.parquet
+already produced for the FAR table (`080726-pu_strikes`) or produced once more
+under the SAME era-C decision (`080726-st_strikes` -- A1.2 scopes it to this
+check alone, so it inherits era C's own trigger verdict rather than being
+independently sentineled: both sessions were recorded the same day under the
+same instrumentation era, so re-deriving an independent sentinel verdict for ST
+would not change anything this driver could act on differently) and feeds each
+through `scripts/eval_events.py` (subprocess, `_run_eval_events` seam) at the
+README pillar-3 tolerance (5 s) and this driver's own `--alpha`. Reporting BOTH
+the once+triggered (recalibrate) TPR and the frozen-arm TPR side by side is the
+story spec D1 states explicitly: "the sentinel firing on 080726 -> recalibrate
+-> strikes remain detectable, whereas staying frozen across the era gives the
+trivially-broken cross-era snapshot" -- both numbers, never only the favorable
+one.
+
+**Attribution (spec §4).** The two-sentinel drift-monitoring idea echoes the
+partner's own drift monitoring (Rodrigues & Zhang, 2026); every threshold and
+every reported number here is computed from OUR OWN caches/artifacts -- no
+partner JSON or number is read by any code in this module (A1.8 firewall,
+inherited).
+
+**alpha unification.** `--alpha` (default 0.01, matching Task 7's own B1
+snapshot-build command) is used uniformly for THREE distinct conformal
+calibrations that would otherwise silently disagree: the s1 bank's own
+per-mode conformal threshold (`ModeBank.fit`'s `alpha`), `monitor.py`'s
+recalibrate-mode FAR threshold (`--alpha`, frozen mode ignores it), and the
+pillar-3 `eval_events.py` readout "at alpha 0.01" (via monitor.py's recalibrate
+call feeding it, not eval_events.py itself, which has no alpha concept).
+
+Outputs (`_out_dir`, default `<results_root>/step2/once-calibrated/
+<representation>/`): `<representation>_trigger_log.csv` (one row per `_REPLAY`
+entry, sentinel-only included), `<representation>_regimes.csv` (one row per
+FAR-bearing entry: the three regimes + the labeled secondary), and
+`<representation>.json` (everything above plus the s1/s2 threshold derivations,
+the era-boundary-caught verdict, and the pillar-3 readout) -- every number
+traceable to a committed artifact, negative results included.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from rowii.anomaly.pools import PoolResult, build_pool  # noqa: E402
+from rowii.anomaly.sentinels import (  # noqa: E402
+    level_series,
+    s1_fires,
+    s1_threshold,
+    s2_anchor_mad,
+    s2_attribution,
+    s2_fires,
+)
+from rowii.anomaly.sweep import SweepConfig  # noqa: E402
+from rowii.config import Config, load_config  # noqa: E402
+from rowii.eval.events import ROLE_SCORED  # noqa: E402
+from rowii.io.dataset import (  # noqa: E402
+    RecordingIndex,
+    Run,
+    betriebsdaten_utc_offset_ns,
+    discover,
+    run_utc_offset_ns,
+)
+from rowii.io.gantner import read_header  # noqa: E402
+from rowii.pipeline import PreparedRun, prepare_run  # noqa: E402
+from rowii.runtime.snapshot import MonitorSnapshot, load_snapshot  # noqa: E402
+from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
+from rowii.signals.windows import WindowGrid  # noqa: E402
+from rowii.state.modebank import ModeBank  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS_DIR = _REPO_ROOT / "scripts"
+_GROUNDTRUTH_DIR = _REPO_ROOT / "docs" / "groundtruth"
+
+_REPRESENTATION_CHOICES: tuple[str, ...] = ("fusion", "vibration", "audio-beats")
+
+_B1_FIT_RUNS: tuple[str, ...] = (
+    "010726-pu", "010726-tu1-morning", "010726-tu2", "010726-tu_ph_tu",
+)
+"""The commissioning pool (era B, the P7 pool-B1) -- Task 7's orchestrator
+command always passes exactly this comma-separated set via `--bank-fit-runs`;
+kept here as a documented constant (not itself enforced -- `--bank-fit-runs`
+stays a real CLI argument, matching every other pooled driver in this repo)."""
+
+_MIC_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0", "RAWTurbineMic__1")
+"""s2's microphone stream pair -- duplicated from `scripts/analyze_days.py`'s
+own module constant of the same name (script-sibling rule): the era-step
+signature stream set (P8 D3)."""
+_VIB_CROSSCHECK_STREAMS: tuple[str, ...] = ("RAWGeneratorVib__2",)
+"""s2's vibration cross-check stream -- **RAWGeneratorVib__2 ONLY** (A1.8):
+`RAWTurbineVib__3` reads std ~ 0 through 2026-07-01 (cabled only between eras B
+and C, README package-8 D4), so it is excluded here rather than averaged in
+alongside a genuinely live channel."""
+
+_BANK_FAMILY: Literal["gaussian", "knn", "gmm"] = "knn"
+"""s1's canonical bank family, PINNED (not a CLI flag, mirroring the plan's own
+CLI signature): README package-8 D1's six-rotation table shows audio-beats bank
+`knn` as the best of the three families (mean ARI 0.882 vs gaussian 0.476 /
+gmm 0.746), and it is the SAME family the era-C zero-shot readout the spec's D1
+honesty rule 5 cites (README: "Era-C zero-shot mode-ID readout (A1.7,
+audio-beats): knn accuracy 0.918 ... with a 19.5% no_mode_fits rate") was built
+with."""
+_BANK_MIN_REF = 20
+"""`ModeBank.fit`'s own default fit-side reference floor (spec A1.5 default) --
+pinned here rather than exposed, matching `_BANK_FAMILY`."""
+_BANK_K = 5
+"""`ModeBank.fit`'s `knn` family neighbour count -- its own default, matching
+`scripts/run_modebank.py --k`'s default."""
+
+_PILLAR3_TOLERANCE_S = 5.0
+"""`scripts/eval_events.py --tolerance-s` value for the pillar-3 readout below --
+the README pillar-3 section's own "corrected ground truth, +-5 s tolerance"
+convention (eval_events.py's OWN CLI default is 0.0; this driver always passes
+the value explicitly, never relying on that default)."""
+
+_EVENTS_PU = _GROUNDTRUTH_DIR / "080726_events_pu.csv"
+_EVENTS_ST = _GROUNDTRUTH_DIR / "080726_events_st.csv"
+
+_TAG_SENTINEL_ONLY = "sentinel-only"
+_TAG_IN_SAMPLE = "in-sample"
+_TAG_EVENT_FREE_FAR = "event-free-far"
+
+_PILLAR3_ST_RUN = "080726-st_strikes"
+"""era C's standstill strike session -- NOT a `_REPLAY` entry (A1.2: "for the
+event-retention check ONLY"); monitored separately, below, under the SAME
+era-C once+triggered decision `080726-pu_strikes` already established (module
+docstring's Pillar-3 section)."""
+
+
+@dataclass(frozen=True)
+class _ReplayEntry:
+    """One `_REPLAY` row: a single monitored RUN (not a bare calendar day --
+    several pinned days carry two runs each), the unit s1/s2/monitor.py all
+    operate on."""
+
+    day: str
+    """Calendar day-root string (e.g. `"250526"`), for grouping/reporting only."""
+    era: str
+    """`"A"` / `"B"` / `"C"` -- the DAQ-configuration era (spec D1)."""
+    run: str
+    """The discovered run name monitor.py/the sentinels are evaluated against."""
+    tags: tuple[str, ...]
+    """`()`, or any of `_TAG_SENTINEL_ONLY` / `_TAG_IN_SAMPLE` /
+    `_TAG_EVENT_FREE_FAR` -- see module docstring."""
+    events_csv: Path | None = None
+    """`--exclude-calibration-events` target for this entry's monitor.py calls,
+    or `None` for every entry except `080726-pu_strikes`."""
+
+
+_REPLAY: tuple[_ReplayEntry, ...] = (
+    _ReplayEntry(day="250526", era="A", run="250526-tu", tags=()),
+    _ReplayEntry(day="250526", era="A", run="250526-pu-morning", tags=()),
+    _ReplayEntry(
+        day="270626", era="A", run="270626-pu_ph_pu_ph_pu_ph-1", tags=(_TAG_SENTINEL_ONLY,)
+    ),
+    _ReplayEntry(day="290626", era="B", run="290626-tu", tags=()),
+    _ReplayEntry(day="290626", era="B", run="290626-pu", tags=()),
+    _ReplayEntry(day="010726", era="B", run="010726-tu_ph_tu", tags=(_TAG_IN_SAMPLE,)),
+    _ReplayEntry(day="010726", era="B", run="010726-pu", tags=(_TAG_IN_SAMPLE,)),
+    _ReplayEntry(
+        day="080726", era="C", run="080726-pu_strikes",
+        tags=(_TAG_EVENT_FREE_FAR,), events_csv=_EVENTS_PU,
+    ),
+)
+"""The pinned replay set, in true chronological order (A1.2/A1.8): 250526 (era
+A) -> 270626 (era A, sentinel-only, its true position between 250526 and
+290626) -> 290626 (era B) -> 010726 (era B, in-sample) -> 080726 (era C,
+event-free FAR). `250526-pu-afternoon` is deliberately absent (A1.2: only its
+fusion cache exists on disk)."""
+
+
+# ---------------------------------------------------------------------------
+# Duplicated script-sibling helpers (a script must not import another script's
+# internals -- module docstrings across this repo's scripts/ all state this
+# rule; each helper below names which sibling script it mirrors).
+# ---------------------------------------------------------------------------
+
+
+def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
+    """Duplicated from `scripts/run_step2.py`'s helper of the same name: names
+    in *names* with no matching discovered run, de-duplicated, in the order
+    first seen."""
+    known = {r.name for r in index.runs}
+    return list(dict.fromkeys(n for n in names if n not in known))
+
+
+def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list[Path]:
+    """Duplicated from `scripts/run_step2.py`'s helper of the same name:
+    Betriebsdaten files whose hourly span intersects *grid*'s true-UTC time
+    range."""
+    grid_end_ns = int(grid.edges_ns()[-1])
+    offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
+    matched = []
+    for path in betriebsdaten:
+        header = read_header(path)
+        file_start_ns = header.t0_ns + offset_ns
+        file_end_ns = file_start_ns + round(header.n_frames / header.sample_rate_hz * 1e9)
+        if file_start_ns < grid_end_ns and file_end_ns > grid.t0_ns:
+            matched.append(path)
+    return sorted(matched)
+
+
+def _run_gt_states(
+    prepared: PreparedRun, run: Run, index: RecordingIndex, cfg: Config
+) -> np.ndarray:
+    """Duplicated from `scripts/run_modebank.py`'s helper of the same name: the
+    full-length `(W,)` object array of GT state strings for *run*. Needed ONLY
+    for `--bank-fit-runs` (s1's commissioning bank needs SCADA-labelled fit AND
+    conformal sides, spec D1) -- no `_REPLAY` entry ever calls this, since every
+    sentinel/FAR evaluation on a monitored day is label-free by construction.
+
+    Raises:
+        ValueError: *run*'s day has no Betriebsdaten coverage overlapping its
+            own grid.
+    """
+    day_betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
+    matched = (
+        _betriebsdaten_for_grid(day_betriebsdaten, prepared.grid) if day_betriebsdaten else []
+    )
+    if not matched:
+        raise ValueError(
+            f"run {run.name!r} has no Betriebsdaten coverage overlapping its "
+            f"own grid -- the s1 bank needs SCADA ground truth on every "
+            f"--bank-fit-runs member (spec D1)"
+        )
+    scada = load_scada_window_means(
+        matched, prepared.grid, audio_run_offset_ns=run_utc_offset_ns(run)
+    )
+    labels: np.ndarray = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)[
+        "state"
+    ].to_numpy()
+    return labels
+
+
+def _pool_gt_labels(pool: PoolResult, gt_by_run: dict[str, np.ndarray]) -> np.ndarray:
+    """Duplicated from `scripts/run_modebank.py`'s helper of the same name: per
+    stacked pool row, the GT mode-name STRING of its source window (object
+    dtype)."""
+    out = np.empty(pool.features.shape[0], dtype=object)
+    for member_idx, member in enumerate(pool.members):
+        mask = pool.run_index == member_idx
+        out[mask] = gt_by_run[member.run_name][pool.window_index[mask]]
+    return out
+
+
+def _import_beats_or_exit() -> None:
+    """Duplicated from `scripts/run_step2.py`/`scripts/run_modebank.py`
+    (script-sibling rule): s1's bank is ALWAYS audio-beats (module docstring),
+    so this driver needs the BEATs featurizer unconditionally, unlike
+    run_modebank.py's own conditional call."""
+    try:
+        import rowii.signals.beats  # noqa: F401
+    except ImportError as exc:
+        raise SystemExit(
+            f"BEATs featurizer not available ({exc}); the s1 sentinel bank is "
+            f"ALWAYS audio-beats (module docstring) and cannot run without it"
+        ) from exc
+
+
+def _pool_block_ids(pool: PoolResult, prepared: dict[str, PreparedRun]) -> np.ndarray:
+    """Per stacked pool row, a GLOBALLY unique block id for the segment-block
+    statistics `rowii.anomaly.sentinels.s1_threshold`/`s2_anchor_mad` need.
+
+    `PreparedRun.segment_ids` numbers burst FILES *within one run*, restarting
+    at 0 for every run (`rowii.pipeline`'s own module docstring). B1's
+    commissioning pool stacks FOUR runs (`_B1_FIT_RUNS`), so pooling their raw
+    `segment_ids` directly would silently merge same-numbered segments from
+    DIFFERENT runs/days into one "block" -- exactly the failure a block
+    bootstrap exists to avoid (a block must be one independent physical
+    recording span, not merely a disjoint row range that happens to share a
+    small integer with another run's own numbering). This assigns each
+    distinct (run, local-segment) PAIR its own dense id via
+    `np.unique(..., axis=0, return_inverse=True)`, so `s1_threshold`'s /
+    `s2_anchor_mad`'s internal `np.unique(segment_ids)` grouping sees exactly
+    the physical burst-file blocks the commissioning pool actually contains --
+    one block per (run, burst file), never conflated across runs. No existing
+    caller in this repo pools multiple runs' `segment_ids` into one block
+    statistic (`scripts/analyze_days.py::_block_bootstrap_ci` is single-run by
+    construction) -- this is D1's own, new requirement.
+    """
+    local = np.empty(pool.features.shape[0], dtype=np.int64)
+    for member_idx, member in enumerate(pool.members):
+        mask = pool.run_index == member_idx
+        local[mask] = prepared[member.run_name].segment_ids[pool.window_index[mask]]
+    pairs = np.stack([pool.run_index, local], axis=1)
+    _, block_ids = np.unique(pairs, axis=0, return_inverse=True)
+    return np.asarray(block_ids, dtype=np.int64)
+
+
+# ---------------------------------------------------------------------------
+# Sentinel commissioning (B1 CONFORMAL side ONLY, A1.1) + per-day evaluation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _S1Commission:
+    bank: ModeBank
+    threshold: float
+    baseline_rate: float
+    """B1 conformal-side pooled `no_mode_fits` rate (the day-rate this driver
+    reports alongside `threshold` for every monitored day)."""
+
+
+def _commission_s1(
+    prepared_fit: dict[str, PreparedRun],
+    gt_by_run: dict[str, np.ndarray],
+    feature_names: list[str],
+    *,
+    alpha: float,
+    sweep_cfg: SweepConfig,
+) -> _S1Commission:
+    """Fit the audio-beats bank on `--bank-fit-runs`' FIT side and derive s1's
+    firing threshold from its own CONFORMAL side (A1.1) -- mirrors
+    `scripts/run_modebank.py::main`'s own fit/conformal pooling recipe exactly.
+
+    Raises:
+        ValueError: `build_pool`'s empty-pool guard, or `ModeBank.fit`'s own
+            geometry/family guards.
+    """
+    pool_fit = build_pool(prepared_fit, "fit", sweep_cfg)
+    pool_conformal = build_pool(prepared_fit, "conformal", sweep_cfg)
+    if pool_fit.features.shape[0] == 0 or pool_conformal.features.shape[0] == 0:
+        raise ValueError(
+            "_commission_s1: the pooled FIT or CONFORMAL side of --bank-fit-runs "
+            "is empty (every fit run's splits were degenerate -- see the "
+            "build_pool warnings above) -- nothing to commission s1 on"
+        )
+    fit_gt = _pool_gt_labels(pool_fit, gt_by_run)
+    calib_gt = _pool_gt_labels(pool_conformal, gt_by_run)
+    bank = ModeBank.fit(
+        pool_fit.features, fit_gt, pool_conformal.features, calib_gt,
+        family=_BANK_FAMILY, alpha=alpha, feature_names=feature_names,
+        min_ref=_BANK_MIN_REF, k=_BANK_K,
+    )
+    if bank.low_confidence_modes:
+        logger.warning(
+            "run_once_calibrated: s1 bank has %d low_confidence member(s) %s -- "
+            "no_mode_fits UNDER-fires for these (ModeBank.assign's own caveat); "
+            "surfaced in the trigger log alongside every day's rate",
+            len(bank.low_confidence_modes), bank.low_confidence_modes,
+        )
+    conformal_assignment = bank.assign(pool_conformal.features)
+    block_ids = _pool_block_ids(pool_conformal, prepared_fit)
+    threshold = s1_threshold(conformal_assignment.no_mode_fits, block_ids)
+    baseline_rate = (
+        float(conformal_assignment.no_mode_fits.mean())
+        if conformal_assignment.no_mode_fits.size
+        else float("nan")
+    )
+    return _S1Commission(bank=bank, threshold=threshold, baseline_rate=baseline_rate)
+
+
+@dataclass(frozen=True)
+class _S2Commission:
+    anchor: float
+    mad: float
+
+
+def _commission_s2(
+    prepared_fit: dict[str, PreparedRun],
+    feature_names: list[str],
+    streams: tuple[str, ...],
+    *,
+    sweep_cfg: SweepConfig,
+) -> _S2Commission:
+    """B1 CONFORMAL-side (A1.1, same held-out side as s1) anchor/MAD band for
+    ONE stream set -- called once for the mic pair and once (separately) for
+    the `RAWGeneratorVib__2` cross-check (A1.8), each on its OWN raw
+    audio/vibration `prepared_fit` (never a representation's own columns).
+
+    Raises:
+        ValueError: `build_pool`'s empty-pool guard.
+    """
+    pool_conformal = build_pool(prepared_fit, "conformal", sweep_cfg)
+    if pool_conformal.features.shape[0] == 0:
+        raise ValueError(
+            "_commission_s2: the pooled CONFORMAL side of --bank-fit-runs is "
+            "empty -- nothing to commission s2 on"
+        )
+    level_values = level_series(pool_conformal.features, feature_names, streams)
+    block_ids = _pool_block_ids(pool_conformal, prepared_fit)
+    anchor, mad = s2_anchor_mad(level_values, block_ids)
+    return _S2Commission(anchor=anchor, mad=mad)
+
+
+def _day_s1_rate(bank: ModeBank, prepared: PreparedRun) -> float:
+    """One monitored day's label-free `no_mode_fits` rate under the
+    commissioned bank (`bank.assign`, VALID windows only). `NaN` when the run
+    has zero valid windows.
+
+    Raises:
+        ValueError: *prepared*'s audio-beats `feature_names` disagree with the
+            bank's own fit-time contract (defensive -- audio-beats is not
+            expected to drift, module docstring, but `bank.assign` scores
+            POSITIONALLY and a silent misalignment must never happen).
+    """
+    valid = prepared.valid_mask
+    if not bool(valid.any()):
+        return float("nan")
+    if list(prepared.feature_names) != bank.feature_names:
+        raise ValueError(
+            f"_day_s1_rate: prepared audio-beats feature_names "
+            f"({len(prepared.feature_names)} column(s)) do not match the s1 "
+            f"bank's own fit-time contract ({len(bank.feature_names)} "
+            f"column(s)) -- audio-beats is the era-drift-free representation "
+            f"(module docstring) and is not expected to drift; refusing a "
+            f"positionally-misaligned score rather than silently mis-scoring"
+        )
+    assignment = bank.assign(prepared.features[valid])
+    return float(assignment.no_mode_fits.mean()) if assignment.no_mode_fits.size else float("nan")
+
+
+def _day_s2_median(prepared: PreparedRun, streams: tuple[str, ...]) -> float:
+    """One monitored day's raw mic/vibration level MEDIAN (VALID windows only,
+    `level_series` averaged per window then medianed across windows, spec D1).
+    `level_series` looks up columns BY NAME against *prepared*'s own
+    `feature_names` (never the B1 pool's), so channel-availability drift
+    between the commissioning pool and a monitored day never misaligns this
+    call the way a positional score would -- only a TOTAL absence of
+    stream-intersect-level columns on this run raises (`level_series`'s own
+    contract). `NaN` when the run has zero valid windows."""
+    valid = prepared.valid_mask
+    if not bool(valid.any()):
+        return float("nan")
+    values = level_series(prepared.features[valid], prepared.feature_names, streams)
+    return float(np.median(values))
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (unit-tested directly, tests/test_run_once_calibrated.py) --
+# the plan's own literal RED tests target these six.
+# ---------------------------------------------------------------------------
+
+
+def _read_realized_far(alarms_path: Path) -> float:
+    """The realized aggregate FAR over `role == "scored"` windows of one
+    monitor.py `alarms.parquet` -- the FULL-population reading (A1.6's labeled
+    secondary column for the frozen arm; the primary reading for every other
+    arm, which IS its own common population by construction)."""
+    df = pd.read_parquet(alarms_path)
+    scored = df[df["role"] == ROLE_SCORED]
+    return float(scored["alarm"].mean()) if len(scored) else float("nan")
+
+
+def _scoring_windows(alarms_path: Path) -> np.ndarray:
+    """The `window` ids of every `role == "scored"` row of one `alarms.parquet`
+    -- the recalibrate arm's own scoring-split population, the A1.6 common
+    population every OTHER arm's FAR is subset onto for the headline table."""
+    df = pd.read_parquet(alarms_path)
+    return np.asarray(df.loc[df["role"] == ROLE_SCORED, "window"].to_numpy())
+
+
+def _far_on_windows(alarms_path: Path, window_set: np.ndarray) -> float:
+    """The realized FAR of one `alarms.parquet`, restricted to `role ==
+    "scored"` rows whose `window` id is in *window_set* (A1.6: comparing the
+    frozen arm's FAR against the recalibrate arm's on the SAME window
+    population, since the two arms otherwise score different-sized/composed
+    scoring sides by construction)."""
+    df = pd.read_parquet(alarms_path)
+    keep = {int(w) for w in window_set}
+    sub = df[(df["role"] == ROLE_SCORED) & df["window"].isin(keep)]
+    return float(sub["alarm"].mean()) if len(sub) else float("nan")
+
+
+def _trigger_verdict(*, s1_fired: bool, s2_fired: bool) -> bool:
+    """The day-level once+triggered decision: recalibrate iff EITHER sentinel
+    fired (spec D1: "the SAME day-level trigger verdict (s1 or s2) gates the
+    frozen/recalibrate choice for all three FAR arms")."""
+    return bool(s1_fired or s2_fired)
+
+
+def _regime_far(frozen_far: float, recal_far: float, *, triggered: bool) -> float:
+    """The once+triggered regime's FAR for one day: the recalibrate FAR if
+    triggered, else the frozen FAR -- PER DAY, deliberately NOT sticky (spec
+    D1/plan self-review resolved ambiguity 4: no persistent recalibrated-
+    baseline state machine, spec §2 out-of-scope)."""
+    return recal_far if triggered else frozen_far
+
+
+def _trigger_log_row(
+    *,
+    day: str,
+    era: str,
+    tags: tuple[str, ...],
+    s1_rate: float,
+    s1_threshold: float,
+    low_confidence_modes: tuple[str, ...],
+    s2_mic: float,
+    s2_vib: float,
+    anchor: float,
+    mad: float,
+    attribution: str,
+    decision: str,
+) -> dict[str, object]:
+    """One trigger-log row: every sentinel diagnostic for one monitored day/run,
+    self-consistently deriving `s1_fired`/`s2_fired` from the SAME
+    `rowii.anomaly.sentinels.s1_fires`/`s2_fires` predicates the driver uses
+    everywhere else (never re-implemented ad hoc here). NEVER carries a `"far"`
+    key -- FAR fields are merged in by the caller for every entry EXCEPT
+    sentinel-only days (`_TAG_SENTINEL_ONLY`, A1.2: no Betriebsdaten -> no
+    FAR/GT row), so this function's own output is identical either way and the
+    "no far row" property holds by construction, not by a branch inside this
+    function."""
+    s1_fired = s1_fires(s1_rate, s1_threshold)
+    s2_fired = s2_fires(s2_mic, anchor, mad)
+    return {
+        "day": day,
+        "era": era,
+        "tags": tags,
+        "s1_rate": s1_rate,
+        "s1_threshold": s1_threshold,
+        "s1_fired": s1_fired,
+        "low_confidence_modes": low_confidence_modes,
+        "s2_mic_median": s2_mic,
+        "s2_vib_median": s2_vib,
+        "s2_anchor": anchor,
+        "s2_mad": mad,
+        "s2_fired": s2_fired,
+        "s2_attribution": attribution,
+        "decision": decision,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Subprocess seams (script-sibling rule: monitor.py/eval_events.py run as REAL
+# subprocesses, never imported -- monkeypatched in tests, spec §5).
+# ---------------------------------------------------------------------------
+
+
+def _run_monitor(
+    snapshot_path: Path,
+    run: str,
+    mode: str,
+    out_dir: Path,
+    *,
+    alpha: float | None = None,
+    event_free: Path | None = None,
+) -> Path:
+    """Subprocess-invoke `scripts/monitor.py` for one (run, threshold mode) and
+    return its written `alarms.parquet` path. `alpha` is only ever passed for
+    `mode == "recalibrate"` (frozen mode ignores `--alpha` with a warning, so
+    this driver never triggers that warning). `event_free`, when given, is
+    passed as `--exclude-calibration-events` regardless of mode -- harmless
+    (frozen mode also only warns on it) and keeps the P7 pillar-3 rule applied
+    uniformly for the one induced-event day (module docstring).
+    """
+    cmd = [
+        sys.executable, str(_SCRIPTS_DIR / "monitor.py"),
+        "--snapshot", str(snapshot_path),
+        "--run", run,
+        "--thresholds", mode,
+        "--out", str(out_dir),
+    ]
+    if mode != "frozen" and alpha is not None:
+        cmd += ["--alpha", str(alpha)]
+    if event_free is not None:
+        cmd += ["--exclude-calibration-events", str(event_free)]
+    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+    return out_dir / "alarms.parquet"
+
+
+def _run_eval_events(
+    alarms_path: Path, events_path: Path, out_dir: Path, *, tolerance_s: float
+) -> Path:
+    """Subprocess-invoke `scripts/eval_events.py` on one alarms/events pair and
+    return its written `event_eval.csv` path."""
+    cmd = [
+        sys.executable, str(_SCRIPTS_DIR / "eval_events.py"),
+        "--alarms", str(alarms_path),
+        "--events", str(events_path),
+        "--tolerance-s", str(tolerance_s),
+        "--out", str(out_dir),
+    ]
+    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+    return out_dir / "event_eval.csv"
+
+
+def _read_event_tpr(event_eval_csv: Path) -> float:
+    """The pillar-3 headline number out of one `event_eval.csv`: the summary
+    row's `event_tpr` (`scripts/eval_events.py`'s own `row_type == "summary"`
+    contract)."""
+    df = pd.read_csv(event_eval_csv)
+    summary = df[df["row_type"] == "summary"]
+    if summary.empty:
+        return float("nan")
+    return float(summary.iloc[0]["event_tpr"])
+
+
+# ---------------------------------------------------------------------------
+# Output paths
+# ---------------------------------------------------------------------------
+
+
+def _out_dir(results_root: Path, representation: str) -> Path:
+    """`results/step2/once-calibrated/<representation>/` -- mirrors
+    `scripts/sweep_min_dwell.py`'s own `_out_dir` convention."""
+    return results_root / "step2" / "once-calibrated" / representation
+
+
+def _era_triggered(trigger_log: list[dict[str, object]], era: str) -> bool:
+    """`True` iff ANY `_REPLAY` entry of *era* triggered a recalibrate decision
+    -- the "is the era boundary caught" readout (spec D1)."""
+    return any(
+        row["era"] == era and row["decision"] == "recalibrate" for row in trigger_log
+    )
+
+
+# ---------------------------------------------------------------------------
+# argparse + main
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "D1: replay the pinned P9 run set chronologically against a B1 "
+            "(era-B) snapshot, evaluate two label-free drift sentinels per day "
+            "(s1 audio-beats mode-bank rejection, s2 raw mic/vibration level-"
+            "step), and report three FAR regimes -- always-frozen, always-"
+            "recalibrate, once+triggered -- on the common recalibrate scoring-"
+            "split population (A1.6), plus a trigger log and the 080726 "
+            "pillar-3 TPR-retained readout (spec §3.D1)."
+        )
+    )
+    parser.add_argument(
+        "--representation", required=True, choices=_REPRESENTATION_CHOICES,
+        help="The ONE FAR-scored variant this invocation replays (the "
+             "run_step2 one-arm rule) -- must match --snapshot's own fitted "
+             "variant. The two sentinels are representation-INDEPENDENT "
+             "(module docstring) and are evaluated regardless of this choice.",
+    )
+    parser.add_argument(
+        "--snapshot", type=Path, required=True,
+        help="The B1 (era-B) MonitorSnapshot .npz for --representation, built "
+             "by scripts/run_step2.py --protocol cross-day-pooled --save-"
+             "snapshot (plan Task 7).",
+    )
+    parser.add_argument(
+        "--bank-fit-runs", required=True,
+        help="Comma-separated commissioning pool for s1/s2 (Task 7 always "
+             "passes _B1_FIT_RUNS's four runs); order matters "
+             "(ModeBank.fit's pooling order).",
+    )
+    parser.add_argument(
+        "--alpha", type=float, default=0.01,
+        help="Shared conformal alpha (default 0.01, matching Task 7's own "
+             "snapshot-build command): the s1 bank's per-mode threshold, "
+             "monitor.py's recalibrate-mode FAR threshold, and the pillar-3 "
+             "eval_events readout (module docstring's alpha-unification note).",
+    )
+    parser.add_argument(
+        "--out", default=None,
+        help="Output root (default: <results_root>/step2/once-calibrated/"
+             "<representation>/).",
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true",
+        help="Disable rowii.pipeline.prepare_run's on-disk feature cache.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    bank_fit_run_names = [n.strip() for n in str(args.bank_fit_runs).split(",") if n.strip()]
+    if not bank_fit_run_names:
+        parser.error("--bank-fit-runs got an empty run-name list")
+    if len(set(bank_fit_run_names)) != len(bank_fit_run_names):
+        parser.error("--bank-fit-runs contains duplicate run name(s)")
+
+    if not args.snapshot.is_file():
+        print(f"run_once_calibrated: snapshot file not found: {args.snapshot}", file=sys.stderr)
+        return 2
+    try:
+        snapshot: MonitorSnapshot = load_snapshot(args.snapshot)
+    except ValueError as exc:
+        print(f"run_once_calibrated: cannot load snapshot {args.snapshot}: {exc}", file=sys.stderr)
+        return 2
+    if snapshot.variant != args.representation:
+        print(
+            f"run_once_calibrated: --representation {args.representation!r} does "
+            f"not match --snapshot's own fitted variant {snapshot.variant!r} "
+            f"({args.snapshot}) -- refusing a mismatched FAR arm",
+            file=sys.stderr,
+        )
+        return 2
+
+    _import_beats_or_exit()  # s1's bank is ALWAYS audio-beats (module docstring)
+
+    cfg = load_config()
+    index = discover(cfg.data_root)
+
+    replay_run_names = [entry.run for entry in _REPLAY]
+    all_needed = [*bank_fit_run_names, *replay_run_names, _PILLAR3_ST_RUN]
+    unknown = _unknown_run_names(all_needed, index)
+    if unknown:
+        available = ", ".join(sorted({r.name for r in index.runs})) or "(none discovered)"
+        print(
+            f"run_once_calibrated: unknown run name(s): {', '.join(unknown)}; "
+            f"available runs: {available}",
+            file=sys.stderr,
+        )
+        return 2
+    runs_by_name = {r.name: r for r in index.runs}
+
+    sweep_cfg = SweepConfig(alpha=float(args.alpha))
+
+    # --- Prepare every run needed for the sentinels (audio-beats/audio/vibration
+    # ONLY -- monitor.py prepares --representation itself, internally, per run). ---
+    sentinel_variants = ("audio-beats", "audio", "vibration")
+    prepared_by_variant: dict[str, dict[str, PreparedRun]] = {v: {} for v in sentinel_variants}
+    for run_name in dict.fromkeys(all_needed):  # de-duplicated, order preserved
+        run_obj = runs_by_name[run_name]
+        for variant in sentinel_variants:
+            try:
+                prepared_by_variant[variant][run_name] = prepare_run(
+                    run_obj, variant, cfg, use_cache=not args.no_cache
+                )
+            except RuntimeError as exc:
+                print(
+                    f"run_once_calibrated: prepare_run failed for run "
+                    f"{run_name!r} variant {variant!r} ({exc})",
+                    file=sys.stderr,
+                )
+                return 2
+
+    prepared_fit_beats = {n: prepared_by_variant["audio-beats"][n] for n in bank_fit_run_names}
+    prepared_fit_audio = {n: prepared_by_variant["audio"][n] for n in bank_fit_run_names}
+    prepared_fit_vib = {n: prepared_by_variant["vibration"][n] for n in bank_fit_run_names}
+
+    gt_by_run: dict[str, np.ndarray] = {}
+    for run_name in bank_fit_run_names:
+        try:
+            gt_by_run[run_name] = _run_gt_states(
+                prepared_fit_beats[run_name], runs_by_name[run_name], index, cfg
+            )
+        except ValueError as exc:
+            print(f"run_once_calibrated: {exc}", file=sys.stderr)
+            return 2
+
+    bank_feature_names = list(next(iter(prepared_fit_beats.values())).feature_names)
+    try:
+        s1 = _commission_s1(
+            prepared_fit_beats, gt_by_run, bank_feature_names,
+            alpha=float(args.alpha), sweep_cfg=sweep_cfg,
+        )
+        mic_feature_names = list(next(iter(prepared_fit_audio.values())).feature_names)
+        s2_mic = _commission_s2(
+            prepared_fit_audio, mic_feature_names, _MIC_STREAMS, sweep_cfg=sweep_cfg
+        )
+        vib_feature_names = list(next(iter(prepared_fit_vib.values())).feature_names)
+        s2_vib = _commission_s2(
+            prepared_fit_vib, vib_feature_names, _VIB_CROSSCHECK_STREAMS, sweep_cfg=sweep_cfg
+        )
+    except ValueError as exc:
+        print(f"run_once_calibrated: sentinel commissioning failed: {exc}", file=sys.stderr)
+        return 2
+
+    out_root = Path(args.out) if args.out is not None else cfg.results_root
+    out_dir = _out_dir(out_root, str(args.representation))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    trigger_log: list[dict[str, object]] = []
+    regimes: list[dict[str, object]] = []
+    alarms_by_run: dict[str, tuple[Path, Path]] = {}  # run -> (frozen, recalibrate)
+    for entry in _REPLAY:
+        prepared_beats = prepared_by_variant["audio-beats"][entry.run]
+        prepared_audio = prepared_by_variant["audio"][entry.run]
+        prepared_vib = prepared_by_variant["vibration"][entry.run]
+        try:
+            s1_rate = _day_s1_rate(s1.bank, prepared_beats)
+            s2_mic_median = _day_s2_median(prepared_audio, _MIC_STREAMS)
+            s2_vib_median = _day_s2_median(prepared_vib, _VIB_CROSSCHECK_STREAMS)
+        except ValueError as exc:
+            print(f"run_once_calibrated: {exc}", file=sys.stderr)
+            return 2
+
+        mic_fired = s2_fires(s2_mic_median, s2_mic.anchor, s2_mic.mad)
+        vib_fired = s2_fires(s2_vib_median, s2_vib.anchor, s2_vib.mad)
+        attribution = s2_attribution(mic_fires=mic_fired, vib_fires=vib_fired)
+        s1_fired = s1_fires(s1_rate, s1.threshold)
+        triggered = _trigger_verdict(s1_fired=s1_fired, s2_fired=mic_fired)
+        decision = "recalibrate" if triggered else "frozen"
+
+        row = _trigger_log_row(
+            day=entry.day, era=entry.era, tags=entry.tags,
+            s1_rate=s1_rate, s1_threshold=s1.threshold,
+            low_confidence_modes=s1.bank.low_confidence_modes,
+            s2_mic=s2_mic_median, s2_vib=s2_vib_median,
+            anchor=s2_mic.anchor, mad=s2_mic.mad,
+            attribution=attribution, decision=decision,
+        )
+        row["run"] = entry.run
+        trigger_log.append(row)
+
+        if _TAG_SENTINEL_ONLY in entry.tags:
+            continue  # A1.2: no Betriebsdaten -> no monitor.py/FAR row
+
+        run_out = out_dir / "monitor" / entry.run
+        try:
+            frozen_alarms = _run_monitor(
+                args.snapshot, entry.run, "frozen", run_out / "frozen",
+                event_free=entry.events_csv,
+            )
+            recal_alarms = _run_monitor(
+                args.snapshot, entry.run, "recalibrate", run_out / "recalibrate",
+                alpha=float(args.alpha), event_free=entry.events_csv,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"run_once_calibrated: monitor.py failed for run {entry.run!r} "
+                f"({exc})",
+                file=sys.stderr,
+            )
+            return 2
+        alarms_by_run[entry.run] = (frozen_alarms, recal_alarms)
+
+        recal_far = _read_realized_far(recal_alarms)
+        scoring_windows = _scoring_windows(recal_alarms)
+        frozen_far_common = _far_on_windows(frozen_alarms, scoring_windows)
+        frozen_far_full = _read_realized_far(frozen_alarms)
+        once_far = _regime_far(frozen_far_common, recal_far, triggered=triggered)
+
+        regimes.append({
+            "day": entry.day, "era": entry.era, "run": entry.run, "tags": entry.tags,
+            "always_frozen_far": frozen_far_common,
+            "always_recalibrate_far": recal_far,
+            "once_triggered_far": once_far,
+            "frozen_far_full_population": frozen_far_full,
+            "decision": decision,
+        })
+
+    # --- Pillar-3 TPR-retained readout (080726, PU + ST) -----------------------
+    pu_frozen_alarms, pu_recal_alarms = alarms_by_run["080726-pu_strikes"]
+    era_c_row = next(r for r in regimes if r["run"] == "080726-pu_strikes")
+    era_c_decision = str(era_c_row["decision"])
+    try:
+        pu_recal_eval = _run_eval_events(
+            pu_recal_alarms, _EVENTS_PU,
+            out_dir / "eval_events" / "080726-pu_strikes" / "recalibrate",
+            tolerance_s=_PILLAR3_TOLERANCE_S,
+        )
+        pu_frozen_eval = _run_eval_events(
+            pu_frozen_alarms, _EVENTS_PU,
+            out_dir / "eval_events" / "080726-pu_strikes" / "frozen",
+            tolerance_s=_PILLAR3_TOLERANCE_S,
+        )
+        st_recal_alarms = _run_monitor(
+            args.snapshot, _PILLAR3_ST_RUN, "recalibrate",
+            out_dir / "monitor" / _PILLAR3_ST_RUN / "recalibrate",
+            alpha=float(args.alpha), event_free=_EVENTS_ST,
+        )
+        st_frozen_alarms = _run_monitor(
+            args.snapshot, _PILLAR3_ST_RUN, "frozen",
+            out_dir / "monitor" / _PILLAR3_ST_RUN / "frozen",
+            event_free=_EVENTS_ST,
+        )
+        st_recal_eval = _run_eval_events(
+            st_recal_alarms, _EVENTS_ST,
+            out_dir / "eval_events" / _PILLAR3_ST_RUN / "recalibrate",
+            tolerance_s=_PILLAR3_TOLERANCE_S,
+        )
+        st_frozen_eval = _run_eval_events(
+            st_frozen_alarms, _EVENTS_ST,
+            out_dir / "eval_events" / _PILLAR3_ST_RUN / "frozen",
+            tolerance_s=_PILLAR3_TOLERANCE_S,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"run_once_calibrated: pillar-3 evaluation failed ({exc})", file=sys.stderr)
+        return 2
+
+    pu_recal_tpr = _read_event_tpr(pu_recal_eval)
+    pu_frozen_tpr = _read_event_tpr(pu_frozen_eval)
+    st_recal_tpr = _read_event_tpr(st_recal_eval)
+    st_frozen_tpr = _read_event_tpr(st_frozen_eval)
+    pillar3: dict[str, dict[str, float]] = {
+        "pu": {
+            "once_triggered_event_tpr": (
+                pu_recal_tpr if era_c_decision == "recalibrate" else pu_frozen_tpr
+            ),
+            "recalibrate_event_tpr": pu_recal_tpr,
+            "frozen_event_tpr": pu_frozen_tpr,
+        },
+        "st": {
+            "once_triggered_event_tpr": (
+                st_recal_tpr if era_c_decision == "recalibrate" else st_frozen_tpr
+            ),
+            "recalibrate_event_tpr": st_recal_tpr,
+            "frozen_event_tpr": st_frozen_tpr,
+        },
+    }
+
+    boundary_caught = _era_triggered(trigger_log, "A")
+    era_c_triggered = _era_triggered(trigger_log, "C")
+
+    trigger_log_df = pd.DataFrame(trigger_log)
+    trigger_log_df.to_csv(out_dir / f"{args.representation}_trigger_log.csv", index=False)
+    regimes_df = pd.DataFrame(regimes)
+    regimes_df.to_csv(out_dir / f"{args.representation}_regimes.csv", index=False)
+
+    sidecar = {
+        "representation": args.representation,
+        "snapshot": str(args.snapshot),
+        "bank_fit_runs": bank_fit_run_names,
+        "alpha": args.alpha,
+        "s1": {
+            "family": _BANK_FAMILY, "k": _BANK_K, "min_ref": _BANK_MIN_REF,
+            "baseline_rate": s1.baseline_rate, "threshold": s1.threshold,
+            "low_confidence_modes": list(s1.bank.low_confidence_modes),
+        },
+        "s2": {
+            "mic_streams": list(_MIC_STREAMS), "vib_streams": list(_VIB_CROSSCHECK_STREAMS),
+            "mic_anchor": s2_mic.anchor, "mic_mad": s2_mic.mad,
+            "vib_anchor": s2_vib.anchor, "vib_mad": s2_vib.mad, "k": 3.0,
+        },
+        "trigger_log": trigger_log,
+        "regimes": regimes,
+        "boundary_caught_era_a": boundary_caught,
+        "era_c_triggered": era_c_triggered,
+        "pillar3": pillar3,
+        "provenance_note": (
+            "D1 replay driver (spec docs/superpowers/specs/"
+            "2026-07-22-step2-package9-once-naming-transitions.md D1). The two-"
+            "sentinel drift-monitoring idea echoes the partner's own drift "
+            "monitoring (Rodrigues & Zhang, 2026); every threshold/number above "
+            "is computed from our own caches (A1.1/A1.8 firewall) -- no partner "
+            "JSON or number is read anywhere in this module. Retrospective, "
+            "day-granular SIMULATION, never an online claim (D1 honesty 1). "
+            "'once-calibrated' is scoped to 'once per instrumentation era' (D1 "
+            "honesty 2); the 010726 rows are IN-SAMPLE (tags), 080726 uses the "
+            "event-free window-FAR (P7 pillar-3 rule, A2.3.3)."
+        ),
+    }
+    (out_dir / f"{args.representation}.json").write_text(json.dumps(sidecar, indent=2) + "\n")
+
+    print(
+        f"run_once_calibrated: {args.representation} replay done -- era-A "
+        f"boundary caught={boundary_caught}, era-C triggered={era_c_triggered} "
+        f"-> {out_dir}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
