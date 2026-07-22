@@ -225,3 +225,143 @@ def test_peak_normalize_hits_target_dbfs_and_handles_silence() -> None:
     normalized_silence = mda.peak_normalize(silence, target_dbfs=-1.0)
     np.testing.assert_array_equal(normalized_silence, silence)
     assert np.isfinite(normalized_silence).all()
+
+
+# ---------------------------------------------------------------------------
+# 8. quantile_threshold (feat/demo-replay, Aufgabe A #4: score-histogram line)
+# ---------------------------------------------------------------------------
+
+
+def test_quantile_threshold_is_the_1_minus_alpha_quantile() -> None:
+    scores = [float(i) for i in range(1, 101)]  # 1..100
+
+    got = mda.quantile_threshold(scores, alpha=0.01)
+
+    assert got == pytest.approx(np.quantile(scores, 0.99))
+    assert mda.quantile_threshold([42.0], alpha=0.5) == pytest.approx(42.0)
+
+    with pytest.raises(ValueError, match="non-empty"):
+        mda.quantile_threshold([], alpha=0.01)
+    with pytest.raises(ValueError, match="alpha"):
+        mda.quantile_threshold(scores, alpha=0.0)
+    with pytest.raises(ValueError, match="alpha"):
+        mda.quantile_threshold(scores, alpha=1.0)
+
+
+# ---------------------------------------------------------------------------
+# 9. nearest_sorted_index (feat/demo-replay, Aufgabe A #3 window alignment AND the
+#    reference implementation for the live-replay JS playhead's own binary search,
+#    Aufgabe B #2 -- see this function's docstring)
+# ---------------------------------------------------------------------------
+
+
+def test_nearest_sorted_index_finds_the_closer_neighbor() -> None:
+    times = [0.0, 10.0, 10.4, 25.0, 100.0]
+
+    assert mda.nearest_sorted_index(times, 10.4) == 2  # exact match
+    assert mda.nearest_sorted_index(times, 10.3) == 2  # closer to 10.4 than to 10.0
+    assert mda.nearest_sorted_index(times, 5.0) == 0  # exact tie (5.0/5.0) -> earlier index wins
+    assert mda.nearest_sorted_index(times, -5.0) == 0  # before the first entry -> clamp
+    assert mda.nearest_sorted_index(times, 500.0) == 4  # after the last entry -> clamp
+
+    with pytest.raises(ValueError, match="non-empty"):
+        mda.nearest_sorted_index([], 1.0)
+
+
+# ---------------------------------------------------------------------------
+# 10. column_zscore_stats (feat/demo-replay, Aufgabe A #3 feature-bars day reference)
+# ---------------------------------------------------------------------------
+
+
+def test_column_zscore_stats_computes_mean_std_over_valid_rows_only() -> None:
+    features = np.array(
+        [
+            [1.0, 10.0],
+            [3.0, 20.0],
+            [999.0, 999.0],  # invalid row -- must not pollute the day reference
+            [5.0, 30.0],
+        ]
+    )
+    valid_mask = np.array([True, True, False, True])
+
+    mean, std = mda.column_zscore_stats(features, valid_mask)
+
+    np.testing.assert_allclose(mean, [3.0, 20.0])  # mean of the three VALID rows only
+    # ddof=0 population std of each column's three VALID values, [1,3,5]/[10,20,30].
+    np.testing.assert_allclose(std, [np.std([1.0, 3.0, 5.0]), np.std([10.0, 20.0, 30.0])])
+
+    with pytest.raises(ValueError, match="valid_mask has no True"):
+        mda.column_zscore_stats(features, np.zeros(4, dtype=bool))
+    with pytest.raises(ValueError, match="rows"):
+        mda.column_zscore_stats(features, np.array([True, False]))
+
+
+# ---------------------------------------------------------------------------
+# 11. top_k_abs_z_indices (feat/demo-replay, Aufgabe A #3 feature-bars selection)
+# ---------------------------------------------------------------------------
+
+
+def test_top_k_abs_z_indices_orders_by_largest_absolute_z() -> None:
+    row = np.array([10.0, 10.0, 10.0, 10.0])
+    mean = np.array([0.0, 0.0, 9.0, 10.0])
+    std = np.array([1.0, 5.0, 1.0, 2.0])
+    # z = [10.0, 2.0, 1.0, 0.0]
+
+    assert mda.top_k_abs_z_indices(row, mean, std, k=3) == [0, 1, 2]
+
+    # A std == 0 column must never win, even with a huge raw deviation from the mean.
+    row2 = np.array([100.0, 5.0])
+    mean2 = np.array([0.0, 0.0])
+    std2 = np.array([0.0, 1.0])
+
+    assert mda.top_k_abs_z_indices(row2, mean2, std2, k=1) == [1]
+
+    # k larger than the number of columns returns every index, still ordered.
+    assert mda.top_k_abs_z_indices(row, mean, std, k=99) == [0, 1, 2, 3]
+
+    with pytest.raises(ValueError, match="k must be positive"):
+        mda.top_k_abs_z_indices(row, mean, std, k=0)
+    with pytest.raises(ValueError, match="shape"):
+        mda.top_k_abs_z_indices(row, mean, std[:2], k=1)
+
+
+# ---------------------------------------------------------------------------
+# 12. shorten_feature_name (feat/demo-replay, Aufgabe A #3 bar labels)
+# ---------------------------------------------------------------------------
+
+
+def test_shorten_feature_name_matches_real_fusion_cache_naming() -> None:
+    # Real `feature_names` entries from results/cache/080726-pu_strikes--fusion.npz
+    # (module docstring / Aufgabe A #3) -- both stream families that cache actually
+    # has (`RAWGeneratorMic__0`/`RAWGeneratorVib__2`/`RAWTurbineMic__1`/
+    # `RAWTurbineVib__3`).
+    assert mda.shorten_feature_name("RAWGeneratorMic__0::ch0_log_rms") == "GenMic0.ch0.log_rms"
+    assert (
+        mda.shorten_feature_name("RAWTurbineVib__3::ch5_octave_2000") == "TurVib3.ch5.octave_2000"
+    )
+    # Anything that doesn't match the expected <Stream>__<n>::ch<i>_<feature> shape
+    # is returned UNCHANGED (defensive fallback, never raises).
+    assert (
+        mda.shorten_feature_name("not-a-recognized-feature-name") == "not-a-recognized-feature-name"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13. extract_window_samples (feat/demo-replay, Aufgabe A #1/#2 waveform+spectrogram)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_window_samples_slices_and_validates_bounds() -> None:
+    # 10 s @ 16 kHz, like a real demo clip -- values wrapped into actual int16 range
+    # (a real WAV's PCM samples, unlike a bare `np.arange`, never exceed it either).
+    pcm = (np.arange(160_000) % 1000).astype(np.int16)
+
+    window = mda.extract_window_samples(pcm, sample_rate_hz=16_000, start_s=4.0, duration_s=1.0)
+
+    assert window.dtype == np.float64
+    np.testing.assert_array_equal(window, (np.arange(64_000, 80_000) % 1000).astype(np.float64))
+
+    with pytest.raises(ValueError, match="out of range"):
+        mda.extract_window_samples(pcm, sample_rate_hz=16_000, start_s=9.5, duration_s=1.0)
+    with pytest.raises(ValueError, match="out of range"):
+        mda.extract_window_samples(pcm, sample_rate_hz=16_000, start_s=-1.0, duration_s=1.0)
