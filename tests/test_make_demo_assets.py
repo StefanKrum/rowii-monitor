@@ -11,6 +11,7 @@ the module under test is imported directly by inserting `scripts/` onto `sys.pat
 """
 from __future__ import annotations
 
+import math
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -365,3 +366,146 @@ def test_extract_window_samples_slices_and_validates_bounds() -> None:
         mda.extract_window_samples(pcm, sample_rate_hz=16_000, start_s=9.5, duration_s=1.0)
     with pytest.raises(ValueError, match="out of range"):
         mda.extract_window_samples(pcm, sample_rate_hz=16_000, start_s=-1.0, duration_s=1.0)
+
+
+# ---------------------------------------------------------------------------
+# 14. matching_event_kind (feat/demo-dashboard: Alarm-Feed ground-truth tag)
+# ---------------------------------------------------------------------------
+
+
+def test_matching_event_kind_returns_first_overlap_or_none() -> None:
+    events = [
+        (_utc(2026, 7, 8, 12, 43, 0), _utc(2026, 7, 8, 12, 44, 0), "plate-gen_0"),
+        (_utc(2026, 7, 8, 12, 44, 0), _utc(2026, 7, 8, 12, 45, 0), "plate-gen_90"),
+    ]
+
+    # Direct overlap with the first event.
+    assert (
+        mda.matching_event_kind(
+            _utc(2026, 7, 8, 12, 43, 10), _utc(2026, 7, 8, 12, 43, 12), events, pad_s=0.0
+        )
+        == "plate-gen_0"
+    )
+    # Only reachable via the pad -- lands just before event 2's raw start.
+    assert (
+        mda.matching_event_kind(
+            _utc(2026, 7, 8, 12, 43, 57), _utc(2026, 7, 8, 12, 43, 58), events, pad_s=5.0
+        )
+        == "plate-gen_0"
+    )
+    # No event anywhere near, even with generous padding.
+    assert (
+        mda.matching_event_kind(
+            _utc(2026, 7, 8, 14, 0, 0), _utc(2026, 7, 8, 14, 0, 10), events, pad_s=10.0
+        )
+        is None
+    )
+    # Touching exactly at the (unpadded) boundary is NOT a collision -- same
+    # half-open convention as has_collision.
+    assert (
+        mda.matching_event_kind(
+            _utc(2026, 7, 8, 12, 44, 0), _utc(2026, 7, 8, 12, 44, 10), events, pad_s=0.0
+        )
+        == "plate-gen_90"  # NOT plate-gen_0: that event ends exactly here
+    )
+
+
+# ---------------------------------------------------------------------------
+# 15. state_name_de (feat/demo-dashboard: Zustands-Badge subtitle)
+# ---------------------------------------------------------------------------
+
+
+def test_state_name_de_covers_known_states_and_falls_back() -> None:
+    assert mda.state_name_de("turbine") == "Turbinenbetrieb"
+    assert mda.state_name_de("pump") == "Pumpbetrieb"
+    assert mda.state_name_de("phase-shifter") == "Phasenschieberbetrieb"
+    assert mda.state_name_de("standstill") == "Stillstand"
+    assert mda.state_name_de("invalid") == "Übergang / ungültig"
+    # derive_state_names' own cluster-<id> naming fallback: never invented German
+    # prose, just a labelled passthrough.
+    assert mda.state_name_de("cluster-2") == "Zustand (cluster-2)"
+
+
+# ---------------------------------------------------------------------------
+# 16. parse_markdown_table / parse_state_table / parse_event_summary_table
+#     (feat/demo-dashboard: monitor_notes.md / event_notes.md -> dashboard JSON)
+# ---------------------------------------------------------------------------
+
+# Real "## Per-state results" table, byte-for-byte from
+# results/step2/once-calibrated/audio-beats/monitor/080726-pu_strikes/recalibrate/
+# monitor_notes.md (2026-07-22 run) -- not a hand-crafted fixture, so a real "inf"
+# row (state 0, low_confidence) and a real "n/a" row (state 2, never occurs on this
+# run) are both exercised as they actually appear on disk.
+_REAL_PU_STATE_TABLE_MD = (
+    "## Per-state results\n"
+    "\n"
+    "| state | n_windows | n_scored | n_alarms | alarm_rate | low_confidence | threshold |"
+    " n_consumed | status |\n"
+    "|---:|---:|---:|---:|---:|:--|---:|---:|:--|\n"
+    "| 0 (turbine) | 11 | 6 | 0 | 0.0000 | True | inf | 5 | scored |\n"
+    "| 1 (turbine) | 6740 | 4299 | 204 | 0.0475 | False | 0.0348375 | 2441 | scored |\n"
+    "| 2 (turbine) | 0 | 0 | 0 | n/a | n/a | n/a | 0 | no_conformal_data |\n"
+    "| 3 (standstill) | 6076 | 2315 | 150 | 0.0648 | False | 0.0352036 | 3761 | scored |\n"
+    "\n"
+    "## Window accounting\n"
+)
+
+# Real "## Summary" table, byte-for-byte from
+# results/step2/once-calibrated/audio-beats/eval_events/080726-pu_strikes/
+# recalibrate/event_notes.md.
+_REAL_PU_EVENT_SUMMARY_MD = (
+    "## Summary\n"
+    "\n"
+    "| n_events | n_detected | event_tpr | false_alarm_windows |"
+    " false_alarm_rate_per_hour | realized_window_far | tolerance_s |\n"
+    "|---:|---:|---:|---:|---:|---:|---:|\n"
+    "| 13 | 11 | 0.846154 | 279 | 176.458 | 0.0490162 | 5 |\n"
+    "\n"
+    "## Per-event results\n"
+)
+
+
+def test_parse_markdown_table_extracts_columns_and_rows_and_stops_at_prose() -> None:
+    columns, rows = mda.parse_markdown_table(_REAL_PU_STATE_TABLE_MD, "| state ")
+
+    assert columns == [
+        "state", "n_windows", "n_scored", "n_alarms", "alarm_rate",
+        "low_confidence", "threshold", "n_consumed", "status",
+    ]
+    assert len(rows) == 4  # the "## Window accounting" heading below is NOT a row
+    assert rows[0] == {
+        "state": "0 (turbine)", "n_windows": "11", "n_scored": "6", "n_alarms": "0",
+        "alarm_rate": "0.0000", "low_confidence": "True", "threshold": "inf",
+        "n_consumed": "5", "status": "scored",
+    }
+
+    with pytest.raises(ValueError, match="no markdown table header"):
+        mda.parse_markdown_table(_REAL_PU_STATE_TABLE_MD, "| nonexistent ")
+
+
+def test_parse_state_table_maps_inf_and_na_and_real_thresholds() -> None:
+    result = mda.parse_state_table(_REAL_PU_STATE_TABLE_MD)
+
+    assert set(result) == {0, 1, 2, 3}
+    assert result[0] == {"name": "turbine", "threshold": math.inf, "low_confidence": True}
+    assert result[1]["threshold"] == pytest.approx(0.0348375)
+    assert result[1]["low_confidence"] is False
+    assert result[2]["threshold"] is None  # "n/a" -- state never occurs on this run
+    assert result[3]["name"] == "standstill"
+    assert result[3]["threshold"] == pytest.approx(0.0352036)
+
+    with pytest.raises(ValueError, match="unexpected state-table"):
+        mda.parse_state_table(
+            "| state | threshold | low_confidence |\n"
+            "|---|---|---|\n"
+            "| not-a-valid-cell | 0.1 | False |\n"
+        )
+
+
+def test_parse_event_summary_table_reads_real_pu_numbers() -> None:
+    result = mda.parse_event_summary_table(_REAL_PU_EVENT_SUMMARY_MD)
+
+    assert result == {"n_events": 13, "n_detected": 11, "event_tpr": pytest.approx(0.846154)}
+
+    with pytest.raises(ValueError, match="no markdown table header"):
+        mda.parse_event_summary_table("no table here at all")
