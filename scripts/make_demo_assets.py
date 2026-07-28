@@ -71,6 +71,7 @@ import html
 import io
 import json
 import logging
+import math
 import re
 import sys
 import warnings
@@ -511,6 +512,157 @@ def extract_window_samples(
             f"at {sample_rate_hz} Hz"
         )
     return np.asarray(pcm[start_idx:end_idx], dtype=np.float64)
+
+
+# ---------------------------------------------------------------------------
+# Control-room dashboard helpers (feat/demo-dashboard) -- pure, no disk I/O,
+# unit-tested in tests/test_make_demo_assets.py. `build_dashboard_data` (IO-touching
+# section below) is the only caller.
+# ---------------------------------------------------------------------------
+
+
+def matching_event_kind(
+    window_start: datetime,
+    window_end: datetime,
+    events: Sequence[tuple[datetime, datetime, str]],
+    pad_s: float,
+) -> str | None:
+    """The `kind` of the FIRST *events* entry (in list order) whose *pad_s*-padded
+    interval overlaps `[window_start, window_end)` -- `has_collision` generalized to
+    report WHICH event matched (that function only reports whether ANY did), for
+    tagging one alarm episode with the ground-truth strike it most plausibly
+    belongs to on the dashboard's Alarm-Feed cards. Same half-open-window/symmetric-
+    padding convention as `has_collision` (this module) and `rowii.eval.events`
+    elsewhere in this codebase. `None` if no event overlaps.
+    """
+    pad = timedelta(seconds=pad_s)
+    for e_start, e_end, kind in events:
+        if window_start < e_end + pad and window_end > e_start - pad:
+            return kind
+    return None
+
+
+_STATE_NAME_DE = {
+    "standstill": "Stillstand",
+    "turbine": "Turbinenbetrieb",
+    "pump": "Pumpbetrieb",
+    "phase-shifter": "Phasenschieberbetrieb",
+    "invalid": "Übergang / ungültig",
+}
+
+
+def state_name_de(name: str) -> str:
+    """German gloss for one of `rowii.scada.labels._KNOWN_STATES` (`"standstill"`,
+    `"turbine"`, `"pump"`, `"phase-shifter"`) plus this codebase's own `"invalid"`
+    sentinel (`scripts/monitor.py`'s `_state_name_for`) -- the dashboard's Zustands-
+    Badge subtitle. Falls back to a labelled passthrough for `derive_state_names`'
+    own `cluster-<id>` naming fallback (a cluster without a >=50% ground-truth
+    plurality winner at commissioning time) -- not expected on the real 080726 data
+    this dashboard embeds (every state occurring there has a plurality winner), but
+    must stay well-defined rather than raise.
+    """
+    return _STATE_NAME_DE.get(name, f"Zustand ({name})")
+
+
+def parse_markdown_table(text: str, header_prefix: str) -> tuple[list[str], list[dict[str, str]]]:
+    """The first GitHub-flavoured-markdown table in *text* whose header row (a
+    `"| col1 | col2 | ... |"` line) starts with *header_prefix*, parsed into
+    `(column_names, rows)` -- each row a `{column_name: raw_cell_string}` dict (cell
+    text stripped), in table order. The mandatory `|---|---|`-style alignment row
+    right after the header is always skipped, unconditionally (every real table this
+    parses -- `scripts/monitor.py`'s and `scripts/eval_events.py`'s own markdown
+    writers -- always emits exactly one). Parsing then stops at the first following
+    line that is no longer a well-formed `|`-delimited row of the SAME column count
+    (blank line, prose, a later heading, ...) -- so a short table embedded in a
+    longer report never accidentally swallows unrelated text below it.
+
+    One parser backs every dashboard field pulled from either report -- see
+    `parse_state_table`/`parse_event_summary_table`, its two typed call sites,
+    rather than a bespoke regex per table.
+
+    Raises:
+        ValueError: if no header line starts with *header_prefix*.
+    """
+    lines = text.splitlines()
+    header_idx = next(
+        (i for i, ln in enumerate(lines) if ln.strip().startswith(header_prefix)), None
+    )
+    if header_idx is None:
+        raise ValueError(f"no markdown table header starting with {header_prefix!r} found")
+    columns = [c.strip() for c in lines[header_idx].strip().strip("|").split("|")]
+    rows: list[dict[str, str]] = []
+    for ln in lines[header_idx + 2 :]:
+        stripped = ln.strip()
+        if not stripped.startswith("|"):
+            break
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) != len(columns):
+            break
+        rows.append(dict(zip(columns, cells, strict=True)))
+    return columns, rows
+
+
+_STATE_CELL_RE = re.compile(r"^(-?\d+)\s*\(([^)]*)\)$")
+
+
+def parse_state_table(monitor_notes_text: str) -> dict[int, dict[str, Any]]:
+    """`scripts/monitor.py`'s `monitor_notes.md` "## Per-state results" table (e.g.
+    `results/step2/once-calibrated/audio-beats/monitor/<run>/recalibrate/
+    monitor_notes.md`), parsed into `{state_id: {"name": str, "threshold": float |
+    None, "low_confidence": bool}}` -- the dashboard's per-state naming + live
+    threshold-line source (`build_dashboard_data`). `threshold` is `math.inf` for
+    the table's literal `"inf"` cell (state has a certified never-alarm threshold,
+    too few calibration windows -- `low_confidence` is then always `True`) and
+    `None` for `"n/a"` (state never occurs on this run at all -- zero calibration-
+    side windows, `monitor.py`'s `no_conformal_data` status; such a state also never
+    appears in `alarms.parquet`, so the dashboard never needs a value for it, but
+    the table still carries the row).
+
+    Raises:
+        ValueError: if the table is missing (`parse_markdown_table`), or a `state`
+            cell is not the expected `"<id> (<name>)"` shape.
+    """
+    _, rows = parse_markdown_table(monitor_notes_text, "| state ")
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        m = _STATE_CELL_RE.match(row["state"])
+        if m is None:
+            raise ValueError(f"unexpected state-table 'state' cell: {row['state']!r}")
+        state_id = int(m.group(1))
+        threshold_raw = row["threshold"]
+        if threshold_raw == "inf":
+            threshold: float | None = math.inf
+        elif threshold_raw == "n/a":
+            threshold = None
+        else:
+            threshold = float(threshold_raw)
+        result[state_id] = {
+            "name": m.group(2),
+            "threshold": threshold,
+            "low_confidence": row["low_confidence"] == "True",
+        }
+    return result
+
+
+def parse_event_summary_table(event_notes_text: str) -> dict[str, float]:
+    """`scripts/eval_events.py`'s `event_notes.md` "## Summary" table, parsed into
+    `{"n_events": int, "n_detected": int, "event_tpr": float}` -- the dashboard's
+    "X/Y Schläge erkannt" header stat. Deliberately only these three fields (the
+    table also carries false-alarm-rate columns not surfaced on the dashboard).
+
+    Raises:
+        ValueError: if the table is missing (`parse_markdown_table`) or has no data
+            row.
+    """
+    _, rows = parse_markdown_table(event_notes_text, "| n_events ")
+    if not rows:
+        raise ValueError("event summary table has no data row")
+    row = rows[0]
+    return {
+        "n_events": int(row["n_events"]),
+        "n_detected": int(row["n_detected"]),
+        "event_tpr": float(row["event_tpr"]),
+    }
 
 
 # ---------------------------------------------------------------------------
