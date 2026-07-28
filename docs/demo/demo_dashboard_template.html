@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROWII Monitor — Live-Kontrollraum (Rodundwerk II, Maschine 1)</title>
+<style>
+  :root {
+    --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
+    --muted2: #5b6a8c; --grid: #26304a; --step: #0f1420; --accent: #4c8dff;
+    --alarm: #ff5c5c; --gt: #ffd166; --good: #37c992;
+    --s-standstill: #7c8aab; --s-turbine: #37c992; --s-pump: #4c8dff; --s-phaseshifter: #b48cff;
+    --s-invalid: #3a4258; --s-fallback: #ffb84c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: radial-gradient(ellipse at 20% -10%, #131b2e 0%, var(--bg) 55%);
+    color: var(--ink); font: 13.5px/1.4 "SF Pro Text", -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  h1, h2, h3, p { margin: 0; }
+  .mono { font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- header ---------- */
+  header.topbar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px; border-bottom: 1px solid var(--grid);
+    background: linear-gradient(180deg, #0d1220, #0a0e17);
+  }
+  header.topbar .brand { display: flex; flex-direction: column; gap: 1px; }
+  header.topbar h1 { font-size: 16px; font-weight: 700; letter-spacing: .01em; }
+  header.topbar .brand small { color: var(--muted); font-size: 11px; }
+  .badge-row { display: flex; gap: 6px; flex-wrap: wrap; margin-left: 10px; }
+  .badge {
+    background: #1a2338; border: 1px solid var(--grid); color: #9fc0ff; border-radius: 6px;
+    padding: 3px 9px; font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .badge.dim { color: var(--muted); }
+  .spacer { flex: 1 1 auto; }
+  .live-pill {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700;
+    color: var(--muted); letter-spacing: .06em; text-transform: uppercase;
+  }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted2); }
+  .live-pill.on .live-dot { background: var(--alarm); box-shadow: 0 0 8px 1px rgba(255,92,92,.8); animation: blink 1s infinite; }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .35; } }
+
+  /* ---------- main grid ---------- */
+  main.grid {
+    flex: 1 1 auto; min-height: 0; display: grid;
+    grid-template-columns: 258px 1fr 322px;
+    grid-template-rows: 1fr;
+    gap: 10px; padding: 10px 10px 0 10px;
+  }
+  section.panel {
+    background: var(--panel); border: 1px solid var(--grid); border-radius: var(--radius);
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-head {
+    flex: 0 0 auto; display: flex; align-items: baseline; justify-content: space-between;
+    padding: 9px 12px 7px; border-bottom: 1px solid var(--grid);
+  }
+  .panel-head h2 {
+    font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .09em;
+  }
+  .panel-head .hint { font-size: 10px; color: var(--muted2); }
+  .panel-body { flex: 1 1 auto; min-height: 0; padding: 10px 12px; overflow: auto; }
+
+  /* ---------- schema (left) ---------- */
+  #schemaBody { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  svg#schema { width: 100%; max-width: 220px; flex: 1 1 auto; min-height: 0; }
+  .sensor-dot { fill: var(--muted2); stroke: #0006; stroke-width: .6; transition: fill .5s ease; transform-box: fill-box; transform-origin: center; }
+  .sensor-glyph rect, .sensor-glyph path { transition: fill .5s ease, stroke .5s ease; }
+  .sensor-glyph .body { fill: #1c2740; stroke: var(--muted2); stroke-width: 1.1; }
+  .sensor-glyph .axis { stroke: var(--muted2); stroke-width: .9; }
+  .group-alarm .sensor-dot { fill: var(--alarm); filter: drop-shadow(0 0 4px rgba(255,92,92,.9)); }
+  .group-alarm .sensor-glyph .body { fill: #3a1414; stroke: var(--alarm); filter: drop-shadow(0 0 4px rgba(255,92,92,.9)); }
+  .machine-block { fill: #16203a; stroke: var(--grid); stroke-width: 1.2; }
+  .machine-shaft { fill: #202c48; }
+  .machine-label { fill: var(--muted); font-size: 7.6px; font-weight: 600; letter-spacing: .03em; }
+  .machine-sub { fill: var(--muted2); font-size: 6.2px; }
+  .volute { fill: none; stroke: var(--grid); stroke-width: 1.4; }
+  .schema-caption {
+    font-size: 10px; color: var(--muted2); text-align: center; line-height: 1.35; flex: 0 0 auto;
+  }
+  .sensor-legend { flex: 0 0 auto; width: 100%; display: flex; flex-direction: column; gap: 4px; }
+  .sensor-legend .row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+  .sensor-legend .sw { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .sensor-legend code { color: #9fc0ff; font-size: 9.5px; }
+
+  /* ---------- pipeline (center) ---------- */
+  /* Natural height, not stretched to the grid row's full height (unlike the schema
+     and alarm-feed panels either side, which benefit from the extra vertical room)
+     -- the 5 pipeline tiles have fixed-height canvases/badges, so filling ~700px
+     of row height here would just be empty panel background. */
+  #pipelinePanel { align-self: start; }
+  #pipelineBody { display: flex; align-items: stretch; gap: 0; padding: 12px 10px; }
+  .pipe-stage {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: var(--step);
+    border: 1px solid var(--grid); border-radius: 9px; padding: 10px 11px; gap: 6px;
+  }
+  .pipe-arrow { flex: 0 0 26px; display: flex; align-items: center; justify-content: center; color: var(--muted2); font-size: 15px; }
+  .pipe-head { display: flex; align-items: center; gap: 6px; }
+  .pipe-num {
+    width: 16px; height: 16px; border-radius: 50%; background: var(--accent); color: #06101f;
+    font-size: 9.5px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  }
+  .pipe-title { font-size: 11px; font-weight: 700; }
+  .pipe-note { font-size: 9px; color: var(--muted2); line-height: 1.3; min-height: 2.4em; }
+  .pipe-canvas-wrap { flex: 0 0 auto; height: 96px; background: #070a12; border-radius: 6px; position: relative; overflow: hidden; }
+  .pipe-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .pipe-idle-note {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 9.5px; color: var(--muted2); text-align: center; padding: 0 8px; pointer-events: none;
+    transition: opacity .3s ease;
+  }
+
+  /* stage 3: state */
+  .state-stage { align-items: stretch; }
+  .state-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 8px 0 currentColor; }
+  .state-name-de { font-size: 16px; font-weight: 800; line-height: 1.15; }
+  .state-name-en { font-size: 9.5px; color: var(--muted2); text-transform: uppercase; letter-spacing: .06em; }
+  .state-pills { display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
+  .pill {
+    font-size: 9px; font-weight: 700; padding: 3px 7px; border-radius: 5px; text-align: center;
+    background: #1c2740; color: var(--muted); border: 1px solid var(--grid); opacity: 0; transform: translateY(2px);
+    transition: opacity .3s ease, transform .3s ease;
+  }
+  .pill.show { opacity: 1; transform: none; }
+  .pill.warn { background: #2c2410; color: #ffd166; border-color: #4a3d16; }
+  .pill.info { background: #142a3a; color: #7fd0ff; border-color: #1c4a63; }
+
+  /* stage 4: score */
+  .score-readout { display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 1px; column-gap: 5px; font-size: 9.5px; color: var(--muted); }
+  .score-readout b { font-size: 12.5px; color: var(--ink); }
+  .score-readout .thr { color: var(--alarm); font-weight: 700; }
+  .score-readout .sep { flex-basis: 100%; height: 0; } /* force "Schwelle ..." onto its own line */
+
+  /* stage 5: alarm */
+  .lamp-wrap { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  .lamp {
+    width: 46px; height: 46px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #2a3a2f, #12211a);
+    border: 2px solid #24402f; box-shadow: inset 0 0 10px #0008, 0 0 0 0 rgba(255,92,92,0);
+    transition: background .25s ease, border-color .25s ease, box-shadow .25s ease;
+  }
+  .lamp.green { background: radial-gradient(circle at 35% 30%, #3fe08f, #0f5c38); border-color: #37c992; box-shadow: inset 0 0 10px #0004, 0 0 16px 2px rgba(55,201,146,.55); }
+  .lamp.red { background: radial-gradient(circle at 35% 30%, #ff8a8a, #7a1414); border-color: var(--alarm); box-shadow: inset 0 0 10px #0004, 0 0 22px 4px rgba(255,92,92,.85); }
+  .lamp-label { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+  .lamp.red + .lamp-label, .lamp-wrap:has(.lamp.red) .lamp-label { color: var(--alarm); }
+  .alarm-count { font-size: 22px; font-weight: 800; }
+  .alarm-count-label { font-size: 9px; color: var(--muted2); text-transform: uppercase; letter-spacing: .05em; }
+
+  /* ---------- alarm feed (right) ---------- */
+  #feedCounter { background: var(--alarm); color: #2a0505; border-radius: 10px; padding: 1px 8px; font-size: 10.5px; font-weight: 800; }
+  #feedCounter.zero { background: #1c2740; color: var(--muted); }
+  #feedList { display: flex; flex-direction: column; gap: 7px; }
+  .feed-empty { color: var(--muted2); font-size: 11.5px; text-align: center; padding: 30px 6px; }
+  .feed-card {
+    background: var(--step); border: 1px solid var(--grid); border-left: 3px solid var(--alarm);
+    border-radius: 7px; padding: 8px 10px; animation: card-in .35s ease;
+  }
+  @keyframes card-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .feed-card .row1 { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .feed-card time { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .feed-card .ratio { font-size: 11px; font-weight: 800; color: var(--alarm); }
+  .feed-card .state-line { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 10.5px; color: var(--muted); }
+  .feed-card .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .feed-card .tag { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: #1c2740; color: var(--muted); }
+  .feed-card .tag.mic { color: #9fc0ff; }
+  .feed-card .tag.vib { color: #ffb84c; }
+  .feed-card .tag.trans { color: #ffd166; }
+  .feed-card .gt-line { margin-top: 5px; font-size: 10.5px; color: var(--gt); line-height: 1.3; }
+  .feed-card .gt-line.none { color: var(--muted2); }
+
+  /* ---------- replay bar (bottom) ---------- */
+  footer.replaybar {
+    flex: 0 0 auto; margin: 10px; margin-top: 10px; background: var(--panel);
+    border: 1px solid var(--grid); border-radius: var(--radius); padding: 10px 14px 12px;
+    display: flex; flex-direction: column; gap: 9px;
+  }
+  .replay-row1 { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .session-tabs { display: flex; gap: 5px; background: #0d1322; border: 1px solid var(--grid); border-radius: 8px; padding: 3px; }
+  .session-tab {
+    background: transparent; border: none; color: var(--muted); font-size: 11.5px; font-weight: 700;
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .session-tab.active { background: var(--accent); color: #06101f; }
+  .transport { display: flex; align-items: center; gap: 10px; }
+  .playbtn {
+    width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--grid); background: var(--accent);
+    color: #06101f; font-size: 14px; cursor: pointer; flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+  }
+  .playbtn:hover { filter: brightness(1.08); }
+  .speedgrp { display: flex; gap: 4px; }
+  .speed-btn { background: #1c2740; color: var(--muted); border: 1px solid var(--grid); border-radius: 5px; padding: 5px 9px; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .speed-btn.active { background: var(--accent); color: #06101f; border-color: var(--accent); }
+  .clockbox { font-size: 16px; font-weight: 800; min-width: 128px; }
+  .clockbox small { display: block; font-size: 9px; color: var(--muted2); font-weight: 600; letter-spacing: .05em; }
+  .chipstrip { display: flex; gap: 6px; overflow-x: auto; flex: 1 1 auto; padding-bottom: 2px; }
+  .clip-chip {
+    flex: 0 0 auto; background: #1c2740; border: 1px solid var(--grid); border-radius: 7px;
+    padding: 5px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; min-width: 108px;
+  }
+  .clip-chip:hover { border-color: var(--accent); }
+  .clip-chip.playing { border-color: var(--good); box-shadow: 0 0 0 1px var(--good) inset; }
+  .clip-chip b { font-size: 10.5px; }
+  .clip-chip span { font-size: 9px; color: var(--muted2); }
+  .clip-chip.kind-strike b { color: var(--gt); }
+  .timeline-wrap { position: relative; }
+  svg#timeline { width: 100%; height: 46px; display: block; cursor: pointer; }
+  .timeline-legend { display: flex; gap: 16px; font-size: 10px; color: var(--muted2); margin-top: 2px; flex-wrap: wrap; }
+  .timeline-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+
+  .honesty-strip {
+    flex: 0 0 auto; padding: 6px 18px 10px; font-size: 10px; color: var(--muted2); line-height: 1.4;
+  }
+  .honesty-strip code { color: #7fd0ff; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>ROWII Monitor — Live-Kontrollraum</h1>
+    <small>Rodundwerk II, Maschine 1 · Pumpspeicher-Aggregat</small>
+  </div>
+  <div class="badge-row" id="headerBadges"></div>
+  <div class="spacer"></div>
+  <div class="live-pill" id="livePill"><span class="live-dot"></span><span id="livePillText">Bereit</span></div>
+</header>
+
+<main class="grid">
+
+  <section class="panel" id="schemaPanel">
+    <div class="panel-head"><h2>Anlagen-Schema</h2><span class="hint">4 Sensorgruppen</span></div>
+    <div class="panel-body" id="schemaBody">
+      <svg id="schema" viewBox="0 0 220 380"></svg>
+      <div class="sensor-legend" id="sensorLegend"></div>
+      <p class="schema-caption">Schematische Darstellung — Einbaupositionen vereinfacht.<br>Exakte Positionen stehen noch aus.</p>
+    </div>
+  </section>
+
+  <section class="panel" id="pipelinePanel">
+    <div class="panel-head"><h2>Pipeline — vom Rohsignal zum Alarm</h2><span class="hint" id="pipelineHint">audio-beats</span></div>
+    <div class="panel-body" id="pipelineBody">
+
+      <div class="pipe-stage" id="stageRaw">
+        <div class="pipe-head"><span class="pipe-num">1</span><span class="pipe-title">Rohsignal</span></div>
+        <div class="pipe-note">Live-Wellenform des Mikrofonsignals (Generator-Mikrofonring), sofern gerade ein Clip abgespielt wird.</div>
+        <div class="pipe-canvas-wrap"><canvas id="waveCanvas"></canvas><div class="pipe-idle-note" id="waveIdle">kein Audio aktiv</div></div>
+      </div>
+      <div class="pipe-arrow">&#8594;</div>
+
+      <div class="pipe-stage" id="stageFeat">
+        <div class="pipe-head"><span class="pipe-num">2</span><span class="pipe-title">Merkmale</span></div>
+        <div class="pipe-note">Vereinfachtes Live-Spektrum desselben Signals (FFT). Das Modell selbst nutzt zusätzlich gelernte BEATs-Embeddings.</div>
+        <div class="pipe-canvas-wrap"><canvas id="fftCanvas"></canvas><div class="pipe-idle-note" id="fftIdle">kein Audio aktiv</div></div>
+      </div>
+      <div class="pipe-arrow">&#8594;</div>
+
+      <div class="pipe-stage state-stage" id="stageState">
+        <div class="pipe-head"><span class="pipe-num">3</span><span class="pipe-title">Zustand</span></div>
+        <div class="pipe-note">Aktuell erkannter Betriebszustand (Modellbank, zero-shot auf diesem Tag).</div>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:2px">
+          <span class="state-dot" id="stateDot"></span>
+          <div>
+            <div class="state-name-de" id="stateNameDe">–</div>
+            <div class="state-name-en" id="stateNameEn">–</div>
+          </div>
+        </div>
+        <div class="state-pills">
+          <div class="pill warn" id="pillTransition">Übergangsnähe</div>
+          <div class="pill info" id="pillLowConf">Kalibrierung unsicher</div>
+        </div>
+      </div>
+      <div class="pipe-arrow">&#8594;</div>
+
+      <div class="pipe-stage" id="stageScore">
+        <div class="pipe-head"><span class="pipe-num">4</span><span class="pipe-title">Score</span></div>
+        <div class="score-readout">
+          <span>Score <b id="scoreVal">–</b></span>
+          <span class="sep"></span>
+          <span>Schwelle <span class="thr mono" id="thresholdVal">–</span></span>
+        </div>
+        <div class="pipe-canvas-wrap"><canvas id="scoreCanvas"></canvas></div>
+      </div>
+      <div class="pipe-arrow">&#8594;</div>
+
+      <div class="pipe-stage" id="stageAlarm" style="flex:0 0 118px">
+        <div class="pipe-head"><span class="pipe-num">5</span><span class="pipe-title">Alarm</span></div>
+        <div class="lamp-wrap">
+          <div class="lamp" id="lampEl"></div>
+          <div class="lamp-label" id="lampLabel">Normal</div>
+          <div style="text-align:center">
+            <div class="alarm-count" id="alarmCountVal">0</div>
+            <div class="alarm-count-label">Alarme in Sitzung</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="panel" id="feedPanel">
+    <div class="panel-head"><h2>Alarm-Feed</h2><span id="feedCounter" class="zero">0</span></div>
+    <div class="panel-body"><div id="feedList"><div class="feed-empty" id="feedEmpty">Noch keine Alarme in dieser Wiedergabe.</div></div></div>
+  </section>
+
+</main>
+
+<footer class="replaybar">
+  <div class="replay-row1">
+    <div class="session-tabs" id="sessionTabs"></div>
+    <div class="transport">
+      <button class="playbtn" id="playBtn" type="button" title="Play/Pause" aria-label="Play/Pause">&#9654;</button>
+      <div class="speedgrp" id="speedGroup">
+        <button class="speed-btn" data-speed="60" type="button">60×</button>
+        <button class="speed-btn" data-speed="300" type="button">300×</button>
+        <button class="speed-btn" data-speed="900" type="button">900×</button>
+      </div>
+      <div class="clockbox mono" id="clockEl">--:--:-- <small>UTC · <span id="clockRun">–</span></small></div>
+    </div>
+    <div class="chipstrip" id="chipStrip"></div>
+  </div>
+  <div class="timeline-wrap">
+    <svg id="timeline"></svg>
+    <div class="timeline-legend">
+      <span><span class="sw" style="background:var(--gt)"></span>Protokollierter Schonhammer-Schlag</span>
+      <span><span class="sw" style="background:var(--alarm)"></span>Alarm-Episode</span>
+      <span><span class="sw" style="background:var(--s-turbine)"></span>Turbinenbetrieb</span>
+      <span><span class="sw" style="background:var(--s-standstill)"></span>Stillstand</span>
+      <span style="margin-left:auto">Klick in die Zeitleiste springt zur Zeit · Play startet Audio an der nächsten Session-Aufnahme</span>
+    </div>
+  </div>
+</footer>
+
+<p class="honesty-strip">
+  Alle Zahlen stammen unverändert aus <code>results/step2/once-calibrated/audio-beats/monitor/&lt;session&gt;/recalibrate/</code>
+  (Zustände, Scores, Schwellen, Alarme) und <code>docs/groundtruth/080726_events_*.csv</code> (Schlag-Protokoll); Audioclips sind
+  reale, unbearbeitete Ausschnitte (nur Resampling 50→16 kHz, Pegel-Normalisierung −1 dBFS). Zustands-Snapshot wurde ausschließlich
+  auf früheren Messtagen gefittet — beide Sitzungen sind zero-shot. Die Alarmrate folgt der kalibrierten α-Schwelle je Zustand;
+  unmarkierte Episoden sind diese Grundrate, kein Fehler der Ground Truth.
+</p>
+
+<script id="dashboard-data" type="application/json">__DASHBOARD_DATA__</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("dashboard-data").textContent);
+
+const STATE_COLOR = {
+  standstill: "var(--s-standstill)", turbine: "var(--s-turbine)", pump: "var(--s-pump)",
+  "phase-shifter": "var(--s-phaseshifter)", invalid: "var(--s-invalid)",
+};
+const INVALID_STATE = { name: "invalid", name_de: "Übergang / ungültig", threshold: null, low_confidence: false };
+const SESSION_ORDER = [...new Set([DATA.default_session, ...Object.keys(DATA.sessions)])];
+
+function colorForStateInfo(info) {
+  const v = STATE_COLOR[info && info.name] || "var(--s-fallback)";
+  return v.startsWith("var(") ? getComputedStyle(document.documentElement).getPropertyValue(v.slice(4, -1)).trim() || "#ffb84c" : v;
+}
+
+function svgEl(tag, attrs) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function bisectLeft(arr, target) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < target) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+function bisectRight(arr, target) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= target) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+// Nearest D.trace row to `target` seconds -- reference implementation:
+// scripts/make_demo_assets.py's `nearest_sorted_index` (tested; this port mirrors
+// docs/demo/demo_live_template.html's own hand-port of the same function).
+function nearestIndex(times, target) {
+  const i = bisectLeft(times, target);
+  if (i === 0) return 0;
+  if (i === times.length) return times.length - 1;
+  const before = times[i - 1], after = times[i];
+  return (target - before) <= (after - target) ? i - 1 : i;
+}
+
+/* ============================================================================
+ * Session state
+ * ==========================================================================*/
+let activeRun = DATA.default_session;
+let D = null;               // DATA.sessions[activeRun]
+let traceTimes = [];        // D.trace[i][0]
+let segStarts = [];         // D.segments[i].start_s
+let smax = 1;                // max score this session (chart y-scale)
+let sessionClips = [];      // DATA.clips filtered+sorted for activeRun
+
+let simT = 0, playing = false, speedMult = 60, lastWallMs = null, rafId = null;
+let coupled = false, activeClip = null, activeAudioEl = null, couplingCleanup = null;
+let feedIndex = 0, alarmCount = 0;
+let sharedCtx = null;
+const analyserByFile = new Map(); // file -> {analyser, src}
+const audioElByFile = new Map();  // file -> <audio>
+
+function currentSegment(t) {
+  const idx = Math.max(0, Math.min(D.segments.length - 1, bisectRight(segStarts, t) - 1));
+  return D.segments[idx];
+}
+function stateInfoFor(stateId) {
+  return D.states[String(stateId)] || INVALID_STATE;
+}
+function clipContaining(t) {
+  return sessionClips.find(c => t >= c.start_s && t < c.start_s + c.duration_s) || null;
+}
+// First clip whose start_s falls in (prevT, nextT] -- crossed during this frame's
+// silent fast-forward step (module note: real clips sit >=100s apart, so a single
+// animation frame, even at 900x, never crosses two).
+function clipEnteredBetween(prevT, nextT) {
+  return sessionClips.find(c => c.start_s > prevT && c.start_s <= nextT) || null;
+}
+function fmtClock(t) {
+  const d = new Date(new Date(D.t0_utc).getTime() + t * 1000);
+  return d.toISOString().slice(11, 19);
+}
+function fmtHM(t) {
+  const d = new Date(new Date(D.t0_utc).getTime() + t * 1000);
+  return d.toISOString().slice(11, 16);
+}
+
+/* ============================================================================
+ * Header / badges
+ * ==========================================================================*/
+function renderHeaderBadges() {
+  const b = document.getElementById("headerBadges");
+  b.innerHTML =
+    `<span class="badge">${D.label}</span>` +
+    `<span class="badge dim">${D.representation} · ${D.threshold_mode}</span>` +
+    `<span class="badge dim">Start ${fmtClock(0)} UTC</span>` +
+    `<span class="badge dim">${D.event_summary.n_detected}/${D.event_summary.n_events} Protokoll-Schläge erkannt` +
+    ` (${Math.round(D.event_summary.event_tpr * 100)}%)</span>`;
+  // Snapshot (state references) is always fit once on earlier days and applied
+  // zero-shot here (never refit); only the per-state THRESHOLD is refit per
+  // D.threshold_mode ("recalibrate", the operationally recommended arm --
+  // DASHBOARD_THRESHOLD_MODE's own docstring in make_demo_assets.py).
+  document.getElementById("pipelineHint").textContent =
+    D.representation + " · Zustands-Snapshot fix (zero-shot) · Schwellen: " + D.threshold_mode;
+}
+
+/* ============================================================================
+ * Schema (SVG machine schematic)
+ * ==========================================================================*/
+function buildSchema() {
+  const sv = document.getElementById("schema");
+  while (sv.firstChild) sv.removeChild(sv.firstChild);
+  const W = 220, H = 380;
+
+  // volute hint around the turbine/pump block
+  sv.appendChild(svgEl("path", {
+    class: "volute", d: "M 40 330 Q 20 300 34 268 Q 46 244 80 240 L 140 240 Q 174 244 186 268 Q 200 300 180 330 Z",
+  }));
+  // shaft
+  sv.appendChild(svgEl("rect", { class: "machine-shaft", x: 100, y: 96, width: 20, height: 150 }));
+  // generator block
+  sv.appendChild(svgEl("rect", { class: "machine-block", x: 55, y: 30, width: 110, height: 68, rx: 8 }));
+  const genLabel = svgEl("text", { class: "machine-label", x: 110, y: 60, "text-anchor": "middle" });
+  genLabel.textContent = "GENERATOR"; sv.appendChild(genLabel);
+  const genSub = svgEl("text", { class: "machine-sub", x: 110, y: 74, "text-anchor": "middle" });
+  genSub.textContent = "Erregung / Läufer"; sv.appendChild(genSub);
+  // turbine/pump block
+  sv.appendChild(svgEl("rect", { class: "machine-block", x: 62, y: 246, width: 96, height: 60, rx: 8 }));
+  const turLabel = svgEl("text", { class: "machine-label", x: 110, y: 274, "text-anchor": "middle" });
+  turLabel.textContent = "TURBINE / PUMPE"; sv.appendChild(turLabel);
+  const turSub = svgEl("text", { class: "machine-sub", x: 110, y: 288, "text-anchor": "middle" });
+  turSub.textContent = "Laufrad, Spiralgehäuse"; sv.appendChild(turSub);
+
+  // mic ring helper
+  function micRing(cx, cy, rx, ry, n, group) {
+    const g = svgEl("g", { class: "sensor-glyph group-" + group, "data-group": group });
+    for (let i = 0; i < n; i++) {
+      const a = (Math.PI * 2 * i) / n - Math.PI / 2;
+      const x = cx + rx * Math.cos(a), y = cy + ry * Math.sin(a) * 0.5;
+      g.appendChild(svgEl("circle", { class: "sensor-dot", "data-group": group, cx: x, cy: y, r: 4.4 }));
+    }
+    sv.appendChild(g);
+  }
+  // generator mic ring: 4 points (RAWGeneratorMic__0)
+  micRing(110, 100, 78, 30, 4, "genmic");
+  // turbine mic ring: 5 points (RAWTurbineMic__1)
+  micRing(110, 244, 82, 26, 5, "turmic");
+
+  // accelerometer glyph helper (small 3-axis marker)
+  function vibGlyph(x, y, group) {
+    const g = svgEl("g", { class: "sensor-glyph group-" + group, "data-group": group });
+    g.appendChild(svgEl("rect", { class: "body", "data-group": group, x: x - 7, y: y - 7, width: 14, height: 14, rx: 3 }));
+    g.appendChild(svgEl("line", { class: "axis", x1: x, y1: y, x2: x + 9, y2: y - 4 }));
+    g.appendChild(svgEl("line", { class: "axis", x1: x, y1: y, x2: x - 3, y2: y - 9 }));
+    g.appendChild(svgEl("line", { class: "axis", x1: x, y1: y, x2: x, y2: y + 9 }));
+    sv.appendChild(g);
+  }
+  // generator vibration accelerometer (RAWGeneratorVib__2)
+  vibGlyph(184, 64, "genvib");
+  // turbine vibration accelerometer (RAWTurbineVib__3)
+  vibGlyph(184, 258, "turvib");
+
+  sv.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  document.getElementById("sensorLegend").innerHTML = `
+    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWGeneratorMic__0 — Mikrofonring Generator (4)</div>
+    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWTurbineMic__1 — Mikrofonring Turbine (5)</div>
+    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWGeneratorVib__2 — Beschleunigungssensor Generator</div>
+    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWTurbineVib__3 — Beschleunigungssensor Turbine</div>
+  `;
+}
+
+let lastLevelTs = 0;
+function pulseSchema(level) {
+  // level in [0,1] RMS-ish of the live time-domain signal; idle -> gentle breathing.
+  const now = performance.now();
+  if (now - lastLevelTs < 45) return; // throttle DOM writes to ~22fps
+  lastLevelTs = now;
+  const scale = 1 + Math.min(0.9, level * 2.4);
+  document.querySelectorAll("#schema .sensor-dot").forEach(el => {
+    el.style.transform = `scale(${scale.toFixed(3)})`;
+  });
+}
+
+let alarmFlashTimeout = null;
+function flashSchema(groups) {
+  document.querySelectorAll("#schema .sensor-glyph, #schema .sensor-dot").forEach(el => el.classList.remove("group-alarm"));
+  for (const grp of groups) {
+    document.querySelectorAll(`#schema [data-group="${grp}"]`).forEach(el => el.classList.add("group-alarm"));
+  }
+  if (alarmFlashTimeout) clearTimeout(alarmFlashTimeout);
+  if (groups.length) {
+    alarmFlashTimeout = setTimeout(() => {
+      document.querySelectorAll("#schema .sensor-glyph, #schema .sensor-dot").forEach(el => el.classList.remove("group-alarm"));
+    }, 2600);
+  }
+}
+
+/* ============================================================================
+ * Pipeline stage 1+2: live waveform + FFT bars (shared AnalyserNode per clip)
+ * ==========================================================================*/
+function ensureAnalyser(file) {
+  if (analyserByFile.has(file)) return analyserByFile.get(file);
+  const audioEl = audioElByFile.get(file);
+  try {
+    if (!sharedCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      sharedCtx = new Ctx();
+    }
+    const src = sharedCtx.createMediaElementSource(audioEl);
+    const analyser = sharedCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.65;
+    src.connect(analyser);
+    analyser.connect(sharedCtx.destination);
+    const rec = { analyser, src };
+    analyserByFile.set(file, rec);
+    return rec;
+  } catch (err) {
+    console.warn("AnalyserNode setup failed for", file, err);
+    return null;
+  }
+}
+
+const waveCanvas = document.getElementById("waveCanvas");
+const fftCanvas = document.getElementById("fftCanvas");
+const waveCtx2d = waveCanvas.getContext("2d");
+const fftCtx2d = fftCanvas.getContext("2d");
+function fitCanvas(cv) {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(r.width * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  return dpr;
+}
+
+let rafViz = null;
+function drawIdleViz() {
+  document.getElementById("waveIdle").style.opacity = "1";
+  document.getElementById("fftIdle").style.opacity = "1";
+  waveCtx2d.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+  fftCtx2d.clearRect(0, 0, fftCanvas.width, fftCanvas.height);
+}
+function drawLiveViz() {
+  // Runs every animation frame regardless of play state (self-healing): the score
+  // chart's own `fitCanvas` measurement can race the FIRST synchronous render at
+  // page boot (before the grid/flex layout has settled, so the wrap briefly
+  // measures 0-wide) -- re-drawing here every frame means that ever corrects
+  // itself within one frame, not just on the next seek/play tick.
+  drawScoreChart(simT);
+
+  const rec = activeClip ? analyserByFile.get(activeClip.file) : null;
+  if (!rec || !activeAudioEl || activeAudioEl.paused) {
+    pulseSchema(0.05 + 0.03 * Math.sin(performance.now() / 900)); // gentle idle breathing
+    drawIdleViz();
+    rafViz = requestAnimationFrame(drawLiveViz);
+    return;
+  }
+  document.getElementById("waveIdle").style.opacity = "0";
+  document.getElementById("fftIdle").style.opacity = "0";
+  const { analyser } = rec;
+
+  // waveform (time domain)
+  const dprW = fitCanvas(waveCanvas);
+  const timeData = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(timeData);
+  const w = waveCanvas.width, h = waveCanvas.height;
+  waveCtx2d.clearRect(0, 0, w, h);
+  waveCtx2d.lineWidth = 1.4 * dprW;
+  waveCtx2d.strokeStyle = "#4c8dff";
+  waveCtx2d.beginPath();
+  for (let i = 0; i < timeData.length; i++) {
+    const x = (i / (timeData.length - 1)) * w;
+    const y = (timeData[i] / 255) * h;
+    if (i === 0) waveCtx2d.moveTo(x, y); else waveCtx2d.lineTo(x, y);
+  }
+  waveCtx2d.stroke();
+
+  // RMS-ish level for schema pulsing
+  let sumSq = 0;
+  for (let i = 0; i < timeData.length; i += 4) { const v = (timeData[i] - 128) / 128; sumSq += v * v; }
+  const level = Math.sqrt(sumSq / (timeData.length / 4));
+  pulseSchema(level);
+
+  // FFT bars (frequency domain), log-grouped into ~28 bars
+  const dprF = fitCanvas(fftCanvas);
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(freqData);
+  const nBars = 28;
+  const fw = fftCanvas.width, fh = fftCanvas.height;
+  fftCtx2d.clearRect(0, 0, fw, fh);
+  const usableBins = Math.floor(freqData.length * 0.75); // low/mid range carries most energy
+  const barW = fw / nBars;
+  for (let i = 0; i < nBars; i++) {
+    const lo = Math.floor((i / nBars) ** 1.6 * usableBins);
+    const hi = Math.max(lo + 1, Math.floor(((i + 1) / nBars) ** 1.6 * usableBins));
+    let sum = 0, n = 0;
+    for (let k = lo; k < hi && k < freqData.length; k++) { sum += freqData[k]; n++; }
+    const v = n ? sum / n / 255 : 0;
+    const barH = Math.max(1.5 * dprF, v * fh);
+    const hue = 210 - v * 90;
+    fftCtx2d.fillStyle = `hsl(${hue}, 80%, 62%)`;
+    fftCtx2d.fillRect(i * barW + barW * 0.12, fh - barH, barW * 0.76, barH);
+  }
+
+  rafViz = requestAnimationFrame(drawLiveViz);
+}
+
+/* ============================================================================
+ * Pipeline stage 3: state badge
+ * ==========================================================================*/
+function updateStateStage(seg) {
+  const info = stateInfoFor(seg.state);
+  const color = colorForStateInfo(info);
+  document.getElementById("stateDot").style.background = color;
+  document.getElementById("stateDot").style.color = color;
+  document.getElementById("stateNameDe").textContent = info.name_de;
+  document.getElementById("stateNameEn").textContent = seg.state < 0 ? "invalid / transition" : info.name;
+  return info;
+}
+function updatePills(pt, info) {
+  document.getElementById("pillTransition").classList.toggle("show", !!(pt && pt[5]));
+  document.getElementById("pillLowConf").classList.toggle("show", !!(info && info.low_confidence));
+}
+
+/* ============================================================================
+ * Pipeline stage 4: score chart (trailing window, canvas)
+ * ==========================================================================*/
+const scoreCanvas = document.getElementById("scoreCanvas");
+const scoreCtx2d = scoreCanvas.getContext("2d");
+const SCORE_WINDOW_S = 50;
+let lastScoreDrawTs = 0;
+function drawScoreChart(t) {
+  const now = performance.now();
+  if (now - lastScoreDrawTs < 120) return;
+  const rect = scoreCanvas.parentElement.getBoundingClientRect();
+  if (rect.width < 4) return; // layout not settled yet -- retry next frame, don't cache a 1px buffer
+  lastScoreDrawTs = now;
+  const dpr = fitCanvas(scoreCanvas);
+  const w = scoreCanvas.width, h = scoreCanvas.height;
+  scoreCtx2d.clearRect(0, 0, w, h);
+  const lo = t - SCORE_WINDOW_S, hi = t;
+  const i0 = bisectLeft(traceTimes, lo), i1 = bisectRight(traceTimes, hi);
+  const yOf = s => h - 4 * dpr - (Math.min(s, smax) / smax) * (h - 8 * dpr);
+  const xOf = tt => ((tt - lo) / (hi - lo || 1)) * w;
+
+  // threshold step-line
+  scoreCtx2d.strokeStyle = "#ff5c5c";
+  scoreCtx2d.lineWidth = 1.2 * dpr;
+  scoreCtx2d.beginPath();
+  let prevThr = null, started = false;
+  for (let i = i0; i < i1; i++) {
+    const row = D.trace[i];
+    const info = stateInfoFor(row[2]);
+    const thr = info.threshold;
+    if (thr == null) { prevThr = null; started = false; continue; }
+    const x = xOf(row[0]);
+    if (!started || thr !== prevThr) { scoreCtx2d.moveTo(x, yOf(thr)); started = true; }
+    else scoreCtx2d.lineTo(x, yOf(thr));
+    prevThr = thr;
+  }
+  scoreCtx2d.stroke();
+
+  // score line
+  scoreCtx2d.strokeStyle = "#5b6a8c";
+  scoreCtx2d.lineWidth = 1.3 * dpr;
+  scoreCtx2d.beginPath();
+  for (let i = i0; i < i1; i++) {
+    const row = D.trace[i];
+    const x = xOf(row[0]), y = yOf(row[1]);
+    if (i === i0) scoreCtx2d.moveTo(x, y); else scoreCtx2d.lineTo(x, y);
+  }
+  scoreCtx2d.stroke();
+
+  // alarm points
+  scoreCtx2d.fillStyle = "#ff5c5c";
+  for (let i = i0; i < i1; i++) {
+    const row = D.trace[i];
+    if (row[3]) {
+      scoreCtx2d.beginPath();
+      scoreCtx2d.arc(xOf(row[0]), yOf(row[1]), 2.1 * dpr, 0, Math.PI * 2);
+      scoreCtx2d.fill();
+    }
+  }
+}
+
+/* ============================================================================
+ * Pipeline stage 5: lamp + counter
+ * ==========================================================================*/
+function updateLamp(active) {
+  const lamp = document.getElementById("lampEl");
+  lamp.classList.toggle("red", active);
+  lamp.classList.toggle("green", !active);
+  document.getElementById("lampLabel").textContent = active ? "ALARM" : "Normal";
+  document.getElementById("livePill").classList.toggle("on", active);
+  document.getElementById("livePillText").textContent = active ? "Alarm aktiv" : (playing ? "Wiedergabe läuft" : "Bereit");
+}
+
+/* ============================================================================
+ * Alarm feed
+ * ==========================================================================*/
+function gtLineHtml(ep) {
+  if (ep.gt) {
+    const hm = fmtHM(ep.start_s);
+    return `<div class="gt-line">passt zum protokollierten Schonhammer-Schlag „${ep.gt}“ (${hm} UTC)</div>`;
+  }
+  return `<div class="gt-line none">— kein Protokoll-Treffer (kalibrierte Grundrate)</div>`;
+}
+function feedCardHtml(ep) {
+  const info = stateInfoFor(ep.state);
+  const color = colorForStateInfo(info);
+  const ratio = ep.ratio != null ? ep.ratio.toFixed(1) + "×" : "–";
+  const tags = [`<span class="tag mic">Mikrofon</span>`];
+  if (ep.vib_coincident) tags.push(`<span class="tag vib">+ Vibration</span>`);
+  if (ep.near_transition) tags.push(`<span class="tag trans">Übergangsnähe</span>`);
+  return `<div class="feed-card">
+    <div class="row1"><time class="mono">${fmtClock(ep.start_s)} UTC</time><span class="ratio">${ratio} über Schwelle</span></div>
+    <div class="state-line"><span class="state-dot" style="width:8px;height:8px;background:${color};color:${color}"></span>${info.name_de} · ${ep.n} Fenster</div>
+    <div class="tags">${tags.join("")}</div>
+    ${gtLineHtml(ep)}
+  </div>`;
+}
+const FEED_CAP = 40;
+function renderFeedCounter() {
+  const el = document.getElementById("feedCounter");
+  el.textContent = String(alarmCount);
+  el.classList.toggle("zero", alarmCount === 0);
+  document.getElementById("alarmCountVal").textContent = String(alarmCount);
+}
+function resetFeedTo(t) {
+  const epStarts = D.episodes.map(e => e.start_s);
+  const count = bisectRight(epStarts, t);
+  feedIndex = count;
+  alarmCount = count;
+  const list = document.getElementById("feedList");
+  list.innerHTML = "";
+  const shown = D.episodes.slice(Math.max(0, count - FEED_CAP), count).reverse();
+  if (!shown.length) {
+    list.innerHTML = `<div class="feed-empty" id="feedEmpty">Noch keine Alarme in dieser Wiedergabe.</div>`;
+  } else {
+    for (const ep of shown) list.insertAdjacentHTML("beforeend", feedCardHtml(ep));
+  }
+  renderFeedCounter();
+}
+function advanceFeed(prevT, t) {
+  const list = document.getElementById("feedList");
+  let appended = false;
+  while (feedIndex < D.episodes.length && D.episodes[feedIndex].start_s <= t) {
+    const empty = document.getElementById("feedEmpty");
+    if (empty) empty.remove();
+    list.insertAdjacentHTML("afterbegin", feedCardHtml(D.episodes[feedIndex]));
+    feedIndex++; alarmCount++; appended = true;
+  }
+  while (list.children.length > FEED_CAP) list.removeChild(list.lastElementChild);
+  if (appended) renderFeedCounter();
+}
+
+/* ============================================================================
+ * Timeline scrubber (SVG, bottom bar)
+ * ==========================================================================*/
+let tlPlayhead = null, tlW = 1100;
+function buildTimeline() {
+  const sv = document.getElementById("timeline");
+  while (sv.firstChild) sv.removeChild(sv.firstChild);
+  tlW = sv.clientWidth || 1100;
+  const H = 46;
+  sv.setAttribute("viewBox", `0 0 ${tlW} ${H}`);
+  const dur = D.duration_s;
+
+  for (const s of D.segments) {
+    const info = stateInfoFor(s.state);
+    const c = colorForStateInfo(info);
+    sv.appendChild(svgEl("rect", {
+      x: (s.start_s / dur) * tlW, y: 6, width: Math.max(1, ((s.end_s - s.start_s) / dur) * tlW),
+      height: 16, fill: c, opacity: s.state < 0 ? 0.5 : 0.85,
+    }));
+  }
+  for (const e of D.events) {
+    sv.appendChild(svgEl("rect", {
+      x: (e.start_s / dur) * tlW, y: 24, width: Math.max(1.4, ((e.end_s - e.start_s) / dur) * tlW),
+      height: 6, fill: "var(--gt)",
+    }));
+  }
+  for (const ep of D.episodes) {
+    sv.appendChild(svgEl("rect", {
+      x: (ep.start_s / dur) * tlW, y: 32, width: Math.max(1, ((ep.end_s - ep.start_s) / dur) * tlW),
+      height: 6, fill: "var(--alarm)",
+    }));
+  }
+  for (let hSec = 0; hSec <= dur; hSec += 1800) {
+    const x = (hSec / dur) * tlW;
+    sv.appendChild(svgEl("line", { x1: x, y1: 0, x2: x, y2: H, stroke: "#222b41" }));
+    const t = svgEl("text", { x: x + 3, y: H - 2, fill: "#8b96ad", "font-size": 9 });
+    t.textContent = fmtHM(hSec); sv.appendChild(t);
+  }
+  tlPlayhead = svgEl("line", { x1: 0, y1: 0, x2: 0, y2: H, stroke: "#fff", "stroke-width": 1.6, "stroke-dasharray": "3,2", opacity: .9 });
+  sv.appendChild(tlPlayhead);
+  renderTimelinePlayhead(simT);
+}
+function renderTimelinePlayhead(t) {
+  if (!tlPlayhead) return;
+  const x = Math.max(0, Math.min(1, t / D.duration_s)) * tlW;
+  tlPlayhead.setAttribute("x1", x); tlPlayhead.setAttribute("x2", x);
+}
+document.getElementById("timeline").addEventListener("click", ev => {
+  const r = ev.currentTarget.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  pause();
+  detachCoupling();
+  setSimT(frac * D.duration_s);
+});
+
+/* ============================================================================
+ * Clip chip strip
+ * ==========================================================================*/
+function buildChipStrip() {
+  const strip = document.getElementById("chipStrip");
+  strip.innerHTML = "";
+  for (const c of sessionClips) {
+    const chip = document.createElement("div");
+    chip.className = "clip-chip" + (c.kind === "strike" ? " kind-strike" : "");
+    chip.dataset.file = c.file;
+    chip.innerHTML = `<b>${c.kind === "strike" ? "Schlag: " + c.label : "Zustand " + c.label}</b><span>${fmtClock(c.start_s)} UTC</span>`;
+    chip.addEventListener("click", () => {
+      pause();
+      detachCoupling();
+      setSimT(c.start_s);
+      play();
+    });
+    strip.appendChild(chip);
+  }
+}
+function updateChipHighlight() {
+  document.querySelectorAll(".clip-chip").forEach(el => {
+    el.classList.toggle("playing", !!(activeClip && el.dataset.file === activeClip.file));
+  });
+}
+
+/* ============================================================================
+ * Core render (called every frame + on every seek)
+ * ==========================================================================*/
+function renderAll(t, prevT) {
+  simT = t;
+  document.getElementById("clockEl").innerHTML = `${fmtClock(t)} <small>UTC · <span id="clockRun">${D.run}</span></small>`;
+
+  const seg = currentSegment(t);
+  const info = updateStateStage(seg);
+
+  const idx = nearestIndex(traceTimes, t);
+  const pt = D.trace[idx];
+  updatePills(pt, info);
+  document.getElementById("scoreVal").textContent = pt[1].toFixed(4);
+  document.getElementById("thresholdVal").textContent = info.threshold != null ? info.threshold.toFixed(4) : "—";
+  drawScoreChart(t);
+
+  const alarmingNow = !!pt[3] || (prevT !== undefined && prevT !== null && alarmInRangeCheck(prevT, t));
+  updateLamp(alarmingNow);
+  flashSchema(alarmingNow ? micGroupsFor() : []);
+
+  renderTimelinePlayhead(t);
+  updateChipHighlight();
+
+  if (prevT === undefined || prevT === null || t < prevT) resetFeedTo(t);
+  else if (t > prevT) advanceFeed(prevT, t);
+}
+function micGroupsFor() {
+  // audio-beats is a mic-domain score (module docstring: all 6 clips are cut from
+  // RAWGeneratorMic__0) -- an alarm always lights the generator mic ring; the
+  // turbine mic ring joins as a secondary (same audio-domain family). The
+  // vibration accelerometers only join when the independent vibration-only
+  // representation ALSO alarmed in/near the same episode (Alarm-Feed's own
+  // "vib_coincident" tag, `build_dashboard_data`) -- never guessed.
+  const groups = ["genmic", "turmic"];
+  const recentVib = D.episodes.find(e => e.vib_coincident && Math.abs(e.start_s - simT) < 3);
+  if (recentVib) groups.push("genvib", "turvib");
+  return groups;
+}
+function alarmInRangeCheck(prevT, curT) {
+  if (curT <= prevT) return false;
+  const lo = bisectRight(traceTimes, prevT), hi = bisectRight(traceTimes, curT);
+  for (let i = lo; i < hi; i++) if (D.trace[i][3]) return true;
+  return false;
+}
+function setSimT(t) {
+  const prev = simT;
+  simT = Math.max(0, Math.min(D.duration_s, t));
+  renderAll(simT, null); // seeks always reset the feed rather than incrementally advance
+  void prev;
+}
+
+/* ============================================================================
+ * Transport (play / pause / speed) -- silent fast-forward between clips,
+ * real-time audio-coupled playback across each clip's own 10 s.
+ * ==========================================================================*/
+function updatePlayButton() {
+  document.getElementById("playBtn").innerHTML = playing ? "&#10074;&#10074;" : "&#9654;";
+}
+function pauseAllAudio() {
+  audioElByFile.forEach(a => a.pause());
+}
+function detachCoupling() {
+  if (couplingCleanup) { couplingCleanup(); couplingCleanup = null; }
+  coupled = false; activeClip = null; activeAudioEl = null;
+  updateChipHighlight();
+}
+function startClipAudio(clip) {
+  pauseAllAudio();
+  coupled = true;
+  activeClip = clip;
+  const audioEl = audioElByFile.get(clip.file);
+  activeAudioEl = audioEl;
+  ensureAnalyser(clip.file);
+  const within = Math.max(0, Math.min(clip.duration_s - 0.05, simT - clip.start_s));
+
+  // Seeking (setting currentTime) before metadata has loaded is NOT a reliable
+  // load trigger across browsers -- with preload="none" it can leave the element
+  // stuck at readyState HAVE_NOTHING forever (loadedmetadata never fires, so a
+  // listener gated on it never runs). play() itself is spec-guaranteed to invoke
+  // the resource selection algorithm regardless of preload, so call it
+  // unconditionally and defer the seek to once metadata is actually available.
+  function seekToOffset() {
+    if (within > 0.02) {
+      try { audioEl.currentTime = within; } catch (_e) { /* ignore -- next frame's timeupdate corrects simT anyway */ }
+    }
+  }
+  if (audioEl.readyState >= 1) seekToOffset();
+  else audioEl.addEventListener("loadedmetadata", seekToOffset, { once: true });
+  audioEl.play().catch(err => console.warn("Audio-Wiedergabe blockiert:", err));
+
+  const onTime = () => { const prevT = simT; renderAll(clip.start_s + audioEl.currentTime, prevT); };
+  const onEnded = () => { coupled = false; activeClip = null; activeAudioEl = null; lastWallMs = null; updateChipHighlight(); };
+  audioEl.addEventListener("timeupdate", onTime);
+  audioEl.addEventListener("ended", onEnded, { once: true });
+  couplingCleanup = () => { audioEl.removeEventListener("timeupdate", onTime); audioEl.removeEventListener("ended", onEnded); };
+  updateChipHighlight();
+}
+function play() {
+  if (playing) return;
+  if (simT >= D.duration_s) simT = 0;
+  playing = true;
+  updatePlayButton();
+  document.getElementById("livePillText").textContent = "Wiedergabe läuft";
+  const startingClip = clipContaining(simT);
+  if (startingClip) startClipAudio(startingClip);
+  else { coupled = false; lastWallMs = null; }
+  if (!rafId) rafId = requestAnimationFrame(tick);
+}
+function pause() {
+  playing = false;
+  updatePlayButton();
+  document.getElementById("livePillText").textContent = "Bereit";
+  pauseAllAudio();
+}
+function tick(nowMs) {
+  if (!playing) { rafId = null; return; }
+  if (!coupled) {
+    if (lastWallMs !== null) {
+      const dt = (nowMs - lastWallMs) / 1000;
+      const prevT = simT;
+      let nextT = simT + dt * speedMult;
+      const entered = clipEnteredBetween(prevT, Math.min(nextT, D.duration_s));
+      if (entered) {
+        renderAll(entered.start_s, prevT);
+        startClipAudio(entered);
+      } else {
+        const finished = nextT >= D.duration_s;
+        renderAll(Math.min(nextT, D.duration_s), prevT);
+        if (finished) { playing = false; updatePlayButton(); document.getElementById("livePillText").textContent = "Ende der Sitzung"; }
+      }
+    }
+    lastWallMs = nowMs;
+  }
+  rafId = playing ? requestAnimationFrame(tick) : null;
+}
+document.getElementById("playBtn").addEventListener("click", () => (playing ? pause() : play()));
+document.querySelectorAll(".speed-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    speedMult = parseFloat(btn.dataset.speed);
+    document.querySelectorAll(".speed-btn").forEach(b => b.classList.toggle("active", b === btn));
+  });
+});
+document.querySelectorAll(".speed-btn")[0].classList.add("active");
+speedMult = 60;
+
+/* ============================================================================
+ * Session switching
+ * ==========================================================================*/
+function buildAudioElements() {
+  audioElByFile.clear();
+  for (const c of DATA.clips) {
+    const audioEl = new Audio();
+    // "auto", not "none": every clip is an embedded data: URI (module note --
+    // already fully in memory as part of this very page, base64-decoded on
+    // access), so there is no network cost to preloading, unlike a real remote
+    // resource -- and eager metadata parsing is what makes seekToOffset's
+    // readyState check usable on the very first play() (see startClipAudio).
+    audioEl.preload = "auto";
+    audioEl.src = "data:audio/wav;base64," + c.audio_b64;
+    audioElByFile.set(c.file, audioEl);
+  }
+}
+function loadSession(run) {
+  pause();
+  detachCoupling();
+  activeRun = run;
+  D = DATA.sessions[run];
+  traceTimes = D.trace.map(r => r[0]);
+  segStarts = D.segments.map(s => s.start_s);
+  smax = Math.max(...D.trace.map(r => r[1]), 1e-6) * 1.15;
+  sessionClips = DATA.clips.filter(c => c.run === run).sort((a, b) => a.start_s - b.start_s);
+
+  document.querySelectorAll(".session-tab").forEach(el => el.classList.toggle("active", el.dataset.run === run));
+  renderHeaderBadges();
+  buildSchema();
+  buildTimeline();
+  buildChipStrip();
+  feedIndex = 0; alarmCount = 0;
+
+  const start = sessionClips.length ? sessionClips[0].start_s : 0;
+  setSimT(start);
+}
+function buildSessionTabs() {
+  const wrap = document.getElementById("sessionTabs");
+  wrap.innerHTML = "";
+  for (const run of SESSION_ORDER) {
+    const btn = document.createElement("button");
+    btn.className = "session-tab" + (run === activeRun ? " active" : "");
+    btn.type = "button";
+    btn.dataset.run = run;
+    btn.textContent = DATA.sessions[run].label.replace(/^080726 – /, "");
+    btn.addEventListener("click", () => loadSession(run));
+    wrap.appendChild(btn);
+  }
+}
+
+/* ============================================================================
+ * Boot
+ * ==========================================================================*/
+window.addEventListener("resize", () => { buildTimeline(); });
+buildAudioElements();
+buildSessionTabs();
+loadSession(activeRun);
+drawIdleViz();
+rafViz = requestAnimationFrame(drawLiveViz);
+</script>
+</body>
+</html>
