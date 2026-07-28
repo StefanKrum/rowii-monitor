@@ -151,10 +151,29 @@
   }
   .lamp.green { background: radial-gradient(circle at 35% 30%, #3fe08f, #0f5c38); border-color: #37c992; box-shadow: inset 0 0 10px #0004, 0 0 16px 2px rgba(55,201,146,.55); }
   .lamp.red { background: radial-gradient(circle at 35% 30%, #ff8a8a, #7a1414); border-color: var(--alarm); box-shadow: inset 0 0 10px #0004, 0 0 22px 4px rgba(255,92,92,.85); }
+  /* Fix-1c: baseline (non-protocol) alarms get a brief, subtle pulse -- never the
+     sustained full-red glow reserved for a genuine protocol-hit -- one playback of
+     this animation per baseline episode (JS restarts it by re-adding the class),
+     settling back to whatever the lamp's plain "green"/no class state already is. */
+  .lamp.orange-pulse { animation: orangePulse 900ms ease-out; }
+  @keyframes orangePulse {
+    0% { box-shadow: inset 0 0 10px #0004, 0 0 16px 2px rgba(55,201,146,.55); border-color: #37c992; background: radial-gradient(circle at 35% 30%, #3fe08f, #0f5c38); }
+    35% { box-shadow: inset 0 0 10px #0004, 0 0 18px 4px rgba(255,184,76,.8); border-color: #ffb84c; background: radial-gradient(circle at 35% 30%, #ffcf8a, #7a4a14); }
+    100% { box-shadow: inset 0 0 10px #0004, 0 0 16px 2px rgba(55,201,146,.55); border-color: #37c992; background: radial-gradient(circle at 35% 30%, #3fe08f, #0f5c38); }
+  }
   .lamp-label { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
   .lamp.red + .lamp-label, .lamp-wrap:has(.lamp.red) .lamp-label { color: var(--alarm); }
-  .alarm-count { font-size: 22px; font-weight: 800; }
-  .alarm-count-label { font-size: 9px; color: var(--muted2); text-transform: uppercase; letter-spacing: .05em; }
+  .lamp-wrap:has(.lamp.orange-pulse) .lamp-label { color: #ffb84c; }
+  /* Fix-1a: two-tier counter -- protocol hits large/accented, baseline-rate alarms
+     small/dimmed, so a customer demo's eye lands on the number that matters. */
+  .alarm-counts { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .ac-hits-val { display: block; font-size: 22px; font-weight: 800; color: var(--gt); line-height: 1; }
+  .ac-hits-label {
+    display: block; font-size: 8.5px; font-weight: 700; color: var(--gt); opacity: .85;
+    text-transform: uppercase; letter-spacing: .04em; margin-top: 2px;
+  }
+  .ac-baseline-val { display: block; font-size: 12px; font-weight: 700; color: var(--muted); line-height: 1; }
+  .ac-baseline-label { display: block; font-size: 7.5px; color: var(--muted2); line-height: 1.25; margin-top: 2px; max-width: 92px; }
 
   /* ---------- alarm feed (right) ---------- */
   #feedCounter { background: var(--alarm); color: #2a0505; border-radius: 10px; padding: 1px 8px; font-size: 10.5px; font-weight: 800; }
@@ -177,6 +196,13 @@
   .feed-card .tag.trans { color: #ffd166; }
   .feed-card .gt-line { margin-top: 5px; font-size: 10.5px; color: var(--gt); line-height: 1.3; }
   .feed-card .gt-line.none { color: var(--muted2); }
+  /* Fix-1b: consecutive baseline-rate (no protocol match) episodes collapse into
+     ONE compact, visibly dimmed running card instead of one full card each --
+     deliberately plain/quiet next to a protocol-hit card's red accent + detail. */
+  .feed-card.feed-bundle {
+    border-left: 3px dashed var(--muted2); color: var(--muted2); font-size: 10.5px;
+    font-weight: 600; padding: 7px 10px; opacity: .82;
+  }
 
   /* ---------- replay bar (bottom) ---------- */
   footer.replaybar {
@@ -221,6 +247,39 @@
     flex: 0 0 auto; padding: 6px 18px 10px; font-size: 10px; color: var(--muted2); line-height: 1.4;
   }
   .honesty-strip code { color: #7fd0ff; }
+
+  /* ---------- narrow viewports (Fix 2) ----------------------------------------
+     The 3-column grid (fixed 258px/322px side panels) is built for a control-room
+     screen/projector at full width; below ~1100px there is not enough room for it
+     AND the fixed-height 100vh body, and the panels collapse toward 0 height
+     instead of gracefully narrowing. Below the breakpoint, abandon the grid
+     entirely: stack the three zones as plain block boxes (each sized to its own
+     content) and let the PAGE scroll normally instead of clipping to 100vh --
+     "muss nicht schön sein, nur funktional und nicht kollabiert" (task note). The
+     replay bar stays reachable via position:sticky. */
+  @media (max-width: 1100px) {
+    html, body { height: auto; min-height: 100%; }
+    body { overflow: visible; }
+    main.grid { display: block; padding: 10px; }
+    main.grid section.panel {
+      height: auto; max-height: none; min-height: 0; overflow: visible; margin-bottom: 10px;
+    }
+    .panel-body { overflow: visible; max-height: none; }
+    #feedPanel .panel-body { max-height: 60vh; overflow-y: auto; }
+    #schemaBody svg#schema { max-width: 240px; margin: 0 auto; }
+    #pipelineBody { flex-wrap: wrap; row-gap: 10px; }
+    .pipe-stage { flex: 1 1 180px; }
+    .pipe-arrow { display: none; }
+    footer.replaybar { position: sticky; bottom: 0; z-index: 5; margin: 10px; }
+    /* The sticky footer floats ABOVE normal document flow, so it permanently
+       covers whatever ends up at the very bottom of the (now much taller, block-
+       stacked) page -- without slack, that would be the tail of the Alarm-Feed
+       panel and the honesty-strip footnote, with no further content below to
+       scroll them clear. Reserve room roughly matching the footer's own height
+       (it varies a little with content wrap, so this is generous, not exact) so
+       everything can still be scrolled fully into view above it. */
+    .honesty-strip { padding-bottom: 230px; }
+  }
 </style>
 </head>
 <body>
@@ -297,9 +356,15 @@
         <div class="lamp-wrap">
           <div class="lamp" id="lampEl"></div>
           <div class="lamp-label" id="lampLabel">Normal</div>
-          <div style="text-align:center">
-            <div class="alarm-count" id="alarmCountVal">0</div>
-            <div class="alarm-count-label">Alarme in Sitzung</div>
+          <div class="alarm-counts">
+            <div>
+              <span class="ac-hits-val" id="hitCountVal">0</span>
+              <span class="ac-hits-label">Protokoll-Treffer</span>
+            </div>
+            <div>
+              <span class="ac-baseline-val" id="baselineCountVal">0</span>
+              <span class="ac-baseline-label">Grundraten-Alarme (erwartet bei α=5&nbsp;%)</span>
+            </div>
           </div>
         </div>
       </div>
@@ -345,7 +410,9 @@
   (Zustände, Scores, Schwellen, Alarme) und <code>docs/groundtruth/080726_events_*.csv</code> (Schlag-Protokoll); Audioclips sind
   reale, unbearbeitete Ausschnitte (nur Resampling 50→16 kHz, Pegel-Normalisierung −1 dBFS). Zustands-Snapshot wurde ausschließlich
   auf früheren Messtagen gefittet — beide Sitzungen sind zero-shot. Die Alarmrate folgt der kalibrierten α-Schwelle je Zustand;
-  unmarkierte Episoden sind diese Grundrate, kein Fehler der Ground Truth.
+  „Grundraten-Alarme" (gebündelt, ohne Protokoll-Treffer) sind KEIN Fehler der Ground Truth, sondern exakt die bei α&nbsp;=&nbsp;5&nbsp;%
+  erwartete, konforme Fehlalarmrate — sie werden weiterhin vollständig gezählt und angezeigt, nur nicht mehr einzeln
+  ausgeschrieben, damit die 13 protokollierten Schläge im Feed nicht untergehen.
 </p>
 
 <script id="dashboard-data" type="application/json">__DASHBOARD_DATA__</script>
@@ -403,7 +470,12 @@ let sessionClips = [];      // DATA.clips filtered+sorted for activeRun
 
 let simT = 0, playing = false, speedMult = 60, lastWallMs = null, rafId = null;
 let coupled = false, activeClip = null, activeAudioEl = null, couplingCleanup = null;
-let feedIndex = 0, alarmCount = 0;
+// Fix-1: hits (protocol-matched episodes) and baseline-rate episodes (the
+// calibrated alpha=5% false-alarm rate, no protocol match) are counted and
+// displayed separately -- openBundle is the currently-growing "+N Grundraten-
+// Alarme" feed card (or null when the most recent feed item is a hit card / the
+// feed is empty), see advanceFeed/resetFeedTo.
+let feedIndex = 0, hitCount = 0, baselineCount = 0, openBundle = null;
 let sharedCtx = null;
 const analyserByFile = new Map(); // file -> {analyser, src}
 const audioElByFile = new Map();  // file -> <audio>
@@ -733,26 +805,55 @@ function drawScoreChart(t) {
 }
 
 /* ============================================================================
- * Pipeline stage 5: lamp + counter
+ * Pipeline stage 5: lamp + counter (Fix-1c: full red + schema-flash reserved for
+ * PROTOCOL-HIT alarms; a plain baseline-rate alarm gets one brief orange pulse and
+ * otherwise leaves the lamp green -- never a sustained "something is wrong" state
+ * for the expected alpha=5% false-alarm rate).
  * ==========================================================================*/
-function updateLamp(active) {
+let lastPulsedEpisodeKey = null;
+function updateLamp(active, isHit, episodeKey) {
   const lamp = document.getElementById("lampEl");
-  lamp.classList.toggle("red", active);
-  lamp.classList.toggle("green", !active);
-  document.getElementById("lampLabel").textContent = active ? "ALARM" : "Normal";
-  document.getElementById("livePill").classList.toggle("on", active);
-  document.getElementById("livePillText").textContent = active ? "Alarm aktiv" : (playing ? "Wiedergabe läuft" : "Bereit");
+  if (active && isHit) {
+    // Sustained full-red glow -- no "green" base class underneath (the orangePulse
+    // keyframe's own 0%/100% already matches the "green" look, see below, so a
+    // baseline pulse fading back to green needs no separate toggle).
+    lamp.classList.remove("orange-pulse", "green");
+    lamp.classList.add("red");
+  } else {
+    lamp.classList.remove("red");
+    lamp.classList.add("green");
+    if (active) {
+      if (episodeKey !== lastPulsedEpisodeKey) {
+        // Restart the CSS animation exactly once per distinct baseline episode
+        // (not once per animation frame while the SAME episode stays active) --
+        // remove+reflow+re-add is the standard trick to replay a keyframe
+        // animation. It plays OVER the "green" base (0%/100% match it), so the
+        // lamp settles back to plain green once the 900ms pulse finishes.
+        lamp.classList.remove("orange-pulse");
+        void lamp.offsetWidth;
+        lamp.classList.add("orange-pulse");
+      }
+    } else {
+      lamp.classList.remove("orange-pulse");
+    }
+  }
+  lastPulsedEpisodeKey = active ? episodeKey : null;
+  document.getElementById("lampLabel").textContent = (active && isHit) ? "ALARM" : (active ? "Grundrate" : "Normal");
+  document.getElementById("livePill").classList.toggle("on", !!(active && isHit));
+  document.getElementById("livePillText").textContent =
+    (active && isHit) ? "Alarm aktiv (Protokoll-Treffer)" : (playing ? "Wiedergabe läuft" : "Bereit");
 }
 
 /* ============================================================================
- * Alarm feed
+ * Alarm feed (Fix-1b: episodes WITH a ground-truth match keep a full "hit" card;
+ * consecutive episodes withOUT one collapse into a single running, dimmed
+ * "+N Grundraten-Alarme" summary card -- see buildFeedItems for the pure bundling
+ * rule shared by both the seek path (resetFeedTo) and the live-tick path
+ * (advanceFeed).
  * ==========================================================================*/
 function gtLineHtml(ep) {
-  if (ep.gt) {
-    const hm = fmtHM(ep.start_s);
-    return `<div class="gt-line">passt zum protokollierten Schonhammer-Schlag „${ep.gt}“ (${hm} UTC)</div>`;
-  }
-  return `<div class="gt-line none">— kein Protokoll-Treffer (kalibrierte Grundrate)</div>`;
+  const hm = fmtHM(ep.start_s);
+  return `<div class="gt-line">passt zum protokollierten Schonhammer-Schlag „${ep.gt}“ (${hm} UTC)</div>`;
 }
 function feedCardHtml(ep) {
   const info = stateInfoFor(ep.state);
@@ -768,39 +869,113 @@ function feedCardHtml(ep) {
     ${gtLineHtml(ep)}
   </div>`;
 }
+function formatBundleText(b) {
+  return `+${b.n} Grundraten-Alarme · ${fmtHM(b.start_s)}–${fmtHM(b.end_s)} UTC · max ${b.maxRatio.toFixed(1)}× über Schwelle`;
+}
+function buildHitCardEl(ep) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = feedCardHtml(ep).trim();
+  return wrap.firstElementChild;
+}
+function buildBundleCardEl(b) {
+  const el = document.createElement("div");
+  el.className = "feed-card feed-bundle";
+  el.textContent = formatBundleText(b);
+  return el;
+}
+// Pure: chronological episodes -> bundled feed items (also chronological). Every
+// ep.gt (protocol-hit) episode is its own {type:"hit"} item and closes whatever
+// bundle was open; every non-hit episode either grows the currently open
+// {type:"bundle"} item or, if none is open yet, starts a new one.
+function buildFeedItems(episodes) {
+  const items = [];
+  let open = null;
+  for (const ep of episodes) {
+    if (ep.gt) {
+      items.push({ type: "hit", ep });
+      open = null;
+    } else if (open) {
+      open.n++;
+      open.end_s = ep.end_s;
+      open.maxRatio = Math.max(open.maxRatio, ep.ratio || 0);
+    } else {
+      open = { type: "bundle", n: 1, start_s: ep.start_s, end_s: ep.end_s, maxRatio: ep.ratio || 0 };
+      items.push(open);
+    }
+  }
+  return items;
+}
 const FEED_CAP = 40;
-function renderFeedCounter() {
-  const el = document.getElementById("feedCounter");
-  el.textContent = String(alarmCount);
-  el.classList.toggle("zero", alarmCount === 0);
-  document.getElementById("alarmCountVal").textContent = String(alarmCount);
+function renderCounters() {
+  document.getElementById("hitCountVal").textContent = String(hitCount);
+  document.getElementById("baselineCountVal").textContent = String(baselineCount);
+  const badge = document.getElementById("feedCounter");
+  badge.textContent = String(hitCount);
+  badge.title = `${hitCount} Protokoll-Treffer, ${baselineCount} Grundraten-Alarme (kalibrierte α=5%-Rate)`;
+  badge.classList.toggle("zero", hitCount === 0);
 }
 function resetFeedTo(t) {
   const epStarts = D.episodes.map(e => e.start_s);
   const count = bisectRight(epStarts, t);
   feedIndex = count;
-  alarmCount = count;
+  const upTo = D.episodes.slice(0, count);
+  hitCount = 0; baselineCount = 0;
+  for (const e of upTo) { if (e.gt) hitCount++; else baselineCount++; }
+
+  const allItems = buildFeedItems(upTo);
+  const shown = allItems.slice(-FEED_CAP);
   const list = document.getElementById("feedList");
   list.innerHTML = "";
-  const shown = D.episodes.slice(Math.max(0, count - FEED_CAP), count).reverse();
+  openBundle = null;
   if (!shown.length) {
     list.innerHTML = `<div class="feed-empty" id="feedEmpty">Noch keine Alarme in dieser Wiedergabe.</div>`;
   } else {
-    for (const ep of shown) list.insertAdjacentHTML("beforeend", feedCardHtml(ep));
+    // shown is oldest-first; prepending each in turn leaves the newest on top,
+    // matching the live (advanceFeed) insertion order.
+    for (const item of shown) {
+      const el = item.type === "hit" ? buildHitCardEl(item.ep) : buildBundleCardEl(item);
+      if (item.type === "bundle") item.el = el;
+      list.prepend(el);
+    }
+    const last = allItems[allItems.length - 1];
+    if (last && last.type === "bundle") openBundle = last; // still growable if playback continues forward
   }
-  renderFeedCounter();
+  renderCounters();
 }
 function advanceFeed(prevT, t) {
   const list = document.getElementById("feedList");
-  let appended = false;
+  let any = false;
   while (feedIndex < D.episodes.length && D.episodes[feedIndex].start_s <= t) {
+    const ep = D.episodes[feedIndex];
     const empty = document.getElementById("feedEmpty");
-    if (empty) empty.remove();
-    list.insertAdjacentHTML("afterbegin", feedCardHtml(D.episodes[feedIndex]));
-    feedIndex++; alarmCount++; appended = true;
+    if (ep.gt) {
+      hitCount++;
+      if (empty) empty.remove();
+      list.prepend(buildHitCardEl(ep));
+      openBundle = null;
+    } else {
+      baselineCount++;
+      if (openBundle) {
+        openBundle.n++;
+        openBundle.end_s = ep.end_s;
+        openBundle.maxRatio = Math.max(openBundle.maxRatio, ep.ratio || 0);
+        openBundle.el.textContent = formatBundleText(openBundle);
+      } else {
+        if (empty) empty.remove();
+        const b = { type: "bundle", n: 1, start_s: ep.start_s, end_s: ep.end_s, maxRatio: ep.ratio || 0 };
+        b.el = buildBundleCardEl(b);
+        list.prepend(b.el);
+        openBundle = b;
+      }
+    }
+    feedIndex++; any = true;
   }
-  while (list.children.length > FEED_CAP) list.removeChild(list.lastElementChild);
-  if (appended) renderFeedCounter();
+  while (list.children.length > FEED_CAP) {
+    const removed = list.lastElementChild;
+    if (openBundle && removed === openBundle.el) openBundle = null; // pathologically small FEED_CAP guard
+    list.removeChild(removed);
+  }
+  if (any) renderCounters();
 }
 
 /* ============================================================================
@@ -901,15 +1076,20 @@ function renderAll(t, prevT) {
   document.getElementById("thresholdVal").textContent = info.threshold != null ? info.threshold.toFixed(4) : "—";
   drawScoreChart(t);
 
+  // Feed first: feedIndex must already reflect time t before the lamp/schema
+  // logic below can ask "was the currently active alarm a protocol hit?" (Fix-1c
+  // reuses feedIndex -- the last-revealed episode -- rather than a second scan).
+  if (prevT === undefined || prevT === null || t < prevT) resetFeedTo(t);
+  else if (t > prevT) advanceFeed(prevT, t);
+
   const alarmingNow = !!pt[3] || (prevT !== undefined && prevT !== null && alarmInRangeCheck(prevT, t));
-  updateLamp(alarmingNow);
-  flashSchema(alarmingNow ? micGroupsFor() : []);
+  const curEp = feedIndex > 0 ? D.episodes[feedIndex - 1] : null;
+  const isHitAlarm = alarmingNow && !!curEp && !!curEp.gt && t < curEp.end_s + 2;
+  updateLamp(alarmingNow, isHitAlarm, curEp ? curEp.start_s : null);
+  flashSchema(alarmingNow && isHitAlarm ? micGroupsFor() : []);
 
   renderTimelinePlayhead(t);
   updateChipHighlight();
-
-  if (prevT === undefined || prevT === null || t < prevT) resetFeedTo(t);
-  else if (t > prevT) advanceFeed(prevT, t);
 }
 function micGroupsFor() {
   // audio-beats is a mic-domain score (module docstring: all 6 clips are cut from
@@ -1062,7 +1242,7 @@ function loadSession(run) {
   buildSchema();
   buildTimeline();
   buildChipStrip();
-  feedIndex = 0; alarmCount = 0;
+  feedIndex = 0; hitCount = 0; baselineCount = 0; openBundle = null; lastPulsedEpisodeKey = null;
 
   const start = sessionClips.length ? sessionClips[0].start_s : 0;
   setSimT(start);
