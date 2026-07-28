@@ -1,9 +1,11 @@
-"""Build real-audio assets for the interactive live demo (`docs/demo/demo_live.html`):
-short WAV clips cut from the 080726 induced-Schonhammer-strike campaign day, plus the
+"""Build real-audio assets for the interactive live demo (`docs/demo/demo_live.html`)
+and the single-screen control-room dashboard (`docs/demo/demo_dashboard.html`): short
+WAV clips cut from the 080726 induced-Schonhammer-strike campaign day, plus the
 manifest describing them, plus (second/third subcommand) the pipeline-overview
-figures and the self-contained demo page itself.
+figures and the self-contained demo page itself, plus (fourth subcommand) the
+dashboard's own once-calibrated state/score/alarm data export.
 
-Three subcommands:
+Four subcommands:
 
     extract-clips     Read real 080726 data (via the existing `rowii.io.dataset.
                        discover`/`rowii.io.gantner.read_gantner` seams) and write
@@ -22,6 +24,16 @@ Three subcommands:
                        from `docs/demo/assets/` alone (`render-figures`' PNG output
                        included, since those are themselves tracked files under
                        `assets/`, not a live real-data read).
+    build-dashboard   Template-inject BOTH 080726 sessions' once-calibrated state/
+                       score/alarm timelines (`results/step2/once-calibrated/`, D2/
+                       D3c's `state_name`/`near_transition` columns included),
+                       ground-truth strike events (`docs/groundtruth/`), and the
+                       SAME already-extracted clips into `docs/demo/
+                       demo_dashboard_template.html`, producing `docs/demo/
+                       demo_dashboard.html` (see `build_dashboard_data`). Also pure
+                       file/artifact assembly -- reads already-computed CSV/parquet/
+                       markdown reports and already-extracted WAVs only, no
+                       `ROWII_DATA_ROOT`, no model run.
 
 Clip selection (six clips total):
 
@@ -80,7 +92,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -118,6 +130,54 @@ PU_SEGMENTS_CSV = (
 )
 PU_EVENTS_CSV = REPO_ROOT / "docs" / "groundtruth" / "080726_events_pu.csv"
 ST_EVENTS_CSV = REPO_ROOT / "docs" / "groundtruth" / "080726_events_st.csv"
+
+ONCE_CALIBRATED_DIR = REPO_ROOT / "results" / "step2" / "once-calibrated"
+"""Package-9's "run once per instrumentation era, decide frozen-vs-recalibrate per
+sentinel verdict" replay output (`scripts/run_once_calibrated.py`) -- the ONLY
+existing artifact family that carries the two fields the control-room dashboard's
+Zustand tile needs natively (`state_name`, `near_transition`, both `scripts/
+monitor.py` D2/D3c columns of `alarms.parquet`), so `build_dashboard_data` reads
+its per-run `monitor/<run>/<mode>/` outputs directly rather than the older,
+KMeans-clustered `results/pillar3/` family `render_figures`/`extract_clips` above
+read from (that family predates package-9's named states and has no `state_name`/
+`near_transition` column at all)."""
+DASHBOARD_REPRESENTATION = "audio-beats"
+"""Mic-only (BEATs-embedding) scorer -- matches this module's own six demo clips,
+all cut from the `RAWGeneratorMic__0` mono stream (module docstring), so the score
+track the dashboard plots is scoring the SAME signal the live waveform/FFT panels
+visualize."""
+DASHBOARD_VIB_REPRESENTATION = "vibration"
+"""Read ONLY for the Alarm-Feed's "welcher Stream" cross-check (`_load_alarm_intervals`
++ `has_collision` in `_load_session`) -- an independent accelerometer-only scorer
+run against the SAME grid, never mixed into the primary (mic) score/alarm/state
+trace itself."""
+DASHBOARD_THRESHOLD_MODE = "recalibrate"
+"""Of once-calibrated's two threshold arms (`frozen` keeps the very first
+calibration forever; `recalibrate` refits thresholds -- never the state/score
+references themselves -- on each run's own calibration-side windows), `recalibrate`
+is `audio-beats.json`'s own "package-2 cross-day evidence: the only recipe whose
+realized false-alarm rate stayed at its nominal alpha" -- the operationally
+recommended regime, not `frozen`'s deliberately-naive stress test (which alarms on
+most of a held-out day almost by design, to prove the sentinel's drift detection
+works; not a representative "how the system runs" demo)."""
+DASHBOARD_EVENT_TOLERANCE_S = 5.0
+"""Matches `scripts/eval_events.py`'s own `tolerance_s` (see any `event_notes.md`
+"## Inputs" section) -- an alarm episode is tagged with a ground-truth strike using
+the EXACT SAME pad the event-level evaluation already scored these runs against,
+not a dashboard-invented number."""
+_SESSION_LABEL_DE = {
+    ST_RUN_NAME: "080726 – Stillstand, mit Schonhammer-Schlägen",
+    PU_RUN_NAME: "080726 – Pumpversuch, mit Schonhammer-Schlägen",
+}
+DASHBOARD_DEFAULT_SESSION = ST_RUN_NAME
+"""`080726-st_strikes` opens first: a compact ~24 min session whose own two demo
+clips (module docstring's six-clip list) are BOTH induced strikes, so pressing the
+main Play button starts real audio (and, within that first clip's own 10 s, a real
+alarm) almost immediately -- `080726-pu_strikes`, in contrast, is a ~3.6 h day whose
+own first clip (a normal-state one) sits ~29 min in. Both sessions stay one click
+away via the session selector."""
+DEFAULT_DASHBOARD_TEMPLATE = REPO_ROOT / "docs" / "demo" / "demo_dashboard_template.html"
+DEFAULT_DASHBOARD_OUT = REPO_ROOT / "docs" / "demo" / "demo_dashboard.html"
 
 CLIP_DURATION_S = 10.0
 COLLISION_PAD_S = 10.0
@@ -1427,6 +1487,286 @@ def build_html(
 
 
 # ---------------------------------------------------------------------------
+# Control-room dashboard assembly (build-dashboard) -- real results/ CSV+parquet+
+# markdown reads (once-calibrated monitor/eval_events reports, docs/groundtruth
+# events) plus the already-extracted docs/demo/assets/ clips; never touches
+# ROWII_DATA_ROOT or a model. Mirrors build_html's own "real artifacts in, one
+# self-contained HTML out" shape, so the two subcommands stay symmetric, but reads
+# a different (newer, package-9) artifact family -- see ONCE_CALIBRATED_DIR's own
+# docstring for why. Not unit-tested (real CSV/parquet/markdown disk reads,
+# `json.dumps` assembly) -- the DATA feeding it (`parse_state_table`,
+# `parse_event_summary_table`, `matching_event_kind`, `state_name_de`) is the
+# separately-tested part, same pure/IO-touching split as this module's other two
+# subcommands (module docstring).
+# ---------------------------------------------------------------------------
+
+
+def _monitor_dir(run: str, representation: str, mode: str) -> Path:
+    return ONCE_CALIBRATED_DIR / representation / "monitor" / run / mode
+
+
+def _eval_events_dir(run: str, representation: str, mode: str) -> Path:
+    return ONCE_CALIBRATED_DIR / representation / "eval_events" / run / mode
+
+
+def _to_pydatetime_quiet(ts: pd.Timestamp) -> datetime:
+    """`ts.to_pydatetime()`, silencing pandas' "Discarding nonzero nanoseconds"
+    UserWarning -- every real timestamp this dashboard parses carries a fixed
+    sub-microsecond DAQ offset (e.g. `...11:46:03.410000115+00:00`); `datetime` only
+    has microsecond resolution, so the truncation is expected and harmless
+    (negligible next to this dashboard's 1 s window grid). Same rationale as
+    `_load_segments_csv`'s own local suppression above, applied per call site here
+    instead of one large indented block (this module's several dashboard call
+    sites each convert only a handful of timestamps, not a bulk column)."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Discarding nonzero nanoseconds", category=UserWarning
+        )
+        return cast(datetime, ts.to_pydatetime())
+
+
+def _load_alarm_intervals(alarm_segments_csv: Path) -> list[tuple[datetime, datetime]]:
+    """A `monitor.py`-written `alarm_segments.csv` (`start_utc,end_utc,duration_s`),
+    parsed into `(start, end)` UTC-datetime pairs -- the shape `has_collision`/
+    `matching_event_kind` (this module's own pure helpers) both consume, reused
+    here for the Alarm-Feed's cross-representation "did vibration ALSO alarm near
+    this episode" check (`_load_session`)."""
+    df = pd.read_csv(alarm_segments_csv)
+    starts = pd.to_datetime(df["start_utc"], utc=True)
+    ends = pd.to_datetime(df["end_utc"], utc=True)
+    return [
+        (_to_pydatetime_quiet(s), _to_pydatetime_quiet(e))
+        for s, e in zip(starts, ends, strict=True)
+    ]
+
+
+def _load_session(run: str, events_csv: Path) -> dict[str, Any]:
+    """One `sessions[<run>]` entry of the dashboard payload: the once-calibrated/
+    `DASHBOARD_THRESHOLD_MODE` state timeline, per-window score/alarm/near-
+    transition trace, ground-truth strike events, and per-episode Alarm-Feed cards
+    for *run* -- everything the control-room UI needs to replay this ONE session,
+    time-relative to that session's own first window (`t0_utc`, matching
+    `demo_live_template.html`'s existing `t0`/`t_s` convention)."""
+    mdir = _monitor_dir(run, DASHBOARD_REPRESENTATION, DASHBOARD_THRESHOLD_MODE)
+
+    segments_df = pd.read_csv(mdir / "segments.csv")
+    segments_df["start_utc"] = pd.to_datetime(segments_df["start_utc"], utc=True)
+    segments_df["end_utc"] = pd.to_datetime(segments_df["end_utc"], utc=True)
+    t0 = segments_df["start_utc"].min()
+    t0_ns = int(t0.value)
+    duration_s = (int(segments_df["end_utc"].max().value) - t0_ns) / 1e9
+
+    state_table = parse_state_table((mdir / "monitor_notes.md").read_text(encoding="utf-8"))
+
+    alarms_df = pd.read_parquet(mdir / "alarms.parquet")
+    scored = alarms_df.loc[alarms_df["role"] == "scored"].sort_values("t_utc_ns")
+    if scored.empty:
+        raise ValueError(f"{run}: no scored windows in {mdir / 'alarms.parquet'}")
+
+    states: dict[str, Any] = {}
+    for raw_state_id in sorted(scored["state"].unique().tolist()):
+        state_id = int(raw_state_id)
+        info = state_table.get(state_id)
+        if info is None:
+            raise ValueError(
+                f"{run}: state {state_id} has scored windows but no row in "
+                f"{mdir / 'monitor_notes.md'}'s per-state table"
+            )
+        threshold = info["threshold"]
+        states[str(state_id)] = {
+            "name": info["name"],
+            "name_de": state_name_de(info["name"]),
+            "threshold": (
+                None if threshold is None or math.isinf(threshold) else round(threshold, 6)
+            ),
+            "low_confidence": info["low_confidence"],
+        }
+
+    segments = [
+        {
+            "start_s": round((int(row.start_utc.value) - t0_ns) / 1e9, 3),
+            "end_s": round((int(row.end_utc.value) - t0_ns) / 1e9, 3),
+            "state": int(row.cluster_id),
+        }
+        for row in segments_df.itertuples()
+    ]
+
+    trace = [
+        [
+            round((int(t_ns) - t0_ns) / 1e9, 3),
+            round(float(score), 6),
+            int(state),
+            bool(alarm),
+            round(float(p_value), 6),
+            bool(near_transition),
+        ]
+        for t_ns, score, state, alarm, p_value, near_transition in zip(
+            scored["t_utc_ns"],
+            scored["score"],
+            scored["state"],
+            scored["alarm"],
+            scored["p_value"],
+            scored["near_transition"],
+            strict=True,
+        )
+    ]
+
+    events_df = _load_events_csv(events_csv)
+    events = [
+        {
+            "start_s": round((int(row.start_utc.value) - t0_ns) / 1e9, 3),
+            "end_s": round((int(row.end_utc.value) - t0_ns) / 1e9, 3),
+            "kind": str(row.kind),
+        }
+        for row in events_df.itertuples()
+    ]
+    event_tuples = [
+        (_to_pydatetime_quiet(row.start_utc), _to_pydatetime_quiet(row.end_utc), str(row.kind))
+        for row in events_df.itertuples()
+    ]
+
+    vib_dir = _monitor_dir(run, DASHBOARD_VIB_REPRESENTATION, DASHBOARD_THRESHOLD_MODE)
+    vib_intervals = _load_alarm_intervals(vib_dir / "alarm_segments.csv")
+
+    alarm_seg_df = pd.read_csv(mdir / "alarm_segments.csv")
+    alarm_seg_df["start_utc"] = pd.to_datetime(alarm_seg_df["start_utc"], utc=True)
+    alarm_seg_df["end_utc"] = pd.to_datetime(alarm_seg_df["end_utc"], utc=True)
+
+    scored_t_ns = scored["t_utc_ns"].to_numpy()
+    scored_score = scored["score"].to_numpy()
+    scored_p = scored["p_value"].to_numpy()
+    scored_state = scored["state"].to_numpy()
+    scored_near = scored["near_transition"].to_numpy()
+
+    episodes = []
+    for row in alarm_seg_df.itertuples():
+        start_ns = int(row.start_utc.value)
+        end_ns = int(row.end_utc.value)
+        # Half-open [start_ns, end_ns) over WINDOW STARTS -- same convention
+        # `alarm_segments.csv`'s own start/end already encode (module docstring's
+        # `_extract_mono_clip`/`utc_window_to_sample_range` note the same "window
+        # STARTS" convention elsewhere in this module).
+        lo = int(np.searchsorted(scored_t_ns, start_ns, side="left"))
+        hi = int(np.searchsorted(scored_t_ns, end_ns, side="left"))
+        if hi <= lo:
+            raise ValueError(
+                f"{run}: alarm episode [{row.start_utc}, {row.end_utc}) matches no "
+                f"scored window -- alarm_segments.csv and alarms.parquet should "
+                f"always agree (same monitor.py run)"
+            )
+        window_states = scored_state[lo:hi]
+        state_id = int(pd.Series(window_states).mode().iloc[0])
+        threshold = states.get(str(state_id), {}).get("threshold")
+        peak_score = float(scored_score[lo:hi].max())
+        ep_start_dt = _to_pydatetime_quiet(row.start_utc)
+        ep_end_dt = _to_pydatetime_quiet(row.end_utc)
+        episodes.append(
+            {
+                "start_s": round((start_ns - t0_ns) / 1e9, 3),
+                "end_s": round((end_ns - t0_ns) / 1e9, 3),
+                "n": int(hi - lo),
+                "state": state_id,
+                "peak_score": round(peak_score, 6),
+                "min_p": round(float(scored_p[lo:hi].min()), 6),
+                "threshold": threshold,
+                "ratio": round(peak_score / threshold, 2) if threshold else None,
+                "near_transition": bool(scored_near[lo:hi].any()),
+                "gt": matching_event_kind(
+                    ep_start_dt, ep_end_dt, event_tuples, DASHBOARD_EVENT_TOLERANCE_S
+                ),
+                "vib_coincident": has_collision(ep_start_dt, ep_end_dt, vib_intervals, pad_s=0.0),
+            }
+        )
+
+    event_notes_path = (
+        _eval_events_dir(run, DASHBOARD_REPRESENTATION, DASHBOARD_THRESHOLD_MODE) / "event_notes.md"
+    )
+    event_summary = parse_event_summary_table(event_notes_path.read_text(encoding="utf-8"))
+
+    return {
+        "run": run,
+        "label": _SESSION_LABEL_DE[run],
+        "t0_utc": _to_pydatetime_quiet(t0).isoformat(),
+        "duration_s": round(duration_s, 3),
+        "representation": DASHBOARD_REPRESENTATION,
+        "threshold_mode": DASHBOARD_THRESHOLD_MODE,
+        "states": states,
+        "segments": segments,
+        "trace": trace,
+        "events": events,
+        "episodes": episodes,
+        "event_summary": event_summary,
+    }
+
+
+def build_dashboard_data(assets_dir: Path) -> dict[str, Any]:
+    """The full control-room dashboard payload: both sessions (`_load_session`) plus
+    every clip in *assets_dir*'s `manifest.json` (module docstring's existing six --
+    reused byte-for-byte as WAV+sparkline, never re-extracted), each clip's
+    `start_s` now expressed relative to ITS OWN session's `t0_utc` so the replay
+    bar can seek any session's playhead straight to it.
+    """
+    sessions = {
+        run: _load_session(run, events_csv)
+        for run, events_csv in ((ST_RUN_NAME, ST_EVENTS_CSV), (PU_RUN_NAME, PU_EVENTS_CSV))
+    }
+
+    manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
+    clips = []
+    for clip in manifest["clips"]:
+        run = str(clip["source_run"])
+        if run not in sessions:
+            raise ValueError(f"clip {clip['file']!r}: unknown source_run {run!r}")
+        wav_path = assets_dir / str(clip["file"])
+        wav_bytes = wav_path.read_bytes()
+        _rate, pcm = wavfile.read(wav_path)
+        start_utc_dt = datetime.fromisoformat(str(clip["start_utc"]))
+        t0_dt = datetime.fromisoformat(sessions[run]["t0_utc"])
+        clips.append(
+            {
+                "file": clip["file"],
+                "kind": clip["kind"],
+                "label": clip["label"],
+                "description": clip["description"],
+                "run": run,
+                "start_s": round((start_utc_dt - t0_dt).total_seconds(), 3),
+                "duration_s": clip["duration_s"],
+                "audio_b64": base64.b64encode(wav_bytes).decode("ascii"),
+                "sparkline_b64": _render_sparkline_png_base64(pcm),
+            }
+        )
+    clips.sort(key=lambda c: (str(c["run"]), float(c["start_s"])))
+
+    return {"sessions": sessions, "clips": clips, "default_session": DASHBOARD_DEFAULT_SESSION}
+
+
+def build_dashboard(assets_dir: Path, template_path: Path, out_path: Path) -> Path:
+    """Render `demo_dashboard.html` from *template_path* by injecting
+    `build_dashboard_data`'s payload as one JSON blob -- reproducible from
+    `docs/demo/assets/` + the once-calibrated/groundtruth artifacts alone, exactly
+    like `build_html`'s own contract (this module's other HTML-assembling
+    subcommand)."""
+    data = build_dashboard_data(assets_dir)
+    payload = json.dumps(data, ensure_ascii=False)
+
+    template = template_path.read_text(encoding="utf-8")
+    placeholder = "__DASHBOARD_DATA__"
+    if placeholder not in template:
+        raise ValueError(f"{template_path} is missing placeholder {placeholder}")
+    rendered = template.replace(placeholder, payload)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(rendered, encoding="utf-8")
+    logger.info(
+        "make_demo_assets: wrote %s (%d session(s), %d clip(s))",
+        out_path,
+        len(data["sessions"]),
+        len(data["clips"]),
+    )
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1506,6 +1846,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=DEFAULT_OUT_HTML,
         help=f"Output HTML path (default: {DEFAULT_OUT_HTML}).",
     )
+
+    dashboard = sub.add_parser(
+        "build-dashboard",
+        help="Render demo_dashboard.html (control-room view) from the once-calibrated "
+        "monitor reports + groundtruth events + the existing demo clips.",
+    )
+    dashboard.add_argument(
+        "--assets-dir", type=Path, default=DEFAULT_ASSETS_DIR,
+        help=f"Directory holding the WAVs + manifest.json (default: {DEFAULT_ASSETS_DIR}).",
+    )
+    dashboard.add_argument(
+        "--template", type=Path, default=DEFAULT_DASHBOARD_TEMPLATE,
+        help=f"HTML template with a __DASHBOARD_DATA__ placeholder (default: "
+             f"{DEFAULT_DASHBOARD_TEMPLATE}).",
+    )
+    dashboard.add_argument(
+        "--out", type=Path, default=DEFAULT_DASHBOARD_OUT,
+        help=f"Output HTML path (default: {DEFAULT_DASHBOARD_OUT}).",
+    )
     return parser
 
 
@@ -1525,6 +1884,11 @@ def main(argv: list[str] | None = None) -> int:
             args.assets_dir, args.fusion_cache, args.source_demo, args.state_clip, args.out_dir
         )
         print(f"make_demo_assets: wrote {len(paths)} figure(s) to {args.out_dir}")
+        return 0
+
+    if args.command == "build-dashboard":
+        out_path = build_dashboard(args.assets_dir, args.template, args.out)
+        print(f"make_demo_assets: wrote {out_path}")
         return 0
 
     out_path = build_html(
