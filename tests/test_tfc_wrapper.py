@@ -109,8 +109,7 @@ def test_checkpoint_round_trip_transform_is_deterministic(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# load_tfc_model geometry guard (T1-review Medium, closed by Task 3 per
-# orchestrator resolution 3): a checkpoint whose cfg.embed_dim/sample_rate_hz/
+# load_tfc_model geometry guard: a checkpoint whose cfg.embed_dim/sample_rate_hz/
 # n_samples disagree with TfcFeaturizer's hardcoded 256-wide/8 kHz assumptions
 # must be rejected loudly at load time, naming both the expected and actual
 # value, instead of silently mis-shaping every downstream embedding.

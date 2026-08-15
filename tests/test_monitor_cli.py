@@ -1,6 +1,4 @@
-"""Tests for `scripts/monitor.py` (Step-2 package-6 Task 2, design spec
-`docs/superpowers/specs/2026-07-16-step2-package6-runtime-pillar3-design.md` D2 +
-amendment A1.3): CLI-level tests against a monkeypatched `discover`/`load_config`/
+"""Tests for `scripts/monitor.py`: CLI-level tests against a monkeypatched `discover`/`load_config`/
 `prepare_run` seam feeding hand-built `PreparedRun`s directly (the established
 `tests/test_apply_detector.py` style), with a REAL `MonitorSnapshot` built through
 `rowii.runtime.snapshot.fit_snapshot`/`save_snapshot` into tmp_path -- the monitor
@@ -526,14 +524,14 @@ def test_help_documents_every_flag(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T2-review hardening: --alpha coverage (mutation gap) + CLI exit-2 paths
+# --alpha coverage (mutation gap) + CLI exit-2 paths
 # ---------------------------------------------------------------------------
 
 
 def test_alpha_override_changes_recalibrated_threshold(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Kills the T2 review's surviving mutant (hardcoded alpha in the
+    """Kills a surviving mutant (hardcoded alpha in the
     recalibrate path): the applied per-state threshold must be bitwise
     `calibrate(cal_scores, 0.30)`, computed independently here from the
     parquet's own consumed-side scores -- not the default-alpha threshold."""
@@ -981,7 +979,7 @@ def test_help_documents_level_recal(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T7-review carry-over (T8 fix-loop item 6): equivalence tripwire pinning
+# Equivalence tripwire pinning
 # monitor's own `_first_n_minutes_rows` to `rowii.anomaly.normalize.
 # fit_session_stats`'s window-membership rule -- mirrors
 # `tests/test_step2_pooled_cli.py`'s `test_first_n_minutes_rows_matches_
@@ -1286,7 +1284,7 @@ def test_eval_events_consumes_rolling_alarms_parquet(
 def test_all_invalid_run_exits_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """T4-review hardening: a monitored run whose valid_mask is all False must be
+    """A monitored run whose valid_mask is all False must be
     refused with a clean exit 2 naming the zero-valid-windows cause BEFORE the
     detector apply (previously a raw sklearn ValueError), writing nothing."""
     import monitor
@@ -1367,12 +1365,12 @@ def test_help_documents_rolling_flags(capsys: pytest.CaptureFixture[str]) -> Non
 
 
 # ---------------------------------------------------------------------------
-# T5-review hardening: boundary unit pin, rolling-off-norm warning, branches
+# Boundary unit pin, rolling-off-norm warning, branches
 # ---------------------------------------------------------------------------
 
 
 def test_trailing_bounds_upper_edge_exclusive_lower_inclusive() -> None:
-    """T5-review finding 1: cal/scoring segment-disjointness makes cal_t ==
+    """cal/scoring segment-disjointness makes cal_t ==
     scr_t unreachable through the CLI, so the upper-edge exclusivity had NO
     test (the side="right" mutation survived the suite). Pin both edges on
     synthetic arrays directly."""
@@ -1394,7 +1392,7 @@ def test_trailing_bounds_upper_edge_exclusive_lower_inclusive() -> None:
 def test_rolling_without_session_norm_warns_and_fallback_matches_frozen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """T5-review finding 2: the stats-bearing-snapshot warning must name
+    """The stats-bearing-snapshot warning must name
     rolling's fallback branch, and that branch must inherit frozen mode's
     verdicts bitwise (probed correct by the review; pinned here)."""
     import logging
@@ -1437,7 +1435,7 @@ def test_rolling_without_session_norm_warns_and_fallback_matches_frozen(
 def test_rolling_zero_calibration_state_all_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T5-review finding 3a: a snapshot-known state with zero calibration-side
+    """A snapshot-known state with zero calibration-side
     windows on the monitored run takes the flagged fallback for ALL its scored
     windows in rolling mode (the designed A3.2 behavior)."""
     import monitor

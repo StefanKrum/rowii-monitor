@@ -61,7 +61,7 @@ MACHINE_HZ: dict[str, float] = {
 }
 
 # Standard octave-band center frequencies, ascending. AudioFeaturizer uses the
-# full list; VibFeaturizer truncates to centers <= 4000 Hz per the brief.
+# full list; VibFeaturizer truncates to centers <= 4000 Hz by design.
 _OCTAVE_CENTERS_HZ: tuple[float, ...] = (
     31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0,
 )

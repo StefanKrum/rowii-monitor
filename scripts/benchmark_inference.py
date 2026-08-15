@@ -1,11 +1,11 @@
-"""End-to-end inference benchmark harness (Step-2 package-5 spec D7).
+"""End-to-end inference benchmark harness.
 
-Measures, per featurizer configuration, what the design chapter's deployment
-section demands be measured TOGETHER: model size on disk, parameter count, peak
+Measures, per featurizer configuration, what a deployment budget needs
+measured TOGETHER: model size on disk, parameter count, peak
 RSS delta, and per-window wall latency at several batch sizes -- END-TO-END from
 raw 50 kHz windows, i.e. INCLUDING each featurizer's own preprocessing
 (resampling / fbank / log-mel), because "the preprocessing cost of feature
-extraction belongs in the budget alongside inference" (design chapter,
+extraction belongs in the budget alongside inference" (this evaluation's own
 Deployment and compactness).
 
 Configurations map onto the production featurizers via

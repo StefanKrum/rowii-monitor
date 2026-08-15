@@ -1,11 +1,9 @@
-"""Step-2 Package 8: per-mode model bank Step-2 CHAIN PROBE (design spec
-`docs/superpowers/specs/2026-07-21-step2-package8-modebank-recal-explain.md` §3.D1
-("Plus one Step-2 chain probe: per-mode references built from bank labels ... vs the
-P7 detected-state chain -- does better state assignment translate into better FAR
-control?"), plan `docs/superpowers/plans/2026-07-21-step2-package8-modebank-explain.md`
-Task 4): fits Stefan's per-mode model bank (`rowii.state.modebank.ModeBank`) on a pool
-of `--fit-runs`' SCADA ground-truth modes (`scripts/run_modebank.py`'s own T2/T3
-machinery, duplicated here -- script-sibling rule), then runs a Step-2 kNN-style FAR
+"""Step-2 mode-bank CHAIN PROBE ("per-mode references built from bank labels
+... vs the pooled-clusterer detected-state chain -- does better state
+assignment translate into better FAR control?"): fits Stefan's per-mode model
+bank (`rowii.state.modebank.ModeBank`) on a pool
+of `--fit-runs`' SCADA ground-truth modes (`scripts/run_modebank.py`'s own fit/
+evaluate machinery, duplicated here -- script-sibling rule), then runs a Step-2 kNN-style FAR
 chain CONDITIONED ON THE BANK'S OWN LABEL-FREE MODE ASSIGNMENT: per-mode references on
 the pooled fit side, per-mode conformal thresholds on the pooled conformal side, FAR
 on the held-out test run's top-split SCORING side.

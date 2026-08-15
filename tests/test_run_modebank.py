@@ -1,11 +1,10 @@
-"""CLI tests for scripts/run_modebank.py (Package-8 D1): monkeypatched prepare/discover
+"""CLI tests for scripts/run_modebank.py: monkeypatched prepare/discover
 seams with hand-built PreparedRuns + a fake per-run GT map, verifying artifact shapes,
 the {unknown,transition} ARI mask, the supervised/unsupervised tags, --smooth =
-duration-filter-only (A1.3), the A3.8-style day-group/duplicate/pool-member guards, and
-the mandatory low_confidence_modes surfacing (adversarial-review binding, T2 finding 1:
-a low_confidence bank member's +inf threshold can never contribute a no_mode_fits
-rejection, so the rate under-fires for it -- both the written metrics.json and a WARNING
-line must name it).
+duration-filter-only, the day-group/duplicate/pool-member guards, and
+the mandatory low_confidence_modes surfacing (a low_confidence bank member's +inf threshold can
+never contribute a no_mode_fits rejection, so the rate under-fires for it -- both the written
+metrics.json and a WARNING line must name it).
 
 Style-2 fixtures throughout (no synthetic Gantner trees), mirroring
 `tests/test_step2_pooled_cli.py`'s established monkeypatch seam (`discover`/
@@ -148,7 +147,7 @@ def test_run_modebank_writes_metrics_with_supervised_and_unsupervised_tags(
     assert 0.0 <= metrics["bank"]["ari"] <= 1.0
     assert "accuracy" in metrics["bank"] and "accuracy" not in metrics["p7_pooled"]
     assert 0.0 <= metrics["bank"]["no_mode_fits_rate"] <= 1.0
-    # T3-review LOW finding 2: n_valid documents no_mode_fits_rate's OWN
+    # n_valid documents no_mode_fits_rate's OWN
     # denominator (every valid window, GT-independent) -- distinct from
     # ari/accuracy's n_masked denominator above (module docstring's
     # raw/smoothed, masked/unmasked coexistence note).
@@ -201,7 +200,7 @@ def test_smooth_uses_duration_filter_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. MANDATORY ADDITION (adversarial-review binding, T2 finding 1):
+# 4. MANDATORY ADDITION:
 #    low_confidence_modes surfaced in the metrics dict + a WARNING is logged,
 #    pinned with a tiny-calibration fixture (mirrors tests/test_modebank.py's
 #    own low-confidence construction).
@@ -333,7 +332,7 @@ def test_day_group_overlap_between_fit_and_test_exits_2(tmp_path, monkeypatch, c
 
 
 # ---------------------------------------------------------------------------
-# 7. Test-run feature-contract guard (T3-review MEDIUM finding 1, mirrors
+# 7. Test-run feature-contract guard (mirrors
 #    scripts/run_step2.py's `_run_cross_day_pooled` test-run-vs-fit-pool
 #    geometry guard): checked against `list(prepared_test.feature_names) !=
 #    feature_names` -- the pool's own contract -- so it catches BOTH a width
@@ -397,7 +396,7 @@ def test_test_run_feature_width_mismatch_exits_2_not_traceback(
 
 
 # ---------------------------------------------------------------------------
-# 8. Drift tripwire (T3-review LOW finding 3): this CLI's duplicated
+# 8. Drift tripwire: this CLI's duplicated
 #    _EXCLUDED_GT (module docstring: "single local source of truth ... if
 #    ModeBank's own set ever changes, this constant's docstring is the flag to
 #    update it too") must never quietly diverge from modebank's own.

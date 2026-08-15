@@ -1,8 +1,5 @@
 """`MonitorSnapshot`: one pickle-free artifact bundling everything the `monitor` CLI
-needs -- fitted state detector + per-state scoring references + conformal thresholds
-(Step-2 package-6 design spec `docs/superpowers/specs/2026-07-16-step2-package6-
-runtime-pillar3-design.md` D1 + amendment A1, plan `docs/superpowers/plans/
-2026-07-16-step2-package6-runtime-pillar3.md` Task 1).
+needs -- fitted state detector + per-state scoring references + conformal thresholds.
 
 **Why numpy-only, `allow_pickle=False` everywhere.** The snapshot is the one artifact
 in this repo designed to be moved between machines and loaded months later at the
@@ -600,10 +597,9 @@ def fit_snapshot_from_parts(
     state_names: dict[int, str] | None = None,
 ) -> MonitorSnapshot:
     """Assemble a `MonitorSnapshot` from ALREADY-COMPUTED parts -- the pooled
-    counterpart to `fit_snapshot` (Step-2 package-7 spec `docs/superpowers/specs/
-    2026-07-18-step2-package7-robustness-design.md` A3.11, plan Task 3; the
-    `session_stats` kwarg is Task 4's D3/A3.5 extension; the `level_recal_medians`
-    kwarg is package-8 Task 7's D2/A1.4/A1.10 extension; the `state_names` kwarg
+    counterpart to `fit_snapshot`; the
+    `session_stats` kwarg is a later extension; the `level_recal_medians`
+    kwarg is a later extension too; the `state_names` kwarg
     is package-9 Task 2's D2/A1.8 extension).
 
     `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
@@ -1033,8 +1029,7 @@ def load_snapshot(path: Path) -> MonitorSnapshot:
         except KeyError as exc:
             # A truncated/partially-transferred npz (a realistic plant failure
             # mode) must fail with the same snapshot-level error type as every
-            # other format problem, not a bare numpy KeyError (final T1-review
-            # polish item).
+            # other format problem, not a bare numpy KeyError.
             raise ValueError(
                 f"snapshot {path} is corrupt or truncated: member {exc} named by "
                 "the meta label list is missing from the archive"

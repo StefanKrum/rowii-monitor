@@ -1,5 +1,4 @@
-"""Candidate-overlap analysis CLI (Task 7, package-2 design spec `docs/superpowers/
-specs/2026-07-15-step2-scarcity-crossday-beats-design.md` D4): do two Step-2 sweep
+"""Candidate-overlap analysis CLI: do two Step-2 sweep
 combos of the same run -- typically a BEATs variant and a handcrafted variant --
 flag the SAME moments in time?
 

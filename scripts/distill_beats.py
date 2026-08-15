@@ -1,4 +1,4 @@
-"""Knowledge-distillation CLI (Step-2 package-5 spec D5, Task 4): trains a
+"""Knowledge-distillation CLI: trains a
 compact CNN student (`rowii.adapt.student.StudentConfig`/
 `rowii.adapt._student_model._StudentNet`) to regress the frozen BEATs teacher's
 768-d embedding (the PRIMARY-mic column slice of the audio-beats cache, which
@@ -23,15 +23,13 @@ e.g. `student_<a>+<b>.pt`) + a sidecar `<same-stem>.json`. Both caches for
 every named run must already be warm (`scripts/warm_cache.py --runs <name>
 --variants audio-beats logmel`).
 
-Multi-run pooling (Step-2 package-7 Task 8, spec D6 as amended by A3.11:
-`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md`):
-`--runs a,b,c` (mutually exclusive with `--run`) applies the single-run
-recipe PER RUN -- both caches loaded cache-only, `_check_cache_alignment`,
-`_select_calibration_windows` on that run's own top split -- then STACKS the
-selected calibration-side rows across runs (student inputs and teacher
-primary-mic slices alike, in `--runs` order) and trains ONE student on the
-pooled matrix. The sidecar records the runs list and per-run calibration-
-window counts (A3.11); the single-run `--run` path is untouched.
+Multi-run pooling: `--runs a,b,c` (mutually exclusive with `--run`) applies
+the single-run recipe PER RUN -- both caches loaded cache-only,
+`_check_cache_alignment`, `_select_calibration_windows` on that run's own top
+split -- then STACKS the selected calibration-side rows across runs (student
+inputs and teacher primary-mic slices alike, in `--runs` order) and trains
+ONE student on the pooled matrix. The sidecar records the runs list and
+per-run calibration-window counts; the single-run `--run` path is untouched.
 
 ## Cache loading + grid alignment
 
@@ -137,7 +135,7 @@ calibration/scoring split fraction every Step-2 sweep uses (module docstring's
 leakage-rule section)."""
 
 def _leakage_note(seed: int) -> str:
-    """The sidecar leakage note, SEED-CONDITIONAL (T8-review HIGH: the previous
+    """The sidecar leakage note, SEED-CONDITIONAL (the previous
     static string claimed 'the SAME top-level split every Step-2 within-day
     sweep uses' unconditionally -- true at seed=7, FALSE at any other seed,
     yet persisted verbatim into provenance). At the canonical seed the claim
@@ -648,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
             "distill_beats: --seed %d != 7 changes the per-run calibration/scoring "
             "SPLIT -- the checkpoint's leakage guarantee holds only against a "
             "seed-%d evaluation, NOT the canonical seed-7 Step-2 sweeps; the "
-            "sidecar note carries this caveat (T8-review seed-tension resolution)",
+            "sidecar note carries this caveat",
             args.seed, args.seed,
         )
 

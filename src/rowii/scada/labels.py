@@ -1,9 +1,8 @@
 """Rule-based operating-state ground truth derived from Betriebsdaten (SCADA) channels.
 
 SCADA is never fed to the detector at run time; this module only produces the labels used
-to evaluate unsupervised state detection (spec: docs/superpowers/specs/2026-07-05-step1-
-state-detection-design.md, extended by docs/superpowers/specs/2026-07-07-step1-multiday-
-phase-shifter-addendum.md §3 for the "phase-shifter" state). Two stages: (1)
+to evaluate unsupervised state detection (extended to cover the "phase-shifter" state
+introduced by the multi-day delivery). Two stages: (1)
 `load_scada_window_means` reduces raw Betriebsdaten samples to one row per detection
 window, (2) `gt_labels` turns those window means into a discrete state + load bin per the
 plant's operating rules.

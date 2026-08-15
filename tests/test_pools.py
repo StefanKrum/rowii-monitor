@@ -1,6 +1,5 @@
 """Tests for `rowii.anomaly.pools`: multi-run training pools with leakage-safe sides
-and A4.1/A4.2 coverage tables (package-7 plan `docs/superpowers/plans/
-2026-07-18-step2-package7-robustness.md` Task 1, design spec D1 + A3.7 + A4.1/A4.2).
+and coverage tables.
 No real data -- hand-built `PreparedRun`s throughout (mirrors `tests/test_sweep.py`'s
 fixture style).
 
@@ -479,7 +478,7 @@ def test_module_docstring_pins_a3_7_warning() -> None:
 
 
 def test_coverage_table_empty_selection_keeps_int64_dtype() -> None:
-    """T1-review MEDIUM: an EMPTY selection is a mainline A4.1 output; pandas
+    """An EMPTY selection is a mainline output; pandas
     would infer `object` for n_windows from an empty row list, and pd.concat
     would then degrade every aggregated coverage table downstream."""
     empty = coverage_table({}, {}, {})

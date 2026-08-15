@@ -1,7 +1,6 @@
 """Selective copy of the June-25 Rodundwerk II delivery into `ROWII_DATA_ROOT`.
 
-Copies exactly the files Step 1 needs (spec `docs/superpowers/specs/2026-07-05-
-step1-state-detection-design.md` §3) from a source tree shaped like
+Copies exactly the files Step 1 needs from a source tree shaped like
 `~/Downloads/illwerke-250526-analysis`, preserving relative paths:
 
     20260626 Messung/TU/*.dat

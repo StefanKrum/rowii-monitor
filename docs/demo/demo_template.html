@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ROWII Monitor — Pipeline-Demo (Mockup, echte Daten 08.07.2026)</title>
+<title>ROWII Monitor — Pipeline Demo (mockup, real data 08.07.2026)</title>
 <style>
   :root {
     --bg: #0f1420; --panel: #171e2e; --ink: #e8ecf4; --muted: #8b96ad;
@@ -33,48 +33,48 @@
 </style>
 </head>
 <body>
-<h1>ROWII Monitor — Live-Pipeline-Demo <span style="color:var(--muted);font-weight:400">(Mockup aus echten Ausgaben)</span></h1>
+<h1>ROWII Monitor — Live Pipeline Demo <span style="color:var(--muted);font-weight:400">(mockup built from real outputs)</span></h1>
 <p class="sub">
   <span class="badge" id="b-run"></span><span class="badge" id="b-rep"></span>
   <span class="badge" id="b-alpha"></span><span class="badge" id="b-t0"></span>
-  Maschine 1, Rodundwerk II — Messtag mit induzierten Schonhammer-Schlägen während des Pumpbetriebs.
-  Alles unten stammt unverändert aus der Pipeline (Step-1-Zustände → per-Zustand-Scoring → Conformal-Alarme);
-  nur die Darstellung ist Mockup.
+  Machine 1, Rodundwerk II — measurement day with induced Schonhammer strikes during pump operation.
+  Everything below is unchanged from the pipeline (Step-1 states → per-state scoring → conformal alarms);
+  only the presentation is a mockup.
 </p>
 
 <div class="panel">
-  <h2>1 · Erkannte Betriebszustände (Step 1, unüberwacht)</h2>
+  <h2>1 · Detected operating states (Step 1, unsupervised)</h2>
   <svg id="states" height="64" preserveAspectRatio="none"></svg>
   <div class="legend" id="stateLegend"></div>
 </div>
 
 <div class="panel">
-  <h2>2 · Anomalie-Score je Fenster (Step 2, per-Zustand kNN) + Alarme + Schlag-Ground-Truth</h2>
+  <h2>2 · Anomaly score per window (Step 2, per-state kNN) + alarms + strike ground truth</h2>
   <svg id="trace" height="240"></svg>
   <div class="legend">
-    <span><span class="chip" style="background:var(--alarm)"></span>Alarmfenster (p &lt; α)</span>
-    <span><span class="chip" style="background:var(--gt)"></span>induzierter Schlag (Ground Truth, Minutenraster)</span>
-    <span><span class="chip" style="background:#5b6a8c"></span>Score (1-s-Fenster, per-Zustand-Referenzen)</span>
+    <span><span class="chip" style="background:var(--alarm)"></span>alarm window (p &lt; α)</span>
+    <span><span class="chip" style="background:var(--gt)"></span>induced strike (ground truth, minute grid)</span>
+    <span><span class="chip" style="background:#5b6a8c"></span>score (1-s windows, per-state references)</span>
   </div>
 </div>
 
 <div class="panel">
-  <h2>3 · Alarm-Report (Kandidaten mit Zeitstempel — das Betreiber-Artefakt)</h2>
+  <h2>3 · Alarm report (candidates with timestamp — the operator artifact)</h2>
   <table>
     <thead><tr>
-      <th>#</th><th>Start (UTC)</th><th>Dauer</th><th>Zustand</th>
-      <th>Fenster</th><th>Peak-Score</th><th>min p</th><th>Abgleich Ground Truth</th>
+      <th>#</th><th>Start (UTC)</th><th>Duration</th><th>State</th>
+      <th>Windows</th><th>Peak score</th><th>min p</th><th>Ground-truth match</th>
     </tr></thead>
     <tbody id="report"></tbody>
   </table>
 </div>
 
 <p class="foot">
-  Ehrlichkeit: Die Schläge sind <b>Surrogat-Anomalien</b> (kein realer Maschinenfehler); Ground Truth ist
-  minutengenau (Sekunden ausstehend). Bei α = 1 % alarmieren erwartungsgemäß ≈ 1 % der Normalfenster —
-  unmatched Episoden sind diese kalibrierte Grundrate, keine Fehler der Ground Truth. Zustands-Snapshot
-  wurde ausschließlich auf früheren Messtagen (Ära B) gefittet; dieser Tag ist zero-shot.
-  Quelle: <code>results/pillar3/080726-pu_strikes/audio-beats-a0.01/</code>.
+  Honesty: the strikes are <b>surrogate anomalies</b> (no real machine fault); ground truth is
+  minute-accurate (seconds pending). At α = 1 %, ≈ 1 % of normal windows are expected to alarm —
+  unmatched episodes are this calibrated baseline rate, not errors of the ground truth. The state snapshot
+  was fitted exclusively on earlier measurement days (era B); this day is zero-shot.
+  Source: <code>results/pillar3/080726-pu_strikes/audio-beats-a0.01/</code>.
 </p>
 <div class="tt" id="tt"></div>
 
@@ -88,7 +88,7 @@ const fmt = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 19) +
 const fmtHM = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 16);
 
 document.getElementById("b-run").textContent = "Run " + D.run;
-document.getElementById("b-rep").textContent = "Repräsentation: " + D.rep + " (frozen)";
+document.getElementById("b-rep").textContent = "Representation: " + D.rep + " (frozen)";
 document.getElementById("b-alpha").textContent = "α = " + D.alpha;
 document.getElementById("b-t0").textContent = "Start " + fmt(0);
 
@@ -114,9 +114,9 @@ for (let h = 0; h <= dur; h += 3600) {
 }
 const seen = [...new Set(D.segments.map(s => s.cluster_id).filter(c => c >= 0))].sort();
 document.getElementById("stateLegend").innerHTML =
-  seen.map(c => `<span><span class="chip" style="background:${COLORS[c % COLORS.length]}"></span>Zustand ${c}</span>`).join("") +
-  `<span><span class="chip" style="background:#3a4258"></span>ungültig/Übergang</span>` +
-  `<span style="margin-left:auto">Pump→Phasenschieber-Wechsel sichtbar um 13:05 UTC (≙ Protokoll „15:05 lokal")</span>`;
+  seen.map(c => `<span><span class="chip" style="background:${COLORS[c % COLORS.length]}"></span>State ${c}</span>`).join("") +
+  `<span><span class="chip" style="background:#3a4258"></span>invalid/transition</span>` +
+  `<span style="margin-left:auto">Pump→phase-shifter switch visible around 13:05 UTC (≙ protocol "15:05 local")</span>`;
 
 // --- 2. score trace --------------------------------------------------------
 const tv = document.getElementById("trace"); const H2 = 240, PAD = 34;
@@ -145,7 +145,7 @@ D.episodes.forEach((e, i) => {
   tr.innerHTML = `<td>${i + 1}</td><td>${fmt(e.start_s)}</td><td>${Math.round(e.end_s - e.start_s)} s</td>` +
     `<td><span class="chip" style="background:${COLORS[e.state % COLORS.length]}"></span>${e.state}</td>` +
     `<td>${e.n}</td><td>${e.peak.toFixed(3)}</td><td>${e.min_p}</td>` +
-    `<td>${e.gt ? `<span class="tag-hit">✔ Schlag: ${e.gt}</span>` : `<span class="tag-fa">— (kalibrierte α-Grundrate)</span>`}</td>`;
+    `<td>${e.gt ? `<span class="tag-hit">✔ Strike: ${e.gt}</span>` : `<span class="tag-fa">— (calibrated α baseline rate)</span>`}</td>`;
   tb.appendChild(tr);
 });
 
@@ -159,7 +159,7 @@ tv.addEventListener("mousemove", ev => {
   if (!best) return;
   tt.style.display = "block";
   tt.style.left = (ev.clientX + 14) + "px"; tt.style.top = (ev.clientY + 10) + "px";
-  tt.textContent = `${fmt(best[0])} · Zustand ${best[2]} · Score ${best[1].toFixed(3)}` + (best[3] ? ` · ALARM (p=${best[4]})` : "");
+  tt.textContent = `${fmt(best[0])} · State ${best[2]} · Score ${best[1].toFixed(3)}` + (best[3] ? ` · ALARM (p=${best[4]})` : "");
 });
 tv.addEventListener("mouseleave", () => tt.style.display = "none");
 </script>

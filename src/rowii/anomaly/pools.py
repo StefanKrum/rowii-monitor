@@ -1,8 +1,5 @@
-"""Multi-run/multi-mode training pools with per-run leakage-safe sides, plus the
-A4.1/A4.2 label-coverage tables -- Step-2 package-7 robustness (design spec
-`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md` D1 +
-amendments A3.7 and A4.1/A4.2, plan `docs/superpowers/plans/
-2026-07-18-step2-package7-robustness.md` Task 1).
+"""Multi-run/multi-mode training pools with per-run leakage-safe sides, plus
+label-coverage tables -- Step-2 robustness evaluation.
 
 `build_pool` collects ONE side's windows from EVERY run of a pool, each run split
 independently with the SAME `split_by_segments` convention `run_sweep` uses
@@ -316,7 +313,7 @@ def coverage_table(
     # from an empty list, and an empty-selection table is a MAINLINE output of
     # this module (A4.1 exists to make zero-coverage visible) whose dtype
     # degradation would propagate through pd.concat into every aggregated
-    # coverage table downstream (T1-review finding).
+    # coverage table downstream.
     return pd.DataFrame(rows, columns=_COVERAGE_COLUMNS).astype({"n_windows": "int64"})
 
 

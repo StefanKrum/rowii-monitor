@@ -7,7 +7,7 @@
       "start_utc": "2026-07-08T14:19:42.410000+00:00",
       "duration_s": 10.0,
       "source_run": "080726-pu_strikes",
-      "description": "Unüberwacht erkannter Zustand 0 (11 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+      "description": "Unsupervised-detected state 0 (11 windows on this measurement day, 1-s grid) – 10 s from the middle of this state's longest contiguous segment, checked against the strike ground truth."
     },
     {
       "file": "state_cluster1.wav",
@@ -16,7 +16,7 @@
       "start_utc": "2026-07-08T12:15:54.910000+00:00",
       "duration_s": 10.0,
       "source_run": "080726-pu_strikes",
-      "description": "Unüberwacht erkannter Zustand 1 (6740 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+      "description": "Unsupervised-detected state 1 (6740 windows on this measurement day, 1-s grid) – 10 s from the middle of this state's longest contiguous segment, checked against the strike ground truth."
     },
     {
       "file": "state_cluster3.wav",
@@ -25,7 +25,7 @@
       "start_utc": "2026-07-08T13:15:54.910000+00:00",
       "duration_s": 10.0,
       "source_run": "080726-pu_strikes",
-      "description": "Unüberwacht erkannter Zustand 3 (6076 Fenster an diesem Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+      "description": "Unsupervised-detected state 3 (6076 windows on this measurement day, 1-s grid) – 10 s from the middle of this state's longest contiguous segment, checked against the strike ground truth."
     },
     {
       "file": "strike_pump_plate_tur_0.wav",
@@ -34,7 +34,7 @@
       "start_utc": "2026-07-08T12:54:00+00:00",
       "duration_s": 10.0,
       "source_run": "080726-pu_strikes",
-      "description": "Induzierter Schonhammer-Schlag \"plate-tur_0\" (Referenzplatte Turbinenseite, 0°) während des Pumpbetriebs – SCADA-bestätigt bei ca. −279 MW / −377.8 U/min."
+      "description": "Induced Schonhammer strike \"plate-tur_0\" (reference plate, turbine side, 0°) during pump operation – SCADA-confirmed at approx. −279 MW / −377.8 rpm."
     },
     {
       "file": "strike_standstill_plate_gen_0.wav",
@@ -43,7 +43,7 @@
       "start_utc": "2026-07-08T10:17:00+00:00",
       "duration_s": 10.0,
       "source_run": "080726-st_strikes",
-      "description": "Induzierter Schonhammer-Schlag \"plate-gen_0\" (Referenzplatte Generatorseite, 0°) im Stillstand (Kalibrierungs-Session)."
+      "description": "Induced Schonhammer strike \"plate-gen_0\" (reference plate, generator side, 0°) at standstill (calibration session)."
     },
     {
       "file": "strike_standstill_vane_sweep.wav",
@@ -52,7 +52,7 @@
       "start_utc": "2026-07-08T10:24:00+00:00",
       "duration_s": 10.0,
       "source_run": "080726-st_strikes",
-      "description": "Vane-Sweep – strukturübertragene Anregung am Leitschaufeldeckel, erste 10 s der rund dreiminütigen Sweep-Session (Stillstand)."
+      "description": "Vane sweep – structure-borne excitation at the guide-vane cover, first 10 s of the roughly three-minute sweep session (standstill)."
     }
   ]
 }

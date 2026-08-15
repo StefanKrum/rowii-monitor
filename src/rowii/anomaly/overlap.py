@@ -1,6 +1,5 @@
 """Candidate-overlap analysis: do two Step-2 sweep combos flag the SAME moments in
-time? (Task 7, package-2 design spec `docs/superpowers/specs/2026-07-15-step2-
-scarcity-crossday-beats-design.md` D4: "candidate top-K overlap vs handcrafted
+time? ("candidate top-K overlap vs handcrafted
 candidates (UTC time-window intersection + Jaccard + qualitative table)".)
 
 The motivating comparison is a BEATs-based sweep (`audio-beats`/`fusion-beats`)

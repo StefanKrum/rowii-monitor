@@ -1,5 +1,4 @@
-"""Tests for `rowii.anomaly.overlap` (Task 7, package-2 design spec `docs/
-superpowers/specs/2026-07-15-step2-scarcity-crossday-beats-design.md` D4): pure
+"""Tests for `rowii.anomaly.overlap`: pure
 unit coverage of the candidate-overlap primitives (`top_candidates`, `to_utc_ns`,
 `match_by_time`, `jaccard`), plus one script-level smoke test for `scripts/
 analyze_step2.py` -- no real `results/`/`data/` anywhere, a monkeypatched grid

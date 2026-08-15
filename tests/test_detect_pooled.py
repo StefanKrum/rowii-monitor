@@ -1,7 +1,5 @@
-"""Tests for `FittedDetector.fit_pooled` (Step-2 package-7 Task 2, design spec
-`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md` Amendment
-A3.4): pooled KMeans emissions with per-run Viterbi decode and NO cross-run EM
-chain.
+"""Tests for `FittedDetector.fit_pooled`: pooled KMeans emissions with per-run Viterbi decode
+and NO cross-run EM chain.
 
 Fixture: two synthetic runs with a DISJOINT extra mode -- run A carries gaussian
 blobs 1+2, run B carries blobs 2+3 -- so blob 3 exists ONLY in run B. The central
@@ -12,7 +10,7 @@ tight (std 0.3) at centers >= 12 apart, laid out in contiguous 30-window blocks 
 neither the sticky Viterbi decode nor the 3-window duration filter can flip the
 expected labels -- every ARI assertion below is exact (1.0) by construction.
 
-Row-order tests (T1-review forward finding): sklearn's k-means++ seeding is not
+Row-order tests: sklearn's k-means++ seeding is not
 guaranteed bit-identical under row permutation even with a fixed `random_state`.
 Two calls on the SAME array must be bit-identical; a permuted copy may yield a
 different but EQUALLY VALID clustering -- asserted as equal ARI vs the fixture's
@@ -359,7 +357,7 @@ def test_k_below_one_raises() -> None:
 
 
 def test_duplicate_rows_forcing_empty_cluster_raise_loud_runtime_error() -> None:
-    """T2-review MEDIUM: near-constant pooled data CAN leave KMeans label ids
+    """Near-constant pooled data CAN leave KMeans label ids
     unassigned (probed on sklearn 1.9 with duplicate rows) -- the guard must
     fail loudly instead of silently violating the arange(k) id invariant that
     the snapshot extraction relies on."""

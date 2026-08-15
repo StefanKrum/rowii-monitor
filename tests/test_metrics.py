@@ -472,7 +472,7 @@ def test_load_alignment_excludes_unknown_windows() -> None:
 def test_load_alignment_restricts_to_turbine_state_only() -> None:
     # Standstill/transition windows (load_bin == -1 by construction, per gt_labels)
     # must not appear in the crosstab even though they are eval windows -- only
-    # "turbine" windows are in scope per the brief.
+    # "turbine" windows are in scope.
     states = ["standstill"] * 5 + ["turbine"] * 10 + ["transition"] * 5
     load_bin = [-1] * 5 + ([0] * 5 + [1] * 5) + [-1] * 5
     gt = _gt_with_load_bin(states, load_bin)

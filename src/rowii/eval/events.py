@@ -1,7 +1,6 @@
 """Pillar-3 event-level evaluation: labeled fault intervals vs per-window alarms.
 
-PREPARED-ONLY harness (Step-2 package 6, design spec `docs/superpowers/specs/
-2026-07-16-step2-package6-runtime-pillar3-design.md` D3): no fault labels exist
+PREPARED-ONLY harness: no fault labels exist
 yet for any ROWII recording -- the induced-fault measurement campaign is pending.
 This module is the campaign-data interface, ready the day labeled fault intervals
 land; until then every invocation runs on synthetic intervals and is a workflow

@@ -1,11 +1,9 @@
-"""Runtime monitor CLI (Step-2 package-6 design spec `docs/superpowers/specs/
-2026-07-16-step2-package6-runtime-pillar3-design.md` D2 + amendment A1.3, plan
-`docs/superpowers/plans/2026-07-16-step2-package6-runtime-pillar3.md` Task 2):
-apply a persisted `MonitorSnapshot` (fitted detector + per-state references +
-conformal thresholds, `rowii.runtime.snapshot`) to a NEW recording, emitting a
-state timeline plus per-window conformal alarm verdicts -- the design chapter's
-"runs at the plant" requirement as a batch CLI over recorded files (the deployment
-model the spec commits to; no streaming, no retraining, no refit of anything).
+"""Runtime monitor CLI: apply a persisted `MonitorSnapshot` (fitted detector +
+per-state references + conformal thresholds, `rowii.runtime.snapshot`) to a
+NEW recording, emitting a state timeline plus per-window conformal alarm
+verdicts -- the "runs at the plant" requirement as a batch CLI over recorded
+files (the chosen deployment model: no streaming, no retraining, no refit of
+anything).
 
 Pipeline: `prepare_run` (feature cache honored unless `--no-cache`) -> geometry
 guard (the snapshot's `feature_names` are the SCORING CONTRACT: the prepared run
@@ -207,7 +205,7 @@ windows reach the conformal floor, states 2/3 at 0%; at M=60 still 53.8%)."""
 _MAX_ROLLING_MINUTES = 5_256_000.0
 """Upper guard for `--rolling-minutes` (~10 years): far beyond any real use, and
 values above ~1.5e8 minutes overflow the int64 nanosecond arithmetic in
-`_trailing_bounds` (T5-review finding 4 -- a raw OverflowError instead of the
+`_trailing_bounds` (guarded to avoid a raw OverflowError instead of the
 CLI's clean exit-2 contract)."""
 
 _DEFAULT_NORM_MINUTES = 20.0
@@ -735,8 +733,8 @@ def _recalibrate_verdicts(
 
         scorer = scorer_for_label(snapshot, label, session_stats=session_stats)
         cal_scores = scorer.score(features[label_cal])
-        # Deliberately NO `min_ref` gate here (T2-review finding, resolved as a
-        # documented reading of A1.3's "identical to sweeps"): `run_sweep` gates
+        # Deliberately NO `min_ref` gate here (resolved as a
+        # documented reading of "identical to sweeps"): `run_sweep` gates
         # the FIT side with `min_ref` (reference quality -- enforced for this
         # snapshot at BUILD time by `fit_snapshot`) and governs the conformal/
         # calibration side ONLY by `calibrate`'s own achievable-alpha floor
@@ -785,7 +783,7 @@ def _trailing_bounds(
     calibration start times inside the half-open trailing interval
     `[t - m_ns, t)` -- INCLUSIVE at the lower edge, EXCLUSIVE at the upper.
 
-    Factored out (T5-review finding 1) because the upper-edge exclusivity is
+    Factored out because the upper-edge exclusivity is
     structurally unreachable through the CLI (calibration and scoring windows
     are segment-disjoint, so `cal_t == scr_t` never occurs in real runs) --
     only a direct unit test on synthetic arrays can pin it, and a future
@@ -1467,7 +1465,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"monitor: --rolling-minutes must be a positive number of minutes "
             f"<= {_MAX_ROLLING_MINUTES:g} (about a decade -- larger values overflow "
-            f"the int64 ns arithmetic, T5-review finding), got "
+            f"the int64 ns arithmetic), got "
             f"{args.rolling_minutes!r}",
             file=sys.stderr,
         )
@@ -1584,7 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if not bool(prepared.valid_mask.any()):
-        # T4-review hardening: an all-invalid run would otherwise surface as a raw
+        # Hardening: an all-invalid run would otherwise surface as a raw
         # sklearn ValueError inside the detector apply -- refuse cleanly instead.
         print(
             f"monitor: monitored run {args.run!r} has zero valid windows (valid_mask "

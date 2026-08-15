@@ -6,8 +6,7 @@ state: it delegates to `FittedDetector.fit` and returns just the
 `DetectionResult` half of its output (Step-1's original entry point, kept for
 backward compatibility -- its numeric output is unchanged bit-for-bit).
 
-`FittedDetector` (package-2 spec D1, `docs/superpowers/specs/2026-07-15-
-step2-scarcity-crossday-beats-design.md`) splits the SAME pipeline into a
+`FittedDetector` splits the SAME pipeline into a
 `fit` half (learn on one day: `zscore_stats`/`apply_zscore` standardisation,
 `KMeansClusterer`/`GmmClusterer` initial clustering, `StickyHmmSmoother.
 fit_decode` smoothing) and an `apply` half (label ANY day -- including a
@@ -163,9 +162,8 @@ class FittedDetector:
         clusterer: str = "kmeans",
     ) -> FittedDetector:
         """Fit a detector on POOLED multi-run features: pooled KMeans emissions,
-        per-run Viterbi decode -- package-7 spec Amendment A3.4 ("pump owns a
-        cluster", `docs/superpowers/specs/2026-07-18-step2-package7-robustness-
-        design.md`).
+        per-run Viterbi decode -- by design, "pump owns a
+        cluster".
 
         Chain: `zscore_stats`/`apply_zscore` over the POOLED matrix (the returned
         detector standardizes every later run with these pooled statistics),
@@ -190,7 +188,7 @@ class FittedDetector:
         GT-state-ARI sweep (k in {4, 5, 6} on the pool days) and reported; this
         method only fits the k it is given.
 
-        **Row order matters (T1-review forward finding).** sklearn's k-means++
+        **Row order matters.** sklearn's k-means++
         seeding is NOT guaranteed bit-identical under row permutation even with a
         fixed `random_state`: two calls on the SAME array are bit-identical, but
         a permuted copy may yield a different (equally valid) clustering with
@@ -226,7 +224,7 @@ class FittedDetector:
             ValueError: if *clusterer* is not `"kmeans"`, *k* < 1, or
                 *pooled_features* is not 2-D.
             RuntimeError: if KMeans returns labels other than exactly `0..k-1`.
-                This CAN happen (T2-review probe, sklearn 1.9): when the pooled
+                This CAN happen (observed on sklearn 1.9): when the pooled
                 data has fewer effectively-distinct clusters than *k* --
                 duplicate or near-constant feature rows (extended idle/steady
                 stretches), or a *k* above the natural cluster count -- KMeans

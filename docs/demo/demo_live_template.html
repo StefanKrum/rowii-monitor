@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ROWII Monitor — Live-Demo (echte Audioclips + Pipeline, 08.07.2026)</title>
+<title>ROWII Monitor — Live Demo (real audio clips + pipeline, 08.07.2026)</title>
 <style>
   :root {
     --bg: #0f1420; --panel: #171e2e; --ink: #e8ecf4; --muted: #8b96ad;
@@ -105,88 +105,88 @@
 </style>
 </head>
 <body>
-<h1>ROWII Monitor — Live-Demo <span style="color:var(--muted);font-weight:400">(reale Audioclips + vollständige Pipeline)</span></h1>
+<h1>ROWII Monitor — Live Demo <span style="color:var(--muted);font-weight:400">(real audio clips + full pipeline)</span></h1>
 <p class="sub">
   <span class="badge" id="b-run"></span><span class="badge" id="b-rep"></span>
   <span class="badge" id="b-alpha"></span><span class="badge" id="b-t0"></span>
-  Maschine 1, Rodundwerk II — Messtag mit induzierten Schonhammer-Schlägen während des Pumpbetriebs.
-  Unten: die vollständige Pipeline vom Rohsignal bis zum Alarm-Report, zum Anhören sechs reale, unbearbeitete
-  10-Sekunden-Ausschnitte aus genau diesem Messtag. Zustands-Timeline, Score-Trace und Report stammen
-  unverändert aus der Pipeline; nur die Darstellung ist Mockup.
+  Machine 1, Rodundwerk II — measurement day with induced Schonhammer strikes during pump operation.
+  Below: the complete pipeline from raw signal to alarm report, and six real, unedited
+  10-second excerpts from this exact measurement day to listen to. State timeline, score trace, and report are
+  unchanged from the pipeline; only the presentation is a mockup.
 </p>
 
 <div class="panel">
-  <h2>1 · Pipeline — vom Rohsignal zum Alarm</h2>
+  <h2>1 · Pipeline — from raw signal to alarm</h2>
   <div class="pipeline">
     <div class="pipe-step">
       <div class="pipe-num">1</div>
-      <div class="pipe-title">Rohsignal</div>
-      <div class="pipe-desc">9 Mikrofonkanäle (4 generatorseitig, 5 turbinenseitig) bei 50 kHz + 2
-        Vibrations-Ringe (je bis zu 6 Achsen X/Y/Z) bei 10 kHz zeichnen kontinuierlich am Maschinensatz auf.</div>
-      <img class="pipe-fig" src="data:image/png;base64,__FIG_WAVEFORM__" alt="Wellenform, 1 s, realer Zustand-1-Clip">
-      <div class="pipe-fig-cap">Wellenform · 1 s, realer Clip (Zustand 1)</div>
+      <div class="pipe-title">Raw signal</div>
+      <div class="pipe-desc">9 microphone channels (4 generator-side, 5 turbine-side) at 50 kHz + 2
+        vibration rings (up to 6 X/Y/Z axes each) at 10 kHz record continuously on the machine set.</div>
+      <img class="pipe-fig" src="data:image/png;base64,__FIG_WAVEFORM__" alt="Waveform, 1 s, real state-1 clip">
+      <div class="pipe-fig-cap">Waveform · 1 s, real clip (state 1)</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">2</div>
-      <div class="pipe-title">1-s-Fenster</div>
-      <div class="pipe-desc">Jeder Kanal wird in nicht überlappende 1-Sekunden-Fenster geschnitten — die
-        Grundeinheit jeder weiteren Verarbeitung.</div>
-      <img class="pipe-fig" src="data:image/png;base64,__FIG_SPECTROGRAM__" alt="Spektrogramm desselben 1-s-Fensters">
-      <div class="pipe-fig-cap">Spektrogramm · dasselbe 1-s-Fenster</div>
+      <div class="pipe-title">1-s window</div>
+      <div class="pipe-desc">Each channel is cut into non-overlapping 1-second windows — the
+        basic unit of every further processing step.</div>
+      <img class="pipe-fig" src="data:image/png;base64,__FIG_SPECTROGRAM__" alt="Spectrogram of the same 1-s window">
+      <div class="pipe-fig-cap">Spectrogram · the same 1-s window</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">3</div>
       <div class="pipe-title">Features</div>
-      <div class="pipe-desc">Pro Fenster entweder 243 handgefertigte Fusion-Features (Pegel- sowie
-        Maschinenfrequenz- und Oktavbänder je Kanal, dieser Run) oder ein eingefrorenes 768-dimensionales
-        BEATs-Embedding pro Mikrofonsignal.</div>
-      <img class="pipe-fig" src="data:image/png;base64,__FIG_FEATURES__" alt="Top-10 |z|-Fusion-Features desselben Fensters">
-      <div class="pipe-fig-cap">Top-10 |z| · 243 Fusion-Features, dasselbe Fenster</div>
+      <div class="pipe-desc">Per window, either 243 hand-crafted fusion features (level as well as
+        machine-frequency and octave bands per channel, this run) or a frozen 768-dimensional
+        BEATs embedding per microphone signal.</div>
+      <img class="pipe-fig" src="data:image/png;base64,__FIG_FEATURES__" alt="Top-10 |z| fusion features of the same window">
+      <div class="pipe-fig-cap">Top-10 |z| · 243 fusion features, the same window</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">4</div>
-      <div class="pipe-title">Step 1 — Zustand</div>
-      <div class="pipe-desc">KMeans (k=4) clustert, ein sticky HMM glättet zu stabilen Betriebszuständen
-        (min. Verweildauer 5 s) — alternativ ordnet eine Modellbank Fenster direkt SCADA-Zuständen zu
-        (Gaussian-, kNN- oder GMM-Familie je Zustand).</div>
+      <div class="pipe-title">Step 1 — State</div>
+      <div class="pipe-desc">KMeans (k=4) clusters, a sticky HMM smooths into stable operating states
+        (min. dwell time 5 s) — alternatively, a model bank assigns windows directly to SCADA states
+        (Gaussian, kNN, or GMM family per state).</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">5</div>
       <div class="pipe-title">Step 2 — Scoring</div>
-      <div class="pipe-desc">Pro erkanntem Zustand vergleicht ein kNN-Scorer (Kosinus, k=1) jedes Fenster
-        gegen die zustandseigenen Referenzfenster aus früheren Messtagen.</div>
+      <div class="pipe-desc">Per detected state, a kNN scorer (cosine, k=1) compares each window
+        against that state's own reference windows from earlier measurement days.</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">6</div>
-      <div class="pipe-title">Split-Conformal-Schwelle</div>
-      <div class="pipe-desc">Eine verteilungsfreie Schwelle wird pro Zustand auf Kalibrierungsfenstern
-        kalibriert; erst ab ⌈1/α⌉−1 Kalibrierungsfenstern ist α zertifizierbar — sonst bleibt der Zustand
-        ohne Schwelle (∞, nie ein Alarm).</div>
-      <img class="pipe-fig" src="data:image/png;base64,__FIG_HISTOGRAM__" alt="Score-Histogramm des Tages mit Conformal-Schwelle">
-      <div class="pipe-fig-cap">Score-Verteilung · Tag, mit α-Quantil</div>
+      <div class="pipe-title">Split-conformal threshold</div>
+      <div class="pipe-desc">A distribution-free threshold is calibrated per state on calibration
+        windows; only from ⌈1/α⌉−1 calibration windows onward is α certifiable — otherwise the state
+        stays without a threshold (∞, never an alarm).</div>
+      <img class="pipe-fig" src="data:image/png;base64,__FIG_HISTOGRAM__" alt="Score histogram of the day with conformal threshold">
+      <div class="pipe-fig-cap">Score distribution · day, with α-quantile</div>
     </div>
     <div class="pipe-arrow">→</div>
     <div class="pipe-step">
       <div class="pipe-num">7</div>
-      <div class="pipe-title">Alarm + Report</div>
-      <div class="pipe-desc">Ein Fenster mit p &lt; α wird zum Alarmkandidaten; benachbarte Alarme bilden
-        Episoden, die unten mit Zeitstempel im Report erscheinen.</div>
+      <div class="pipe-title">Alarm + report</div>
+      <div class="pipe-desc">A window with p &lt; α becomes an alarm candidate; neighboring alarms form
+        episodes, which appear below with a timestamp in the report.</div>
     </div>
   </div>
 </div>
 
 <div class="panel">
-  <h2>2 · Anhören — reale Clips aus der 080726-Kampagne</h2>
+  <h2>2 · Listen — real clips from the 080726 campaign</h2>
   <p class="sub" style="margin:0 0 12px">
-    Je ein 10-Sekunden-Ausschnitt pro erkanntem Betriebszustand (Mitte des längsten zusammenhängenden
-    Segments, schlagfrei geprüft) sowie drei induzierte Schonhammer-Schläge — unbearbeitet bis auf Resampling
-    auf 16 kHz und Pegel-Normalisierung auf −1 dBFS. Ein Klick auf eine Report-Zeile mit Ground-Truth-Treffer
-    unten springt, wenn der passende Schlag hier oben liegt, direkt zu dessen Player.
+    One 10-second excerpt each per detected operating state (middle of the longest contiguous
+    segment, checked to be strike-free), plus three induced Schonhammer strikes — unedited apart from resampling
+    to 16 kHz and level normalization to −1 dBFS. Clicking a report row with a ground-truth hit
+    below jumps straight to its player, if the matching strike is up here.
   </p>
   <div class="clips">__CLIPS_HTML__</div>
 </div>
@@ -195,7 +195,7 @@
   <div class="live-panel" id="livePanel">
     <div class="live-controls">
       <button class="live-playbtn" id="playBtn" type="button" title="Play/Pause" aria-label="Play/Pause">&#9654;</button>
-      <div class="live-speed" role="group" aria-label="Zeitraffer-Geschwindigkeit">
+      <div class="live-speed" role="group" aria-label="Playback speed">
         <button class="speed-btn active" data-speed="60" type="button">60×</button>
         <button class="speed-btn" data-speed="300" type="button">300×</button>
         <button class="speed-btn" data-speed="900" type="button">900×</button>
@@ -209,65 +209,65 @@
       <div class="live-alarm" id="liveAlarm">ALARM</div>
     </div>
     <div class="live-legend">
-      <b>Zustandsnamen ehrlich:</b> An diesem Tag (abgeglichen mit der SCADA-Zustandszuordnung aus
+      <b>State names, honestly:</b> on this day (cross-checked against the SCADA state mapping from
       <code>results/step2/modebank/080726-pu_strikes/audio-beats-knn/assignments.parquet</code>):
-      Zustand 1 ≙ Pumpbetrieb (98,6&nbsp;% der Fenster dieses Zustands SCADA-seitig „pump"), Zustand 3 ≙
-      überwiegend Phasenschieberbetrieb (90,4&nbsp;% „phase-shifter"; der Rest vor allem der kurze Stillstand
-      am Tagesanfang und Übergangsfenster), Zustand 0 ≙ ein kurzer 11-Fenster-Randblock. Zustand 2 tritt an
-      diesem Tag nicht auf (0 Fenster) — Pump- und Phasenschieberbetrieb wechseln mehrfach, u.&nbsp;a. sichtbar
-      um 13:05&nbsp;UTC. Dies ist eine <b>tagesspezifische, aus Ground Truth abgeleitete Zuordnung</b>, kein
-      Modell-Output; die produktisierte Zustandsbenennung folgt in Paket&nbsp;9.
+      state 1 ≙ pump operation (98.6&nbsp;% of this state's windows are SCADA-side "pump"), state 3 ≙
+      predominantly phase-shifter operation (90.4&nbsp;% "phase-shifter"; the remainder mostly the short standstill
+      at the start of the day and transition windows), state 0 ≙ a short 11-window edge block. State 2 does not
+      occur on this day (0 windows) — pump and phase-shifter operation alternate several times, visible e.g.
+      around 13:05&nbsp;UTC. This is a <b>day-specific mapping derived from ground truth</b>, not a
+      model output; the productized state naming follows in package&nbsp;9.
     </div>
   </div>
 
   <div class="panel">
-    <h2>3 · Erkannte Betriebszustände (Step 1, unüberwacht)</h2>
+    <h2>3 · Detected operating states (Step 1, unsupervised)</h2>
     <svg id="states" height="64" preserveAspectRatio="none"></svg>
     <div class="legend" id="stateLegend"></div>
   </div>
 
   <div class="panel">
-    <h2>4 · Anomalie-Score je Fenster (Step 2, per-Zustand kNN) + Alarme + Schlag-Ground-Truth</h2>
+    <h2>4 · Anomaly score per window (Step 2, per-state kNN) + alarms + strike ground truth</h2>
     <svg id="trace" height="240"></svg>
     <div class="legend">
-      <span><span class="chip" style="background:var(--alarm)"></span>Alarmfenster (p &lt; α)</span>
-      <span><span class="chip" style="background:var(--gt)"></span>induzierter Schlag (Ground Truth, Minutenraster)</span>
-      <span><span class="chip" style="background:#5b6a8c"></span>Score (1-s-Fenster, per-Zustand-Referenzen)</span>
-      <span style="margin-left:auto">▶/⏸ oben, oder Klick in eine der beiden Grafiken, um die Zeit zu setzen.</span>
+      <span><span class="chip" style="background:var(--alarm)"></span>alarm window (p &lt; α)</span>
+      <span><span class="chip" style="background:var(--gt)"></span>induced strike (ground truth, minute grid)</span>
+      <span><span class="chip" style="background:#5b6a8c"></span>score (1-s windows, per-state references)</span>
+      <span style="margin-left:auto">▶/⏸ above, or click in either chart to set the time.</span>
     </div>
   </div>
 
   <div class="panel zoom-panel" id="zoomPanel" hidden>
     <div class="zoom-head">
-      <h2 style="margin:0">Live-Zoom — <span id="zoomLabel"></span></h2>
-      <button class="zoom-close" id="zoomCloseBtn" type="button">Schließen ×</button>
+      <h2 style="margin:0">Live zoom — <span id="zoomLabel"></span></h2>
+      <button class="zoom-close" id="zoomCloseBtn" type="button">Close ×</button>
     </div>
     <svg id="traceZoom" height="140"></svg>
   </div>
 </div>
 
 <div class="panel">
-  <h2>5 · Alarm-Report (Kandidaten mit Zeitstempel — das Betreiber-Artefakt)</h2>
+  <h2>5 · Alarm report (candidates with timestamp — the operator artifact)</h2>
   <table>
     <thead><tr>
-      <th>#</th><th>Start (UTC)</th><th>Dauer</th><th>Zustand</th>
-      <th>Fenster</th><th>Peak-Score</th><th>min p</th><th>Abgleich Ground Truth</th>
+      <th>#</th><th>Start (UTC)</th><th>Duration</th><th>State</th>
+      <th>Windows</th><th>Peak score</th><th>min p</th><th>Ground-truth match</th>
     </tr></thead>
     <tbody id="report"></tbody>
   </table>
 </div>
 
 <p class="foot">
-  Ehrlichkeit: Alle Audio-Clips oben sind reale, unbearbeitete Ausschnitte aus der 080726-Kampagne (nur
-  Resampling 50→16 kHz und Pegel-Normalisierung auf −1 dBFS); die Schläge sind <b>Surrogat-Anomalien</b>
-  (kein realer Maschinenfehler). Ground Truth ist minutengenau (Sekunden ausstehend); dieselbe Schlagklasse
-  (z. B. „plate-gen_0") wurde in Pump- UND Stillstands-Session induziert — die Report-Zeilen unten gehören
-  zur Pumpsession, ein Klick springt daher nur zu einem Player, dessen Clip AUS DERSELBEN Session stammt.
-  Bei α = 1 % alarmieren erwartungsgemäß ≈ 1 % der Normalfenster — unmatched Episoden sind diese kalibrierte
-  Grundrate, keine Fehler der Ground Truth. Zustands-Snapshot wurde ausschließlich auf früheren Messtagen
-  (Ära B) gefittet; dieser Tag ist zero-shot.
-  Quelle: <code>results/pillar3/080726-pu_strikes/audio-beats-a0.01/</code> (Zustände/Score/Report) und die
-  080726-Rohdaten (Audio-Clips).
+  Honesty: all audio clips above are real, unedited excerpts from the 080726 campaign (only
+  resampling 50→16 kHz and level normalization to −1 dBFS); the strikes are <b>surrogate anomalies</b>
+  (no real machine fault). Ground truth is minute-accurate (seconds pending); the same strike class
+  (e.g. "plate-gen_0") was induced in BOTH the pump and standstill sessions — the report rows below belong
+  to the pump session, so a click only jumps to a player whose clip comes FROM THE SAME session.
+  At α = 1 %, ≈ 1 % of normal windows are expected to alarm — unmatched episodes are this calibrated
+  baseline rate, not errors of the ground truth. The state snapshot was fitted exclusively on earlier
+  measurement days (era B); this day is zero-shot.
+  Source: <code>results/pillar3/080726-pu_strikes/audio-beats-a0.01/</code> (states/score/report) and the
+  080726 raw data (audio clips).
 </p>
 <div class="tt" id="tt"></div>
 
@@ -281,7 +281,7 @@ const fmt = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 19) +
 const fmtHM = s => new Date(t0.getTime() + s * 1000).toISOString().slice(11, 16);
 
 document.getElementById("b-run").textContent = "Run " + D.run;
-document.getElementById("b-rep").textContent = "Repräsentation: " + D.rep + " (frozen)";
+document.getElementById("b-rep").textContent = "Representation: " + D.rep + " (frozen)";
 document.getElementById("b-alpha").textContent = "α = " + D.alpha;
 document.getElementById("b-t0").textContent = "Start " + fmt(0);
 
@@ -307,9 +307,9 @@ for (let h = 0; h <= dur; h += 3600) {
 }
 const seen = [...new Set(D.segments.map(s => s.cluster_id).filter(c => c >= 0))].sort();
 document.getElementById("stateLegend").innerHTML =
-  seen.map(c => `<span><span class="chip" style="background:${COLORS[c % COLORS.length]}"></span>Zustand ${c}</span>`).join("") +
-  `<span><span class="chip" style="background:#3a4258"></span>ungültig/Übergang</span>` +
-  `<span style="margin-left:auto">Pump→Phasenschieber-Wechsel sichtbar um 13:05 UTC (≙ Protokoll „15:05 lokal")</span>`;
+  seen.map(c => `<span><span class="chip" style="background:${COLORS[c % COLORS.length]}"></span>State ${c}</span>`).join("") +
+  `<span><span class="chip" style="background:#3a4258"></span>invalid/transition</span>` +
+  `<span style="margin-left:auto">Pump→phase-shifter switch visible around 13:05 UTC (≙ protocol "15:05 local")</span>`;
 const playheadStates = svgEl("line", { class: "playhead-line", x1: 0, y1: 0, x2: 0, y2: H1,
   stroke: "#ffffff", "stroke-width": 1.5, "stroke-dasharray": "3,2", opacity: .85 });
 sv.appendChild(playheadStates);
@@ -364,7 +364,7 @@ D.episodes.forEach((e, i) => {
   tr.innerHTML = `<td>${i + 1}</td><td>${fmt(e.start_s)}</td><td>${Math.round(e.end_s - e.start_s)} s</td>` +
     `<td><span class="chip" style="background:${COLORS[e.state % COLORS.length]}"></span>${e.state}</td>` +
     `<td>${e.n}</td><td>${e.peak.toFixed(3)}</td><td>${e.min_p}</td>` +
-    `<td>${e.gt ? `<span class="tag-hit">✔ Schlag: ${e.gt}</span>` : `<span class="tag-fa">— (kalibrierte α-Grundrate)</span>`}</td>`;
+    `<td>${e.gt ? `<span class="tag-hit">✔ Strike: ${e.gt}</span>` : `<span class="tag-fa">— (calibrated α baseline rate)</span>`}</td>`;
   tb.appendChild(tr);
 });
 
@@ -378,7 +378,7 @@ tv.addEventListener("mousemove", ev => {
   if (!best) return;
   tt.style.display = "block";
   tt.style.left = (ev.clientX + 14) + "px"; tt.style.top = (ev.clientY + 10) + "px";
-  tt.textContent = `${fmt(best[0])} · Zustand ${best[2]} · Score ${best[1].toFixed(3)}` + (best[3] ? ` · ALARM (p=${best[4]})` : "");
+  tt.textContent = `${fmt(best[0])} · State ${best[2]} · Score ${best[1].toFixed(3)}` + (best[3] ? ` · ALARM (p=${best[4]})` : "");
 });
 tv.addEventListener("mouseleave", () => tt.style.display = "none");
 
@@ -392,7 +392,7 @@ tv.addEventListener("mouseleave", () => tt.style.display = "none");
 // keep them in sync if either changes.
 // =============================================================================
 
-const STATE_NOTE = { 0: "Rand-/Übergangsblock", 1: "Pumpbetrieb", 3: "Phasenschieberbetrieb (überw.)" };
+const STATE_NOTE = { 0: "edge/transition block", 1: "pump operation", 3: "phase-shifter operation (predom.)" };
 
 function bisectLeft(arr, target) {
   let lo = 0, hi = arr.length;
@@ -455,7 +455,7 @@ function updateLivePanel(t) {
   document.getElementById("liveClock").textContent = fmt(t);
   document.getElementById("liveStateChip").style.background = cid < 0 ? "#3a4258" : COLORS[cid % COLORS.length];
   document.getElementById("liveStateLabel").textContent =
-    cid < 0 ? "ungültig/Übergang" : `Zustand ${cid}` + (STATE_NOTE[cid] ? ` (${STATE_NOTE[cid]})` : "");
+    cid < 0 ? "invalid/transition" : `State ${cid}` + (STATE_NOTE[cid] ? ` (${STATE_NOTE[cid]})` : "");
   document.getElementById("liveScoreVal").textContent = pt[1].toFixed(3);
   document.getElementById("liveScoreBarFill").style.width = (Math.min(1, pt[1] / smax) * 100).toFixed(1) + "%";
   document.getElementById("livePVal").textContent = pt[4].toFixed(5);
@@ -577,7 +577,7 @@ function openZoom(clipStartS, durationS, label) {
   const padS = 60;
   const zStart = Math.max(0, clipStartS - padS), zEnd = Math.min(dur, clipStartS + durationS + padS);
   zoomActive = true;
-  document.getElementById("zoomLabel").textContent = `${fmt(zStart)} – ${fmt(zEnd)} (±${padS} s um ${label})`;
+  document.getElementById("zoomLabel").textContent = `${fmt(zStart)} – ${fmt(zEnd)} (±${padS} s around ${label})`;
   zoomPanel.hidden = false;
   renderZoomTrace(zStart, zEnd);
   zoomPanel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -605,7 +605,7 @@ function attachLiveWaveform(audioEl, canvasEl) {
     ctx = new Ctx();
     src = ctx.createMediaElementSource(audioEl);
   } catch (err) {
-    console.warn("Live-Wellenform: WebAudio-Setup nicht möglich, Fallback auf statisches PNG + Cursor.", err);
+    console.warn("Live waveform: WebAudio setup not possible, falling back to static PNG + cursor.", err);
     return false;
   }
   try {
@@ -635,7 +635,7 @@ function attachLiveWaveform(audioEl, canvasEl) {
     audioEl.addEventListener("ended", () => { if (raf) cancelAnimationFrame(raf); });
     return true;
   } catch (err) {
-    console.warn("Live-Wellenform: Analyser-Setup fehlgeschlagen, verbinde Audio direkt (kein Live-Canvas).", err);
+    console.warn("Live waveform: analyser setup failed, connecting audio directly (no live canvas).", err);
     try { src.connect(ctx.destination); } catch (_e) { /* nothing more we can do */ }
     return false;
   }
@@ -699,7 +699,7 @@ document.querySelectorAll(".clip-live-btn").forEach(btn => {
       }
     }
 
-    audioEl.play().catch(err => console.warn("Audio-Wiedergabe blockiert:", err));
+    audioEl.play().catch(err => console.warn("Audio playback blocked:", err));
   });
 });
 

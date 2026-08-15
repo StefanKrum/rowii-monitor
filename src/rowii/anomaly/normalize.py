@@ -1,9 +1,6 @@
-"""Label-free per-session robust normalization -- Step-2 package-7 robustness
-(design spec `docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md`
-D3 as amended by A3.5, plan `docs/superpowers/plans/2026-07-18-step2-package7-
-robustness.md` Task 4).
+"""Label-free per-session robust normalization.
 
-Package-6's monitor evidence decomposed the frozen-threshold failure into two
+The runtime-prototype evidence decomposed the frozen-threshold failure into two
 causes; the GLOBAL one (250526's recording-chain shift: every state's score median
 0.86-2.51x threshold) is exactly what a per-session affine renormalization can
 absorb. `fit_session_stats` estimates a robust center/scale (per-column median and

@@ -1,9 +1,9 @@
-"""D4 data verifications (Package-8, spec D4 + A1.6). Three cheap scripted probes on
+"""Data verification CLI. Three cheap scripted probes on
 OUR own files, each independently attributed where it echoes the partner's data
 work (Rodrigues & Zhang 2026): (1) generator-mic level anomaly at plate-strike
-minutes -- CHANNEL-ANONYMOUS (no azimuth->channel map exists in-repo; A1.6); (2)
+minutes -- CHANNEL-ANONYMOUS (no azimuth->channel map exists in-repo); (2)
 RAWTurbineVib__3 ch0 per-file DATA-VARIANCE liveness across days (std<1e-9, the
-VibFeaturizer dead-channel criterion, A1.6); (3) SCADA timebase probe: locate the
+VibFeaturizer dead-channel criterion); (3) SCADA timebase probe: locate the
 080726 changeover in Betriebsdaten rpm/power and compare it against the audio-UTC
 state timeline (13:05:28 UTC reference). No partner number is read by this script.
 
@@ -45,13 +45,13 @@ _REFERENCE_UTC_DEFAULT = "2026-07-08T13:05:28+00:00"
 _DAY_ROOT_DEFAULT = "illwerke-080726"
 _SEARCH_RADIUS_MIN_DEFAULT = 30.0
 """Default `--search-radius-min` for `scada-timebase`'s reference-windowed changeover
-search (T1 review finding 1) -- generous enough to comfortably contain DAQ-clock-quirk
+search -- generous enough to comfortably contain DAQ-clock-quirk
 and ramp-duration slack around the reference, while still excluding a same-channel
 decoy step half an hour or more away (e.g. 080726's pump-start step vs. its
 pump->phase-shifter changeover, ~52 min apart)."""
 _TOP_K_STEPS = 3
 """Number of largest whole-day steps `scada-timebase` prints per channel alongside
-its windowed changeover pick (T1 review finding 1) -- lets a human see the
+its windowed changeover pick -- lets a human see the
 alternatives the windowed argmax itself cannot show; not independently tunable via
 any CLI flag."""
 _VIB_STREAM_DEFAULT = "RAWTurbineVib__3"
@@ -98,7 +98,7 @@ def locate_changeover(
     (whole-series search otherwise) -- needed because a day can carry two near-equal
     steps in the SAME channel (e.g. 080726 power: the pump-start step AND the
     pump->phase-shifter changeover itself), where the unrestricted global argmax can
-    pick the wrong one and ties resolve leftmost (T1 review finding 1). The two
+    pick the wrong one and ties resolve leftmost. The two
     parameters must be given together or both omitted: there is no sensible reading
     of "centred at an unknown reference" or "reference with an unlimited radius", so
     a partial pair raises rather than silently guessing which was meant.
@@ -162,8 +162,8 @@ def top_k_steps(values: np.ndarray, k: int) -> list[tuple[int, float]]:
     keeps equal-magnitude ties in ascending-index order, mirroring
     `locate_changeover`'s own leftmost tie-break). Non-finite differences are
     dropped outright rather than sentinel-substituted. Gives a human the runner-up
-    candidates `locate_changeover`'s single argmax search cannot show (T1 review
-    finding 1) -- `scada-timebase` prints this alongside its windowed pick. Returns
+    candidates `locate_changeover`'s single argmax search cannot show
+    -- `scada-timebase` prints this alongside its windowed pick. Returns
     fewer than *k* pairs if fewer than *k* finite differences exist, `[]` if none
     do."""
     v = np.asarray(values, dtype=np.float64)
@@ -181,8 +181,8 @@ def channel_level_profile(levels: np.ndarray, strike_mask: np.ndarray) -> np.nda
     level matrix -- the ring's per-channel signature at the strike minutes.
     `np.nanmedian`, not `np.median`: a strike window with zero audio samples
     (`_run_window_grid_and_levels`'s all-NaN fill for an empty window) must not
-    poison an otherwise-healthy channel's median across the whole ring (T1 review
-    finding 4). The caller (`_run_gen_mic_profile`) separately counts and warns
+    poison an otherwise-healthy channel's median across the whole ring. The
+    caller (`_run_gen_mic_profile`) separately counts and warns
     about how many strike rows carried such a non-finite value.
 
     Raises:
@@ -214,7 +214,7 @@ def sorted_day_roots(day_roots: Iterable[str]) -> list[str]:
     `rowii.io.dataset._dayid_for` also uses) sorted CHRONOLOGICALLY by their
     embedded `DDMMYY` date, not alphabetically -- alphabetical order scrambles the
     era timeline (e.g. `"illwerke-010726"`, July 1st, would sort before
-    `"illwerke-250526"`, May 25th) (T1 review finding 3)."""
+    `"illwerke-250526"`, May 25th)."""
 
     def _date(day_root: str) -> date:
         token = day_root.rsplit("-", 1)[-1]
@@ -400,7 +400,7 @@ def _vib_ch0_liveness_rows(
     thoroughness (D4.2's literal "per-file" wording). The earliest-file default is
     ASYMMETRIC: it can only produce a false DEAD verdict (never a false LIVE one)
     for a channel that only goes live partway through a run -- a live earliest file
-    already proves the wiring was live at least once (T1 review finding 6)."""
+    already proves the wiring was live at least once."""
     rows: list[dict[str, object]] = []
     for run in index.runs:
         files = sorted(run.files.get(stream, []), key=lambda f: f.start_utc_hint)

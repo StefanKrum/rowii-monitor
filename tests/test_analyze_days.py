@@ -30,8 +30,7 @@ from rowii.io.dataset import RecordingIndex, Run  # noqa: E402
 from rowii.pipeline import PreparedRun  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Plan's own RED tests (verbatim, docs/superpowers/plans/
-# 2026-07-21-step2-package8-modebank-explain.md, Task 8)
+# RED tests written directly against the design's own acceptance criteria
 # ---------------------------------------------------------------------------
 
 
@@ -82,7 +81,7 @@ def test_rotations_heatmap_subcommand_writes_png_and_csv(tmp_path, monkeypatch) 
 
 
 # ---------------------------------------------------------------------------
-# T8-review item 4: rotations-heatmap `--leaf-suffix` discovery + the <2-
+# rotations-heatmap `--leaf-suffix` discovery + the <2-
 # rotations guard (never render a 1-cell "matrix" silently).
 # ---------------------------------------------------------------------------
 
@@ -266,7 +265,7 @@ def test_feature_stability_unknown_run_name_exits_2(tmp_path, monkeypatch, capsy
 
 
 # ---------------------------------------------------------------------------
-# T8-review item 1 (BLOCKER, unit coherence): feature-stability's slow/
+# Unit coherence: feature-stability's slow/
 # drifting cutoff must compare against a genuine dB figure, not a raw log10
 # shift -- `_log_rms` stores log10(RMS AMPLITUDE) (dB = 20*log10(ratio)),
 # `_band_`/`_octave_` store log10(mean Welch PSD, POWER) (dB =
@@ -338,7 +337,7 @@ def test_feature_stability_log_rms_shift_02_log10_is_4db_drifting() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T8-review item 2: classification is LEVEL-columns-only (shape columns keep
+# Classification is LEVEL-columns-only (shape columns keep
 # their dot-interval rows but read "n/a"); fusion/embedding variants skip the
 # dB classification entirely (warned), since their level-NAMED columns hold
 # z-score/embedding values, not log10 ones.
@@ -488,7 +487,7 @@ def test_era_step_marks_unmatched_day_and_gates_080726(tmp_path, monkeypatch, ca
 
 
 # ---------------------------------------------------------------------------
-# T8-review item 3: era-step's `--variant` is raw-scale-only (audio/
+# era-step's `--variant` is raw-scale-only (audio/
 # vibration) -- fusion's per-run z-score (A1.1) has no meaningful log10 level
 # to plot here.
 # ---------------------------------------------------------------------------
@@ -508,8 +507,7 @@ def test_era_step_refuses_fusion_variant(tmp_path, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 9 (plan docs/superpowers/plans/2026-07-21-step2-package8-modebank-
-# explain.md): `mode-signatures`, `tonal-table`, `pillar3-figure`, `digest` --
+# `mode-signatures`, `tonal-table`, `pillar3-figure`, `digest` --
 # three more pure helpers (`_tonal_contrast`, `_mode_profile`, `_tpr_by_alpha`,
 # all explicitly named "Pure helper" in the plan's own Task 9 Interfaces
 # section) + their subcommands, going through the SAME `_run_features_and_gt`/
@@ -609,7 +607,7 @@ def test_mode_signatures_writes_one_png_per_run(tmp_path, monkeypatch) -> None:
 
 
 def test_nearest_octave_hz_picks_closest_by_absolute_distance() -> None:
-    # T9-review item 2 (superseded by the "nearest NON-CONTAINING octave"
+    # (superseded by the "nearest NON-CONTAINING octave"
     # semantics below): 6.25 Hz sits outside every candidate's own span, so
     # the plain nearest-by-Hz result is unchanged by the new rule.
     assert ad._nearest_octave_hz(6.25, [31.5, 63.0, 125.0]) == 31.5
@@ -782,7 +780,7 @@ def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T9-review polish (2026-07-21 fix-loop, post-a05344e): item 1 variant-aware
+# Polish (2026-07-21): variant-aware
 # unit labeling on mode-signatures/tonal-table (title + axis/colorbar +
 # digest caveat), item 2 tonal-table's nearest NON-CONTAINING octave floor,
 # item 3 a per-leaf parse guard on pillar3-figure's discovery, item 4 two
@@ -996,8 +994,7 @@ def test_digest_pillar3_section_annotates_fusion_snorm_as_session_norm_side_arm(
 
 
 # ---------------------------------------------------------------------------
-# Package-9 D3a (plan docs/superpowers/plans/
-# 2026-07-22-step2-package9-once-naming-transitions.md, Task 4): `transitions`
+# `transitions`
 # subcommand -- the SCADA transition taxonomy on OUR OWN `gt_labels` output
 # (`rowii.scada.labels`'s `"transition"` state). Plan's own RED tests (verbatim)
 # plus the subcommand's own CLI-level artifact-shape tests, mirroring every

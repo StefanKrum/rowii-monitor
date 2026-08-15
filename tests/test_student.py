@@ -1157,7 +1157,7 @@ def test_multi_run_disjoint_second_run_exits_2_before_training(
 def test_seed_not_seven_sidecar_note_carries_caveat_and_warns(
     tmp_path, monkeypatch, caplog
 ):
-    """T8-review HIGH (the objective bug): the leakage note is persisted into
+    """The leakage note is persisted into
     provenance -- at seed != 7 it must carry the does-NOT-match caveat and the
     CLI must warn; the previous static string was silently false."""
     import logging

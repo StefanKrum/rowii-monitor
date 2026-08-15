@@ -1,12 +1,9 @@
-"""Step-2 Package 8: per-mode model bank rotations CLI (design spec
-`docs/superpowers/specs/2026-07-21-step2-package8-modebank-recal-explain.md` §3.D1 +
-Amendment A1.3/A1.5/A1.7, plan `docs/superpowers/plans/
-2026-07-21-step2-package8-modebank-explain.md` Task 3): fits Stefan's per-mode model
+"""Step-2 mode-bank rotations CLI: fits Stefan's per-mode model
 bank (`rowii.state.modebank.ModeBank`) on a pool of `--fit-runs`' SCADA ground-truth
 modes and evaluates it, label-free, on ONE held-out `--test-run` -- a Step-1
 alternative arm, run through the SAME held-out-day-group rotation shape
 `scripts/run_step2.py --protocol cross-day-pooled` uses (fit pool -> pooled
-reference/detector, one held-out day scored), including its A3.8 day-group-
+reference/detector, one held-out day scored), including its day-group-
 disjointness guard (`_run_day_groups`, duplicated here -- script-sibling rule;
 `rowii.anomaly.pools`' own module docstring explains why scripts never import a
 sibling script's internals).
@@ -30,12 +27,10 @@ mask). Accuracy is reported for the bank ONLY: its modes ARE GT names, so
 `assigned == gt_state` is a direct, meaningful equality; a KMeans cluster id has no
 GT identity to compare against. `--smooth` applies `rowii.state.segments.
 duration_filter` ONLY (never `rowii.state.smooth`'s HMM-EM re-estimation) so the
-bank-vs-clusterer comparison isolates the LABELING mechanism, not the smoothing
-(spec A1.3).
+bank-vs-clusterer comparison isolates the LABELING mechanism, not the smoothing.
 
-Low-confidence bank members (adversarial-review binding, T2 finding 1,
-`rowii.state.modebank.ModeBank.low_confidence_modes`): a member whose conformal
-threshold is `+inf` (too few calibration windows for `alpha`) can NEVER contribute
+Low-confidence bank members (`rowii.state.modebank.ModeBank.low_confidence_modes`): a member
+whose conformal threshold is `+inf` (too few calibration windows for `alpha`) can NEVER contribute
 a rejection to `ModeAssignment.no_mode_fits`'s whole-bank AND-conjunction, so the
 `no_mode_fits_rate` this rotation reports UNDER-FIRES for as long as such a member
 survives -- "no_mode_fits low" must never be read as "no novelty" under that
@@ -312,7 +307,7 @@ def _bank_metrics(
     n_valid: int,
 ) -> dict[str, object]:
     """The `"bank"` sub-dict of `metrics.json` (the supervised arm) -- includes
-    `low_confidence_modes` (adversarial-review binding, T2 finding 1, module
+    `low_confidence_modes` (module
     docstring): a caller reading `no_mode_fits_rate` alone cannot tell whether it
     under-fires, so the affected mode names travel with every written artifact,
     not just the log line `_warn_low_confidence` emits at fit time. `n_valid` is
@@ -344,7 +339,7 @@ def _warn_low_confidence(bank: ModeBank) -> None:
     """Emit ONE WARNING (this module's own logger -- stderr-bound by `main`'s
     `logging.basicConfig`, like every other Step-2 CLI) naming every
     low-confidence surviving member, iff `bank.low_confidence_modes` is
-    non-empty (module docstring, adversarial-review binding T2 finding 1): such
+    non-empty (module docstring): such
     a member's conformal threshold is `+inf` and can NEVER contribute a
     rejection to `ModeAssignment.no_mode_fits`'s whole-bank AND-conjunction, so
     the `no_mode_fits_rate` this rotation reports UNDER-FIRES for these modes --
@@ -557,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     prepared_fit = {name: prepared_all[name] for name in fit_run_names}
     prepared_test = prepared_all[test_run_obj.name]
 
-    # Test-run feature-contract guard (T3-review MEDIUM finding 1, mirrors
+    # Test-run feature-contract guard (mirrors
     # scripts/run_step2.py's `_run_cross_day_pooled` test-run-vs-fit-pool
     # geometry guard): `feature_names` here is the SAME "first fit run's
     # names" value ModeBank.fit is handed below as the pool's contract.

@@ -1,8 +1,5 @@
-"""D3 explainability analysis suite (Package-8, spec `docs/superpowers/specs/
-2026-07-21-step2-package8-modebank-recal-explain.md` §3.D3 + Amendment A1.2/A1.8/
-A1.11, plan `docs/superpowers/plans/2026-07-21-step2-package8-modebank-explain.md`
-Tasks 8+9): publication-grade figures + underlying CSVs from EXISTING artifacts/
-warm caches -- no new sweeps, no partner JSON/number read by any code here.
+"""D3 explainability analysis suite: publication-grade figures + underlying CSVs from
+EXISTING artifacts/warm caches -- no new sweeps, no partner JSON/number read by any code here.
 
 This module ships six Package-8 D3 analysis subcommands, a Package-9 D3a
 addition (`transitions`), and a markdown digest. Five of the first six share
@@ -65,7 +62,7 @@ THIS module's own output tree:
    per-day replication of the partner's reported within-day mode
    separability (Rodrigues & Zhang, 2026), computed only from our own
    caches. The figure's own title names the *variant* it was rendered from
-   (T9-review item 1, interpretation honesty), and its x-axis units follow
+   (by design, for interpretation honesty), and its x-axis units follow
    `_feature_unit_label`: genuine log10 for a raw-scale variant, `fusion`'s
    own per-run z-score for `fusion` (A1.1 -- `fuse()`'s columns keep their
    `_band_`/`_octave_` name tokens even though the VALUES are z-scored, so
@@ -75,7 +72,7 @@ THIS module's own output tree:
 5. `tonal-table` (Task 9) -- per (run, GT mode, physical stream) the three
    `rowii.signals.features.MACHINE_HZ` machine-tone band energies (shaft,
    blade-pass, guide-vane-pass) contrasted against their own NEAREST
-   TONE-FREE OCTAVE FLOOR (`_nearest_octave_hz`, T9-review item 2: the
+   TONE-FREE OCTAVE FLOOR (`_nearest_octave_hz`: the
    octave center nearest by Hz among those actually present for that
    stream, EXCLUDING any candidate whose own `[center/sqrt(2),
    center*sqrt(2)]` span already contains the tone -- a "floor" that
@@ -94,7 +91,7 @@ THIS module's own output tree:
    log10-domain ratio -- still an internally consistent RELATIVE reading,
    but not even loosely decibel-equivalent the way the audio/vibration
    case is; an embedding variant reads in that model's own embedding
-   units instead (T9-review item 1). Both non-log10 cases are named in the
+   units instead. Both non-log10 cases are named in the
    figure's own title/colorbar (`_feature_unit_label`) and repeated once
    in the digest, never silently left as an implied log10 claim. This
    module does not exclude fusion here (unlike D2's corrective
@@ -111,10 +108,7 @@ THIS module's own output tree:
    numbers only; no partner attribution (like `rotations-heatmap`, this is
    Stefan's own comparison-readability motivation, not a replicated
    analysis type).
-7. `transitions` (Package-9 spec `docs/superpowers/specs/
-   2026-07-22-step2-package9-once-naming-transitions.md` §3.D3(a), plan
-   `docs/superpowers/plans/2026-07-22-step2-package9-once-naming-
-   transitions.md` Task 4) -- a SCADA transition-run taxonomy across
+7. `transitions` -- a SCADA transition-run taxonomy across
    `--runs`, built ENTIRELY from OUR OWN `rowii.scada.labels.gt_labels`
    output (the `"transition"` state `_apply_ramp` + `_apply_transition_buffer`
    produce): every contiguous transition run is classed by the pair of KNOWN
@@ -527,8 +521,8 @@ def _tonal_contrast(band_energy: float, octave_floor: float) -> float:
 
 
 def _feature_unit_label(variant: str, feature_names: Sequence[str]) -> str:
-    """The units phrase for *variant*'s own stored feature values (T9-review
-    item 1, LOW-MED interpretation honesty): shared by `mode-signatures`/
+    """The units phrase for *variant*'s own stored feature values (kept
+    consistent for interpretation honesty): shared by `mode-signatures`/
     `tonal-table` (their title/axis/colorbar text) and the digest's matching
     caveat sentences, so one variant reads identically everywhere this
     module talks about its units.
@@ -1320,7 +1314,7 @@ def _plot_mode_signatures(
     (`max(median) - min(median)` over that feature's own mode rows;
     legibility, mirrors `_plot_feature_stability`'s `top_n` cap). Whiskers
     are the mode's own interquartile range (asymmetric q25/q75 bounds
-    around the median). T9-review item 1: *variant* names the figure's own
+    around the median). By design: *variant* names the figure's own
     title, and the x-axis units follow `_feature_unit_label(variant,
     feature_names)` -- never a blanket "log10" claim for `fusion`/an
     embedding variant. Returns the rendered `Axes` (test seam)."""
@@ -1513,7 +1507,7 @@ def _octave_span_contains(center_hz: float, target_hz: float) -> bool:
 def _nearest_octave_hz(target_hz: float, available_hz: Sequence[float]) -> float:
     """The octave CENTER in *available_hz* nearest to *target_hz*, restricted
     to centers whose OWN span (`_octave_span_contains`) does NOT already
-    contain *target_hz* (T9-review item 2: a "floor" that contains the tone
+    contain *target_hz* (by design: a "floor" that contains the tone
     would let the background reading include the tone's own energy,
     defeating `tonal-table`'s contrast) -- absolute Hz distance among the
     tone-free survivors; an exact tie keeps the smaller center
@@ -1555,7 +1549,7 @@ def _tonal_table(runs_features: Sequence[_RunFeatures]) -> pd.DataFrame:
     per `rowii.signals.features.MACHINE_HZ` band -- the tone's own median
     column energy (averaged across that stream's own live channels)
     contrasted (`_tonal_contrast`) against its NEAREST TONE-FREE OCTAVE
-    FLOOR's median energy (`_nearest_octave_hz`, T9-review item 2: the
+    FLOOR's median energy (`_nearest_octave_hz`: the
     octave center nearest by Hz among those ACTUALLY present for that
     stream, EXCLUDING any whose own span already contains the tone). A
     (stream, band) combination absent
@@ -1621,7 +1615,7 @@ def _plot_tonal_table(
     units; see module docstring's fusion z-score caveat), annotated with the
     numeric value per cell (mirrors `_plot_flag_rate_heatmap`'s layout, but
     SIGNED: `vmin`/`vmax` are the table's own min/max rather than a
-    zero-anchored non-negative range). T9-review item 1: *variant* names
+    zero-anchored non-negative range). By design: *variant* names
     the figure's own title, and the colorbar label follows
     `_feature_unit_label(variant, feature_names)`. Returns the rendered
     `Axes` (test seam; the colorbar itself lives on `ax.figure.axes[-1]`)."""
@@ -1776,7 +1770,7 @@ def _discover_pillar3_leaves(root: Path) -> pd.DataFrame:
     suffix (e.g. a `-frozen` leaf, outside the alpha grid this figure
     compares) is silently skipped, as is any leaf missing `event_eval.csv`
     or a `summary` row -- or whose CSV fails to parse or is missing an
-    expected column at all (a corrupt/truncated write): T9-review item 3
+    expected column at all (a corrupt/truncated write): this function
     wraps the per-leaf read + summary extraction in a try/except
     (`ValueError`, `KeyError`, `OSError`, `pd.errors.ParserError`,
     `pd.errors.EmptyDataError`), logs a warning naming the leaf, and moves
@@ -1924,10 +1918,7 @@ def _run_pillar3_figure(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand 7: transitions (Package-9 D3a, spec `docs/superpowers/specs/
-# 2026-07-22-step2-package9-once-naming-transitions.md` §3.D3(a), plan
-# `docs/superpowers/plans/2026-07-22-step2-package9-once-naming-
-# transitions.md` Task 4). Attribution (module docstring point 7): this
+# Subcommand 7: transitions. Attribution (module docstring point 7): this
 # taxonomy independently characterizes the same transition/dwell phenomenon
 # the partner's own monitoring work reports on (Rodrigues & Zhang, 2026) --
 # every number below is computed purely from OUR OWN `rowii.scada.labels.

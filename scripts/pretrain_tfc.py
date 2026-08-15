@@ -1,10 +1,9 @@
-"""TF-C pretraining CLI (package-4 spec D3, Task 3; extended by package-7
-spec D4/A3.9, Task 6): trains the compact TF-C encoder pair
+"""TF-C pretraining CLI: trains the compact TF-C encoder pair
 (`rowii.tfc.model.TfcModel`) on the MIMII pump audio corpus (`--corpus
 mimii` -> `tfc_audio.pt`), the CWRU+Paderborn vibration corpora (`--corpus
 bearings` -> `tfc_vib.pt`), or the PSHP plant's own pooled calibration-side
-audio (`--corpus pshp-pool` -> `tfc_audio_pshp.pt`), writing a Task-1-format
-checkpoint (`rowii.tfc.wrapper.load_tfc_model`'s docstring) into `--out`.
+audio (`--corpus pshp-pool` -> `tfc_audio_pshp.pt`), writing a checkpoint
+(`rowii.tfc.wrapper.load_tfc_model`'s docstring) into `--out`.
 
 Corpus routing (`_corpus_windows`, orchestrator resolution 1): `mimii` walks
 `--data-root/mimii/pump_0db` via `iter_windows_wav_dir` (MIMII's own
@@ -428,7 +427,7 @@ def _load_cached_pool_windows(
 ) -> tuple[np.ndarray, np.ndarray, str] | None:
     """Reuse a previously materialized pool npz (spec A3.9's materialize-ONCE
     rule) if -- and only if -- it is the pool the caller asked for AND the
-    live corpus still matches (T6-review hardening: *expected_fingerprint* is
+    live corpus still matches (*expected_fingerprint* is
     the file-signature `_pool_fingerprint` computed by the caller from the
     CURRENT on-disk burst files via a stat-only pass -- a same-structure
     re-ingest with different content therefore MISSES instead of silently
@@ -501,7 +500,7 @@ def _materialize_pool_windows(
     returns an empty array.
 
     *fingerprint* is the caller-computed `_pool_fingerprint` (file-signature
-    based, T6-review hardening) recorded verbatim in the npz -- this function
+    based) recorded verbatim in the npz -- this function
     never computes identity itself, so cache-check and write can never drift.
 
     Returns:
@@ -557,7 +556,7 @@ def _load_continue_checkpoint(path: Path) -> tuple[TfcConfig, dict[str, torch.Te
     coercion) and its model state dict, for `_train` to load as the init.
     Existence is checked by the caller (`main()`, a clean exit-2); a file
     that exists but is not a TF-C checkpoint -- INCLUDING one torch cannot
-    even deserialize (garbage bytes, T6-review finding) -- prints a pointed
+    even deserialize (garbage bytes) -- prints a pointed
     message to stderr and raises `SystemExit(2)`, never a raw traceback and
     never the bare-string `SystemExit` whose process status is 1."""
     import torch
@@ -700,7 +699,7 @@ def _train(
         except RuntimeError as exc:
             # strict=True (the default) is load-bearing: under strict=False a
             # MISSING key would silently keep its fresh random init -- a
-            # quietly corrupted "continued" run (T6-review finding). Normalize
+            # quietly corrupted "continued" run. Normalize
             # the mismatch to the CLI's loud exit-2 contract.
             print(
                 f"pretrain_tfc: --continue-from state dict does not match the "
@@ -883,7 +882,7 @@ def main(argv: list[str] | None = None) -> int:
             print("pretrain_tfc: --pool-runs is empty -- nothing to pool", file=sys.stderr)
             return 2
         npz_path = args.out / _POOL_WINDOWS_FILENAME
-        # T6-review hardening: discovery + a stat-only file-signature pass run on
+        # Hardening: discovery + a stat-only file-signature pass run on
         # EVERY invocation (a few seconds) so the cache-HIT check validates
         # freshness against the live corpus -- a counts-only fingerprint was
         # proven blind to same-structure content changes.

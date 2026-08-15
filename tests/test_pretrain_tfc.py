@@ -529,7 +529,7 @@ def _patch_pool_environment(monkeypatch, src_dir: Path, *, windows_per_run, call
     `.iter_target_windows` (module-level names, the adapt_beats/warm_cache
     monkeypatchability precedent) with a synthetic pool: `discover` knows
     exactly *windows_per_run*'s run names, each carrying ONE real (stat-able)
-    dummy mic burst file under *src_dir* -- the T6-review file-signature
+    dummy mic burst file under *src_dir* -- the file-signature
     fingerprint stats these, so content-staleness tests can mutate them; the
     fake iterator yields 8000-sample float32 windows with that run's constant
     values and asserts the D4 contract `target_hz=8000` while recording every
@@ -747,7 +747,7 @@ def test_pshp_pool_second_invocation_reuses_npz_cache(tmp_path, monkeypatch, cap
         assert pretrain_tfc.main([*argv, "--out-name", "tfc_audio_pshp_scratch.pt"]) == 0
 
     assert calls["iter"] == 2  # iter_target_windows NOT called again on a HIT
-    # T6-review hardening: discovery + the stat-only file-signature pass DO run
+    # Hardening: discovery + the stat-only file-signature pass DO run
     # on every invocation (freshness validation against the live corpus); only
     # window extraction is skipped on a HIT.
     assert calls["discover"] == 2
@@ -927,7 +927,7 @@ def test_continue_from_missing_file_exits_2(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# 10. T6-review hardening: content staleness, seed tripwire, continue-from
+# 10. Hardening: content staleness, seed tripwire, continue-from
 #     failure modes, npz self-healing, lineage completeness
 # ---------------------------------------------------------------------------
 
@@ -935,7 +935,7 @@ def test_continue_from_missing_file_exits_2(tmp_path, capsys):
 def test_pshp_pool_content_change_without_count_change_rematerializes(
     tmp_path, monkeypatch
 ):
-    """The T6 review proved a counts-only fingerprint served STALE windows after
+    """A counts-only fingerprint previously served STALE windows after
     a same-structure re-ingest. With file signatures, mutating a source file's
     bytes+mtime must MISS and re-materialize."""
     import os
@@ -972,7 +972,7 @@ def test_pshp_pool_content_change_without_count_change_rematerializes(
 def test_pshp_pool_never_threads_a_seed_into_iter_target_windows(
     tmp_path, monkeypatch
 ):
-    """Seed-pinning tripwire (T6-review HIGH): threading --seed into
+    """Seed-pinning tripwire: threading --seed into
     iter_target_windows would shuffle scoring-side windows into pretraining
     (leakage). The iterator must be called WITHOUT any seed override."""
     calls = {"iter": 0, "discover": 0}
@@ -1019,7 +1019,7 @@ def test_continue_from_garbage_file_exits_2_with_pointed_message(
 
 
 def test_continue_from_missing_state_key_exits_2(tmp_path, monkeypatch, capsys):
-    """strict=True regression pin (T6-review): a checkpoint missing one
+    """strict=True regression pin: a checkpoint missing one
     parameter must fail LOUDLY -- under strict=False that parameter would
     silently keep its random init."""
     import torch

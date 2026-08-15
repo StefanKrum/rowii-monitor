@@ -1,8 +1,7 @@
 """Shared run-preparation pipeline: discover -> grid -> chunked featurize -> validity mask.
 
-Extracted from `scripts/run_step1.py` (Step-2 Task S1, behavior-preserving refactor) so
-Step-2's mode-conditioned scoring package (`src/rowii/anomaly/`, design spec
-`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`) can reuse the
+Extracted from `scripts/run_step1.py` (behavior-preserving refactor) so
+Step-2's mode-conditioned scoring package (`src/rowii/anomaly/`) can reuse the
 exact same feature extraction Step-1's CLI already uses, instead of importing a *script*
 module or duplicating the logic. `prepare_run` is the single entry point: given a `Run` +
 variant string + `Config`, it returns a `PreparedRun` with the assembled `(W, F)` feature
@@ -562,7 +561,7 @@ def assemble_variant_features(
     before concatenating) -- `run_detection`'s own `zscore` call on
     already-z-scored fusion input is then an idempotent-ish
     re-standardization (mean ~0, std ~1 already), documented here rather
-    than special-cased, per the brief.
+    than special-cased.
     """
     if variant in ("audio", "audio-beats", "audio-tfc", "audio-student"):
         mats = [stream_results[s].features for s in _AUDIO_STREAMS]
@@ -829,9 +828,8 @@ def prepare_run(
     use_cache: bool = True,
 ) -> PreparedRun:
     """Grid + chunked featurize + validity mask for one (run, variant) -- the
-    expensive, k/clusterer-independent half of the Step-1 pipeline (design spec
-    `docs/superpowers/specs/2026-07-05-step1-state-detection-design.md` Task 12 steps
-    1-5), extracted from `scripts/run_step1.py`'s original `_prepare_run_features` so
+    expensive, k/clusterer-independent half of the Step-1 pipeline,
+    extracted from `scripts/run_step1.py`'s original `_prepare_run_features` so
     Step-2's `src/rowii/anomaly/` package can reuse the exact same feature extraction.
 
     Steps: resolve which streams the variant needs (`_streams_for_variant`) -> build a

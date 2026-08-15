@@ -1,7 +1,7 @@
 """Step-1 results-analysis package: consolidates `results/summary.csv` and per-run
-artifacts (frame_labels.parquet, segments.csv) into `results/analysis/` (spec: this
-task's own brief, no docs/superpowers spec -- a post-hoc analysis pass over the
-already-shipped Step-1 grid, not a pipeline change).
+artifacts (frame_labels.parquet, segments.csv) into `results/analysis/` -- a
+post-hoc analysis pass over the already-shipped Step-1 grid, not a pipeline
+change.
 
 Five outputs, each independently rerunnable:
 

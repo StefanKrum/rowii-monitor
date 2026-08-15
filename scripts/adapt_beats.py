@@ -1,11 +1,10 @@
-"""BEATs adaptation CLI (Step-2 package-5 spec D4, Task 3; objective per spec
-D1 as amended by Amendment A1): trains a LoRA-adapted or fully fine-tuned copy
+"""BEATs adaptation CLI: trains a LoRA-adapted or fully fine-tuned copy
 of the vendored BEATs encoder on ONE run's leakage-safe target-normal windows
-(`rowii.adapt.target_windows.iter_target_windows`, Task 2) against the native
+(`rowii.adapt.target_windows.iter_target_windows`) against the native
 token-level masked-reconstruction proxy objective
 (`rowii.adapt.objective.masked_token_loss`), exporting a MERGED,
 format-compatible checkpoint that reloads through the EXISTING
-`rowii.signals.beats_model.load_beats_model` path -- D2's integration trick:
+`rowii.signals.beats_model.load_beats_model` path -- the integration trick:
 pointing `ROWII_BEATS_CHECKPOINT` at the saved file turns every existing
 `audio-beats`/`fusion-beats` variant into the adapted evaluation, no new
 featurizer code needed downstream.
@@ -16,18 +15,16 @@ models/adapted/` -> `models/adapted/beats_lora_<run>.pt` / `beats_ft_<run>.pt`
 (multi-run: run names joined with `+`, e.g. `beats_lora_<a>+<b>.pt`) + a
 sidecar `<same-stem>.json`.
 
-Multi-run pooling (Step-2 package-7 Task 8, spec D6 as amended by A3.11:
-`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md`):
-`--runs a,b,c` (mutually exclusive with `--run`) draws the training windows
-ROUND-ROBIN across every named run's own leakage-safe calibration side via
-`rowii.adapt.target_windows.iter_target_windows_multi`, with `--max-windows`
-acting as the TOTAL budget (A3.11's binding rationale: a sequential chain
-would train almost entirely on run 1); the sidecar records the runs list and
-per-run window counts. The single-run `--run` path is untouched.
+Multi-run pooling: `--runs a,b,c` (mutually exclusive with `--run`) draws the
+training windows ROUND-ROBIN across every named run's own leakage-safe
+calibration side via `rowii.adapt.target_windows.iter_target_windows_multi`,
+with `--max-windows` acting as the TOTAL budget (round-robin by design: a
+sequential chain would train almost entirely on run 1); the sidecar records
+the runs list and per-run window counts. The single-run `--run` path is
+untouched.
 
 The native token path (READ THIS FIRST -- the train/inference-consistency
-guarantee, Amendment A1 in `docs/superpowers/specs/2026-07-16-step2-package5-
-adaptation-design.md`): the training forward pass reuses the model's OWN
+guarantee): the training forward pass reuses the model's OWN
 pre-encoder pipeline, stage for stage -- `model.preprocess` (fbank; hardcoded
 128 mels, fixed normalization constants) -> `model.patch_embedding` (strided
 Conv2d patchify) -> reshape/transpose to `(B, T, embed_dim)` ->
@@ -516,7 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
              "masked-token selection, AND the per-run calibration/scoring SPLIT "
              "(default: 7 -- the canonical seed every Step-2 sweep uses). A non-7 "
              "seed reassigns canonical-scoring segments into the adaptation set, "
-             "VOIDING the leakage guarantee vs the seed-7 evaluations (T8 review: "
+             "VOIDING the leakage guarantee vs the seed-7 evaluations ("
              "40-70%% of scoring segments flip on typical seeds); pretrain_tfc "
              "pins its split at 7 for exactly this reason, this CLI keeps the "
              "shipped P5 contract and WARNS instead.",
@@ -543,8 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning(
             "adapt_beats: --seed %d != 7 changes the per-run calibration/scoring "
             "SPLIT -- the resulting checkpoint's leakage guarantee holds only "
-            "against a seed-%d evaluation, NOT the canonical seed-7 Step-2 sweeps "
-            "(T8-review seed-tension resolution)",
+            "against a seed-%d evaluation, NOT the canonical seed-7 Step-2 sweeps.",
             args.seed, args.seed,
         )
 

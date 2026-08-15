@@ -14,8 +14,7 @@ property of THIS data, not carried over from an earlier delivery or
 exploratory deck.
 
 `ROWII_DATA_ROOT` now points at the PARENT root (`data/`, containing every
-`illwerke-<dayid>` day tree -- spec: docs/superpowers/specs/2026-07-07-step1-
-multiday-phase-shifter-addendum.md §2), so every run name discovered here
+`illwerke-<dayid>` day tree), so every run name discovered here
 carries its day-id prefix (e.g. `"250526-tu"`, `"010726-tu_ph_tu"`) -- this
 file's own single-tree/legacy naming used unprefixed names before the
 addendum; that backward-compat behaviour is covered separately by

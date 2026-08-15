@@ -37,8 +37,7 @@ from rowii.signals.features import MACHINE_HZ  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
 
 _DAY_ROOT = "illwerke-250526"
-"""ROWII_DATA_ROOT now points at the PARENT root (spec: docs/superpowers/specs/
-2026-07-07-step1-multiday-phase-shifter-addendum.md §2) containing every
+"""ROWII_DATA_ROOT now points at the PARENT root, containing every
 `illwerke-<dayid>` day tree -- checks 1-5 below are specific to the original
 2026-06-25 delivery, so they resolve their own Betriebsdaten hour under THIS
 day tree explicitly rather than assuming `cfg.data_root` itself is a single

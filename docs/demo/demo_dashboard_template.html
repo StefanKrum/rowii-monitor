@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ROWII Monitor — Live-Kontrollraum (Rodundwerk II, Maschine 1)</title>
+<title>ROWII Monitor — Live Control Room (Rodundwerk II, Machine 1)</title>
 <style>
   :root {
     --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
@@ -124,8 +124,8 @@
   /* stage 3: state */
   .state-stage { align-items: stretch; }
   .state-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 8px 0 currentColor; }
-  .state-name-de { font-size: 16px; font-weight: 800; line-height: 1.15; }
-  .state-name-en { font-size: 9.5px; color: var(--muted2); text-transform: uppercase; letter-spacing: .06em; }
+  .state-name-label { font-size: 16px; font-weight: 800; line-height: 1.15; }
+  .state-name-key { font-size: 9.5px; color: var(--muted2); text-transform: uppercase; letter-spacing: .06em; }
   .state-pills { display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
   .pill {
     font-size: 9px; font-weight: 700; padding: 3px 7px; border-radius: 5px; text-align: center;
@@ -140,7 +140,7 @@
   .score-readout { display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 1px; column-gap: 5px; font-size: 9.5px; color: var(--muted); }
   .score-readout b { font-size: 12.5px; color: var(--ink); }
   .score-readout .thr { color: var(--alarm); font-weight: 700; }
-  .score-readout .sep { flex-basis: 100%; height: 0; } /* force "Schwelle ..." onto its own line */
+  .score-readout .sep { flex-basis: 100%; height: 0; } /* force "Threshold ..." onto its own line */
 
   /* stage 5: alarm */
   .lamp-wrap { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
@@ -255,7 +255,7 @@
      instead of gracefully narrowing. Below the breakpoint, abandon the grid
      entirely: stack the three zones as plain block boxes (each sized to its own
      content) and let the PAGE scroll normally instead of clipping to 100vh --
-     "muss nicht schön sein, nur funktional und nicht kollabiert" (task note). The
+     "doesn't need to be pretty, just functional and not collapsed" (task note). The
      replay bar stays reachable via position:sticky. */
   @media (max-width: 1100px) {
     html, body { height: auto; min-height: 100%; }
@@ -286,56 +286,56 @@
 
 <header class="topbar">
   <div class="brand">
-    <h1>ROWII Monitor — Live-Kontrollraum</h1>
-    <small>Rodundwerk II, Maschine 1 · Pumpspeicher-Aggregat</small>
+    <h1>ROWII Monitor — Live Control Room</h1>
+    <small>Rodundwerk II, Machine 1 · pumped-storage unit</small>
   </div>
   <div class="badge-row" id="headerBadges"></div>
   <div class="spacer"></div>
-  <div class="live-pill" id="livePill"><span class="live-dot"></span><span id="livePillText">Bereit</span></div>
+  <div class="live-pill" id="livePill"><span class="live-dot"></span><span id="livePillText">Ready</span></div>
 </header>
 
 <main class="grid">
 
   <section class="panel" id="schemaPanel">
-    <div class="panel-head"><h2>Anlagen-Schema</h2><span class="hint">4 Sensorgruppen</span></div>
+    <div class="panel-head"><h2>Plant schematic</h2><span class="hint">4 sensor groups</span></div>
     <div class="panel-body" id="schemaBody">
       <svg id="schema" viewBox="0 0 220 380"></svg>
       <div class="sensor-legend" id="sensorLegend"></div>
-      <p class="schema-caption">Schematische Darstellung — Einbaupositionen vereinfacht.<br>Exakte Positionen stehen noch aus.</p>
+      <p class="schema-caption">Schematic representation — installation positions simplified.<br>Exact positions are still pending.</p>
     </div>
   </section>
 
   <section class="panel" id="pipelinePanel">
-    <div class="panel-head"><h2>Pipeline — vom Rohsignal zum Alarm</h2><span class="hint" id="pipelineHint">audio-beats</span></div>
+    <div class="panel-head"><h2>Pipeline — from raw signal to alarm</h2><span class="hint" id="pipelineHint">audio-beats</span></div>
     <div class="panel-body" id="pipelineBody">
 
       <div class="pipe-stage" id="stageRaw">
-        <div class="pipe-head"><span class="pipe-num">1</span><span class="pipe-title">Rohsignal</span></div>
-        <div class="pipe-note">Live-Wellenform des Mikrofonsignals (Generator-Mikrofonring), sofern gerade ein Clip abgespielt wird.</div>
-        <div class="pipe-canvas-wrap"><canvas id="waveCanvas"></canvas><div class="pipe-idle-note" id="waveIdle">kein Audio aktiv</div></div>
+        <div class="pipe-head"><span class="pipe-num">1</span><span class="pipe-title">Raw signal</span></div>
+        <div class="pipe-note">Live waveform of the microphone signal (generator mic ring), while a clip is playing.</div>
+        <div class="pipe-canvas-wrap"><canvas id="waveCanvas"></canvas><div class="pipe-idle-note" id="waveIdle">no audio active</div></div>
       </div>
       <div class="pipe-arrow">&#8594;</div>
 
       <div class="pipe-stage" id="stageFeat">
-        <div class="pipe-head"><span class="pipe-num">2</span><span class="pipe-title">Merkmale</span></div>
-        <div class="pipe-note">Vereinfachtes Live-Spektrum desselben Signals (FFT). Das Modell selbst nutzt zusätzlich gelernte BEATs-Embeddings.</div>
-        <div class="pipe-canvas-wrap"><canvas id="fftCanvas"></canvas><div class="pipe-idle-note" id="fftIdle">kein Audio aktiv</div></div>
+        <div class="pipe-head"><span class="pipe-num">2</span><span class="pipe-title">Features</span></div>
+        <div class="pipe-note">Simplified live spectrum of the same signal (FFT). The model itself additionally uses learned BEATs embeddings.</div>
+        <div class="pipe-canvas-wrap"><canvas id="fftCanvas"></canvas><div class="pipe-idle-note" id="fftIdle">no audio active</div></div>
       </div>
       <div class="pipe-arrow">&#8594;</div>
 
       <div class="pipe-stage state-stage" id="stageState">
-        <div class="pipe-head"><span class="pipe-num">3</span><span class="pipe-title">Zustand</span></div>
-        <div class="pipe-note">Aktuell erkannter Betriebszustand (Modellbank, zero-shot auf diesem Tag).</div>
+        <div class="pipe-head"><span class="pipe-num">3</span><span class="pipe-title">State</span></div>
+        <div class="pipe-note">Currently detected operating state (model bank, zero-shot on this day).</div>
         <div style="display:flex;align-items:center;gap:7px;margin-top:2px">
           <span class="state-dot" id="stateDot"></span>
           <div>
-            <div class="state-name-de" id="stateNameDe">–</div>
-            <div class="state-name-en" id="stateNameEn">–</div>
+            <div class="state-name-label" id="stateNameLabel">–</div>
+            <div class="state-name-key" id="stateNameKey">–</div>
           </div>
         </div>
         <div class="state-pills">
-          <div class="pill warn" id="pillTransition">Übergangsnähe</div>
-          <div class="pill info" id="pillLowConf">Kalibrierung unsicher</div>
+          <div class="pill warn" id="pillTransition">Transition proximity</div>
+          <div class="pill info" id="pillLowConf">Calibration uncertain</div>
         </div>
       </div>
       <div class="pipe-arrow">&#8594;</div>
@@ -345,7 +345,7 @@
         <div class="score-readout">
           <span>Score <b id="scoreVal">–</b></span>
           <span class="sep"></span>
-          <span>Schwelle <span class="thr mono" id="thresholdVal">–</span></span>
+          <span>Threshold <span class="thr mono" id="thresholdVal">–</span></span>
         </div>
         <div class="pipe-canvas-wrap"><canvas id="scoreCanvas"></canvas></div>
       </div>
@@ -359,11 +359,11 @@
           <div class="alarm-counts">
             <div>
               <span class="ac-hits-val" id="hitCountVal">0</span>
-              <span class="ac-hits-label">Protokoll-Treffer</span>
+              <span class="ac-hits-label">Protocol hits</span>
             </div>
             <div>
               <span class="ac-baseline-val" id="baselineCountVal">0</span>
-              <span class="ac-baseline-label">Grundraten-Alarme (erwartet bei α=5&nbsp;%)</span>
+              <span class="ac-baseline-label">Baseline-rate alarms (expected at α=5&nbsp;%)</span>
             </div>
           </div>
         </div>
@@ -373,8 +373,8 @@
   </section>
 
   <section class="panel" id="feedPanel">
-    <div class="panel-head"><h2>Alarm-Feed</h2><span id="feedCounter" class="zero">0</span></div>
-    <div class="panel-body"><div id="feedList"><div class="feed-empty" id="feedEmpty">Noch keine Alarme in dieser Wiedergabe.</div></div></div>
+    <div class="panel-head"><h2>Alarm feed</h2><span id="feedCounter" class="zero">0</span></div>
+    <div class="panel-body"><div id="feedList"><div class="feed-empty" id="feedEmpty">No alarms yet in this playback.</div></div></div>
   </section>
 
 </main>
@@ -396,23 +396,23 @@
   <div class="timeline-wrap">
     <svg id="timeline"></svg>
     <div class="timeline-legend">
-      <span><span class="sw" style="background:var(--gt)"></span>Protokollierter Schonhammer-Schlag</span>
-      <span><span class="sw" style="background:var(--alarm)"></span>Alarm-Episode</span>
-      <span><span class="sw" style="background:var(--s-turbine)"></span>Turbinenbetrieb</span>
-      <span><span class="sw" style="background:var(--s-standstill)"></span>Stillstand</span>
-      <span style="margin-left:auto">Klick in die Zeitleiste springt zur Zeit · Play startet Audio an der nächsten Session-Aufnahme</span>
+      <span><span class="sw" style="background:var(--gt)"></span>Logged Schonhammer strike</span>
+      <span><span class="sw" style="background:var(--alarm)"></span>Alarm episode</span>
+      <span><span class="sw" style="background:var(--s-turbine)"></span>Turbine operation</span>
+      <span><span class="sw" style="background:var(--s-standstill)"></span>Standstill</span>
+      <span style="margin-left:auto">Click in the timeline to jump to that time · Play starts audio at the next session recording</span>
     </div>
   </div>
 </footer>
 
 <p class="honesty-strip">
-  Alle Zahlen stammen unverändert aus <code>results/step2/once-calibrated/audio-beats/monitor/&lt;session&gt;/recalibrate/</code>
-  (Zustände, Scores, Schwellen, Alarme) und <code>docs/groundtruth/080726_events_*.csv</code> (Schlag-Protokoll); Audioclips sind
-  reale, unbearbeitete Ausschnitte (nur Resampling 50→16 kHz, Pegel-Normalisierung −1 dBFS). Zustands-Snapshot wurde ausschließlich
-  auf früheren Messtagen gefittet — beide Sitzungen sind zero-shot. Die Alarmrate folgt der kalibrierten α-Schwelle je Zustand;
-  „Grundraten-Alarme" (gebündelt, ohne Protokoll-Treffer) sind KEIN Fehler der Ground Truth, sondern exakt die bei α&nbsp;=&nbsp;5&nbsp;%
-  erwartete, konforme Fehlalarmrate — sie werden weiterhin vollständig gezählt und angezeigt, nur nicht mehr einzeln
-  ausgeschrieben, damit die 13 protokollierten Schläge im Feed nicht untergehen.
+  All numbers come unchanged from <code>results/step2/once-calibrated/audio-beats/monitor/&lt;session&gt;/recalibrate/</code>
+  (states, scores, thresholds, alarms) and <code>docs/groundtruth/080726_events_*.csv</code> (strike log); audio clips are
+  real, unedited excerpts (only resampling 50→16 kHz, level normalization −1 dBFS). The state snapshot was fitted exclusively
+  on earlier measurement days — both sessions are zero-shot. The alarm rate follows the calibrated α threshold per state;
+  "baseline-rate alarms" (bundled, without a protocol hit) are NOT an error of the ground truth, but exactly the
+  conformant false-alarm rate expected at α&nbsp;=&nbsp;5&nbsp;% — they continue to be counted and shown in full, just no longer
+  spelled out individually, so the 13 logged strikes don't get lost in the feed.
 </p>
 
 <script id="dashboard-data" type="application/json">__DASHBOARD_DATA__</script>
@@ -424,7 +424,7 @@ const STATE_COLOR = {
   standstill: "var(--s-standstill)", turbine: "var(--s-turbine)", pump: "var(--s-pump)",
   "phase-shifter": "var(--s-phaseshifter)", invalid: "var(--s-invalid)",
 };
-const INVALID_STATE = { name: "invalid", name_de: "Übergang / ungültig", threshold: null, low_confidence: false };
+const INVALID_STATE = { name: "invalid", name_label: "Transition / invalid", threshold: null, low_confidence: false };
 const SESSION_ORDER = [...new Set([DATA.default_session, ...Object.keys(DATA.sessions)])];
 
 function colorForStateInfo(info) {
@@ -472,8 +472,8 @@ let simT = 0, playing = false, speedMult = 60, lastWallMs = null, rafId = null;
 let coupled = false, activeClip = null, activeAudioEl = null, couplingCleanup = null;
 // Fix-1: hits (protocol-matched episodes) and baseline-rate episodes (the
 // calibrated alpha=5% false-alarm rate, no protocol match) are counted and
-// displayed separately -- openBundle is the currently-growing "+N Grundraten-
-// Alarme" feed card (or null when the most recent feed item is a hit card / the
+// displayed separately -- openBundle is the currently-growing "+N baseline-rate
+// alarms" feed card (or null when the most recent feed item is a hit card / the
 // feed is empty), see advanceFeed/resetFeedTo.
 let feedIndex = 0, hitCount = 0, baselineCount = 0, openBundle = null;
 let sharedCtx = null;
@@ -514,14 +514,14 @@ function renderHeaderBadges() {
     `<span class="badge">${D.label}</span>` +
     `<span class="badge dim">${D.representation} · ${D.threshold_mode}</span>` +
     `<span class="badge dim">Start ${fmtClock(0)} UTC</span>` +
-    `<span class="badge dim">${D.event_summary.n_detected}/${D.event_summary.n_events} Protokoll-Schläge erkannt` +
+    `<span class="badge dim">${D.event_summary.n_detected}/${D.event_summary.n_events} protocol strikes detected` +
     ` (${Math.round(D.event_summary.event_tpr * 100)}%)</span>`;
   // Snapshot (state references) is always fit once on earlier days and applied
   // zero-shot here (never refit); only the per-state THRESHOLD is refit per
   // D.threshold_mode ("recalibrate", the operationally recommended arm --
   // DASHBOARD_THRESHOLD_MODE's own docstring in make_demo_assets.py).
   document.getElementById("pipelineHint").textContent =
-    D.representation + " · Zustands-Snapshot fix (zero-shot) · Schwellen: " + D.threshold_mode;
+    D.representation + " · state snapshot fixed (zero-shot) · thresholds: " + D.threshold_mode;
 }
 
 /* ============================================================================
@@ -543,13 +543,13 @@ function buildSchema() {
   const genLabel = svgEl("text", { class: "machine-label", x: 110, y: 60, "text-anchor": "middle" });
   genLabel.textContent = "GENERATOR"; sv.appendChild(genLabel);
   const genSub = svgEl("text", { class: "machine-sub", x: 110, y: 74, "text-anchor": "middle" });
-  genSub.textContent = "Erregung / Läufer"; sv.appendChild(genSub);
+  genSub.textContent = "Excitation / rotor"; sv.appendChild(genSub);
   // turbine/pump block
   sv.appendChild(svgEl("rect", { class: "machine-block", x: 62, y: 246, width: 96, height: 60, rx: 8 }));
   const turLabel = svgEl("text", { class: "machine-label", x: 110, y: 274, "text-anchor": "middle" });
-  turLabel.textContent = "TURBINE / PUMPE"; sv.appendChild(turLabel);
+  turLabel.textContent = "TURBINE / PUMP"; sv.appendChild(turLabel);
   const turSub = svgEl("text", { class: "machine-sub", x: 110, y: 288, "text-anchor": "middle" });
-  turSub.textContent = "Laufrad, Spiralgehäuse"; sv.appendChild(turSub);
+  turSub.textContent = "Runner, spiral casing"; sv.appendChild(turSub);
 
   // mic ring helper
   function micRing(cx, cy, rx, ry, n, group) {
@@ -583,10 +583,10 @@ function buildSchema() {
   sv.setAttribute("viewBox", `0 0 ${W} ${H}`);
 
   document.getElementById("sensorLegend").innerHTML = `
-    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWGeneratorMic__0 — Mikrofonring Generator (4)</div>
-    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWTurbineMic__1 — Mikrofonring Turbine (5)</div>
-    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWGeneratorVib__2 — Beschleunigungssensor Generator</div>
-    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWTurbineVib__3 — Beschleunigungssensor Turbine</div>
+    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWGeneratorMic__0 — generator mic ring (4)</div>
+    <div class="row"><span class="sw" style="background:var(--accent)"></span>RAWTurbineMic__1 — turbine mic ring (5)</div>
+    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWGeneratorVib__2 — generator accelerometer</div>
+    <div class="row"><span class="sw" style="background:#ffb84c"></span>RAWTurbineVib__3 — turbine accelerometer</div>
   `;
 }
 
@@ -734,8 +734,8 @@ function updateStateStage(seg) {
   const color = colorForStateInfo(info);
   document.getElementById("stateDot").style.background = color;
   document.getElementById("stateDot").style.color = color;
-  document.getElementById("stateNameDe").textContent = info.name_de;
-  document.getElementById("stateNameEn").textContent = seg.state < 0 ? "invalid / transition" : info.name;
+  document.getElementById("stateNameLabel").textContent = info.name_label;
+  document.getElementById("stateNameKey").textContent = seg.state < 0 ? "invalid / transition" : info.name;
   return info;
 }
 function updatePills(pt, info) {
@@ -838,39 +838,39 @@ function updateLamp(active, isHit, episodeKey) {
     }
   }
   lastPulsedEpisodeKey = active ? episodeKey : null;
-  document.getElementById("lampLabel").textContent = (active && isHit) ? "ALARM" : (active ? "Grundrate" : "Normal");
+  document.getElementById("lampLabel").textContent = (active && isHit) ? "ALARM" : (active ? "Baseline rate" : "Normal");
   document.getElementById("livePill").classList.toggle("on", !!(active && isHit));
   document.getElementById("livePillText").textContent =
-    (active && isHit) ? "Alarm aktiv (Protokoll-Treffer)" : (playing ? "Wiedergabe läuft" : "Bereit");
+    (active && isHit) ? "Alarm active (protocol hit)" : (playing ? "Playback running" : "Ready");
 }
 
 /* ============================================================================
  * Alarm feed (Fix-1b: episodes WITH a ground-truth match keep a full "hit" card;
  * consecutive episodes withOUT one collapse into a single running, dimmed
- * "+N Grundraten-Alarme" summary card -- see buildFeedItems for the pure bundling
+ * "+N baseline-rate alarms" summary card -- see buildFeedItems for the pure bundling
  * rule shared by both the seek path (resetFeedTo) and the live-tick path
  * (advanceFeed).
  * ==========================================================================*/
 function gtLineHtml(ep) {
   const hm = fmtHM(ep.start_s);
-  return `<div class="gt-line">passt zum protokollierten Schonhammer-Schlag „${ep.gt}“ (${hm} UTC)</div>`;
+  return `<div class="gt-line">matches logged Schonhammer strike "${ep.gt}" (${hm} UTC)</div>`;
 }
 function feedCardHtml(ep) {
   const info = stateInfoFor(ep.state);
   const color = colorForStateInfo(info);
   const ratio = ep.ratio != null ? ep.ratio.toFixed(1) + "×" : "–";
-  const tags = [`<span class="tag mic">Mikrofon</span>`];
+  const tags = [`<span class="tag mic">Microphone</span>`];
   if (ep.vib_coincident) tags.push(`<span class="tag vib">+ Vibration</span>`);
-  if (ep.near_transition) tags.push(`<span class="tag trans">Übergangsnähe</span>`);
+  if (ep.near_transition) tags.push(`<span class="tag trans">Transition proximity</span>`);
   return `<div class="feed-card">
-    <div class="row1"><time class="mono">${fmtClock(ep.start_s)} UTC</time><span class="ratio">${ratio} über Schwelle</span></div>
-    <div class="state-line"><span class="state-dot" style="width:8px;height:8px;background:${color};color:${color}"></span>${info.name_de} · ${ep.n} Fenster</div>
+    <div class="row1"><time class="mono">${fmtClock(ep.start_s)} UTC</time><span class="ratio">${ratio} above threshold</span></div>
+    <div class="state-line"><span class="state-dot" style="width:8px;height:8px;background:${color};color:${color}"></span>${info.name_label} · ${ep.n} windows</div>
     <div class="tags">${tags.join("")}</div>
     ${gtLineHtml(ep)}
   </div>`;
 }
 function formatBundleText(b) {
-  return `+${b.n} Grundraten-Alarme · ${fmtHM(b.start_s)}–${fmtHM(b.end_s)} UTC · max ${b.maxRatio.toFixed(1)}× über Schwelle`;
+  return `+${b.n} baseline-rate alarms · ${fmtHM(b.start_s)}–${fmtHM(b.end_s)} UTC · max ${b.maxRatio.toFixed(1)}× above threshold`;
 }
 function buildHitCardEl(ep) {
   const wrap = document.createElement("div");
@@ -911,7 +911,7 @@ function renderCounters() {
   document.getElementById("baselineCountVal").textContent = String(baselineCount);
   const badge = document.getElementById("feedCounter");
   badge.textContent = String(hitCount);
-  badge.title = `${hitCount} Protokoll-Treffer, ${baselineCount} Grundraten-Alarme (kalibrierte α=5%-Rate)`;
+  badge.title = `${hitCount} protocol hits, ${baselineCount} baseline-rate alarms (calibrated α=5% rate)`;
   badge.classList.toggle("zero", hitCount === 0);
 }
 function resetFeedTo(t) {
@@ -928,7 +928,7 @@ function resetFeedTo(t) {
   list.innerHTML = "";
   openBundle = null;
   if (!shown.length) {
-    list.innerHTML = `<div class="feed-empty" id="feedEmpty">Noch keine Alarme in dieser Wiedergabe.</div>`;
+    list.innerHTML = `<div class="feed-empty" id="feedEmpty">No alarms yet in this playback.</div>`;
   } else {
     // shown is oldest-first; prepending each in turn leaves the newest on top,
     // matching the live (advanceFeed) insertion order.
@@ -1043,7 +1043,7 @@ function buildChipStrip() {
     const chip = document.createElement("div");
     chip.className = "clip-chip" + (c.kind === "strike" ? " kind-strike" : "");
     chip.dataset.file = c.file;
-    chip.innerHTML = `<b>${c.kind === "strike" ? "Schlag: " + c.label : "Zustand " + c.label}</b><span>${fmtClock(c.start_s)} UTC</span>`;
+    chip.innerHTML = `<b>${c.kind === "strike" ? "Strike: " + c.label : "State " + c.label}</b><span>${fmtClock(c.start_s)} UTC</span>`;
     chip.addEventListener("click", () => {
       pause();
       detachCoupling();
@@ -1153,7 +1153,7 @@ function startClipAudio(clip) {
   }
   if (audioEl.readyState >= 1) seekToOffset();
   else audioEl.addEventListener("loadedmetadata", seekToOffset, { once: true });
-  audioEl.play().catch(err => console.warn("Audio-Wiedergabe blockiert:", err));
+  audioEl.play().catch(err => console.warn("Audio playback blocked:", err));
 
   const onTime = () => { const prevT = simT; renderAll(clip.start_s + audioEl.currentTime, prevT); };
   const onEnded = () => { coupled = false; activeClip = null; activeAudioEl = null; lastWallMs = null; updateChipHighlight(); };
@@ -1167,7 +1167,7 @@ function play() {
   if (simT >= D.duration_s) simT = 0;
   playing = true;
   updatePlayButton();
-  document.getElementById("livePillText").textContent = "Wiedergabe läuft";
+  document.getElementById("livePillText").textContent = "Playback running";
   const startingClip = clipContaining(simT);
   if (startingClip) startClipAudio(startingClip);
   else { coupled = false; lastWallMs = null; }
@@ -1176,7 +1176,7 @@ function play() {
 function pause() {
   playing = false;
   updatePlayButton();
-  document.getElementById("livePillText").textContent = "Bereit";
+  document.getElementById("livePillText").textContent = "Ready";
   pauseAllAudio();
 }
 function tick(nowMs) {
@@ -1193,7 +1193,7 @@ function tick(nowMs) {
       } else {
         const finished = nextT >= D.duration_s;
         renderAll(Math.min(nextT, D.duration_s), prevT);
-        if (finished) { playing = false; updatePlayButton(); document.getElementById("livePillText").textContent = "Ende der Sitzung"; }
+        if (finished) { playing = false; updatePlayButton(); document.getElementById("livePillText").textContent = "End of session"; }
       }
     }
     lastWallMs = nowMs;

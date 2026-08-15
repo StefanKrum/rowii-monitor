@@ -3,8 +3,7 @@ selection + trigger-log + FAR-reading helpers on synthetic parquet/verdict input
 and the 270626 sentinel-only path -- monitor/eval_events subprocesses are behind
 monkeypatched seams, so no real monitor run happens in a unit test (spec §5).
 
-Plan's own RED tests (verbatim, docs/superpowers/plans/
-2026-07-22-step2-package9-once-naming-transitions.md, Task 6) are
+RED tests written directly against the design's own acceptance criteria:
 `test_read_realized_far_over_scored_only`, `test_far_on_common_window_set`,
 `test_regime_far_and_trigger_verdict`, `test_sentinel_only_day_has_no_far_row`.
 This file extends them with: `_scoring_windows` (declared in the plan's own
@@ -19,8 +18,8 @@ test_run_modebank.py`'s own `_prepared`/`_install` seam shape -- the real
 for real on synthetic blobs; `_run_monitor`/`_run_eval_events` are monkeypatched
 away, so no real subprocess and no real data anywhere in this file).
 
-T6-review fix-loop additions (commit ab2f3fc FIX-REQUIRED, findings F1-F4):
-`test_read_realized_window_far_reads_summary_row` (F1, the event-free FAR
+Hardening-pass additions (fixes filed and closed as a batch):
+`test_read_realized_window_far_reads_summary_row` (the event-free FAR
 reader) and `test_run_monitor_builds_expected_argv_frozen_recalibrate_and_
 event_free` (F3, patches `subprocess.run` itself -- never the `_run_monitor`
 seam) are new. `test_run_once_calibrated_replay`'s `_fake_run_monitor` now
@@ -157,7 +156,7 @@ def test_pool_block_ids_unique_per_run_and_local_segment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T6-review F1: `_read_realized_window_far` -- the event-free FAR reading a
+# `_read_realized_window_far` -- the event-free FAR reading a
 # regimes row for an EVENT-BEARING `_REPLAY` entry must use (never the raw
 # `alarms.parquet` scored-window mean, which silently counts the
 # induced-event windows too -- they correctly alarm, inflating the raw
@@ -182,7 +181,7 @@ def test_read_realized_window_far_reads_summary_row(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T6-review F3: `_run_monitor`'s constructed subprocess.run argv -- patches
+# `_run_monitor`'s constructed subprocess.run argv -- patches
 # `subprocess.run` itself (NOT the `_run_monitor` seam used everywhere else in
 # this file), so the real argv-building logic inside `_run_monitor` is
 # exercised. Asserts full LIST equality (never a joined string), covering a
@@ -406,14 +405,14 @@ def _fake_run_monitor(
     calibration` (NOT scored), windows 4-19 are `scored` with exactly 1 alarm
     (1/16 = 0.0625) -- mirrors the P7 central finding (frozen cross-day FAR
     does not hold) so the 3-regime arithmetic is meaningfully checkable, not
-    merely plumbing, AND exercises the A1.6 common-window subsetting for real
-    (T6-review F4): the OLD fixture marked every window `role="scored"` on
+    merely plumbing, AND exercises the common-window subsetting for real
+    (regression coverage): the OLD fixture marked every window `role="scored"` on
     BOTH arms, making `_far_on_windows` a no-op end-to-end (window sets
     always matched) -- a real subsetting bug would have gone uncaught by this
     test. Applies uniformly to every run name (including `080726-pu_strikes`,
     an EVENT-BEARING entry) since this fixture never varies by run; the
-    event-bearing regime FAR no longer reads this parquet directly (T6-review
-    F1, `_fake_run_eval_events` below), so the subset change is invisible to
+    event-bearing regime FAR no longer reads this parquet directly
+    (`_fake_run_eval_events` below), so the subset change is invisible to
     it except via the UNCHANGED frozen-arm secondary reading."""
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 20
@@ -591,8 +590,8 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     # Fixed fake alarm rates (module-level _fake_run_monitor): frozen 12/20 =
     # 0.6 over its full population; recalibrate marks windows 0-3 consumed
     # (NOT scored) and 1/16 scored windows alarming = 0.0625 -- a STRICT
-    # SUBSET, so the A1.6 common-window subsetting is exercised for real
-    # (T6-review F4): subsetting the frozen arm onto the recalibrate arm's own
+    # SUBSET, so the common-window subsetting is exercised for real
+    # (regression coverage): subsetting the frozen arm onto the recalibrate arm's own
     # scoring split {4..19} keeps only frozen's windows 4-11 alarming (8/16 =
     # 0.5), genuinely DIFFERENT from the frozen arm's own full-population
     # reading (0.6) -- the OLD all-scored fixture made these equal by
@@ -607,7 +606,7 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert normal["once_triggered_far"] == pytest.approx(0.5)
 
     strikes = regimes_by_run["080726-pu_strikes"]
-    # T6-review F1: 080726 is EVENT-BEARING -- its regime FAR must be sourced
+    # 080726 is EVENT-BEARING -- its regime FAR must be sourced
     # from eval_events' own event-free `realized_window_far` (the fake
     # _fake_run_eval_events summary: 0.9 frozen / 0.2 recalibrate), NEVER the
     # raw alarms.parquet scored-window mean (which would read 0.6/0.0625 here,
@@ -636,8 +635,8 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     # s1/s2 threshold derivations are persisted (sidecar JSON requirement).
     assert sidecar["s1"]["family"] == "knn"
     assert 0.0 <= sidecar["s1"]["threshold"] <= 1.0
-    # T6-review F2: pct/n_boot/seed are echoed EXPLICITLY (never left implicit
-    # in s1_threshold's own defaults) so the sidecar fully documents the A1.1
+    # pct/n_boot/seed are echoed EXPLICITLY (never left implicit
+    # in s1_threshold's own defaults) so the sidecar fully documents the
     # bootstrap derivation without a reader having to open sentinels.py.
     assert sidecar["s1"]["pct"] == 97.5
     assert sidecar["s1"]["n_boot"] == 1000

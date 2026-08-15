@@ -1,7 +1,4 @@
-"""Level-only, shape-preserving channel recalibration (Package-8 D2, spec
-`docs/superpowers/specs/2026-07-21-step2-package8-modebank-recal-explain.md` §3.D2
-as amended by A1.1/A1.4/A1.9, plan `docs/superpowers/plans/2026-07-21-step2-
-package8-modebank-explain.md` Task 5).
+"""Level-only, shape-preserving channel recalibration.
 
 **VERIFIED FACT (`rowii.signals.features`, re-confirmed against the source before
 writing the offset math below).** `AudioFeaturizer`/`VibFeaturizer` emit `*_log_rms`,

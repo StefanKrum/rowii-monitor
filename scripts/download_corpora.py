@@ -1,6 +1,6 @@
-"""Public-corpus acquisition CLI (package-4 spec D2, Task 2): downloads the
+"""Public-corpus acquisition CLI: downloads the
 audio (MIMII) and vibration (CWRU, Paderborn KAt) corpora
-`scripts/pretrain_tfc.py` (Task 3) pre-trains the TF-C encoders on, into
+`scripts/pretrain_tfc.py` pre-trains the TF-C encoders on, into
 `--dest` (default `data/public/` -- gitignored via this repo's existing
 blanket `data/` rule in `.gitignore`).
 
@@ -20,17 +20,17 @@ file is removed from disk, `ChecksumMismatchError` is raised, that corpus's
 `MANIFEST.json` is never written, and `main` exits 1 with a message naming
 the file (never a silent accept, never a traceback). The `_SHA256_TBD`
 sentinel (the one sanctioned placeholder, for table additions that have not
-yet been downloaded once -- currently none; the package-7 K003-K006 rows,
-spec D5/A3.10, graduated to real hashes) is never "verified" against anything --
+yet been downloaded once -- currently none; the Paderborn K003-K006 rows have
+since graduated to real hashes) is never "verified" against anything --
 there is nothing yet to verify -- instead the computed hash is logged and
 written into that corpus's `MANIFEST.json`, which is how a real sha256 first
 becomes known, for a human to transcribe back into `_CORPUS_FILES` afterward
-(exactly the flow that produced the hashes now in the table; the original
-HEAD/metadata URL verification is documented in the Task-2 completion
-report, `.superpowers/sdd/task-2-report.md`).
+(exactly the flow that produced the hashes now in the table; every entry was
+cross-checked against the source site's own HEAD/metadata response before
+being pinned).
 
 Corpus provenance (verified 2026-07-16, HEAD/metadata requests only, no
-payload bytes fetched -- see the completion report for full detail):
+payload bytes fetched):
   - mimii: Zenodo record 3384388 ("MIMII Dataset: Sound Dataset for
     Malfunctioning Industrial Machine Investigation and Inspection", Purohit
     et al. 2019, CC BY-SA 4.0), the 0 dB SNR "pump" machine type.
@@ -39,9 +39,8 @@ payload bytes fetched -- see the completion report for full detail):
     12k Drive End Bearing Fault Data (one file per fault location).
   - paderborn: Paderborn KAt-DataCenter
     (groups.uni-paderborn.de/kat/BearingDataCenter), the full healthy set
-    K001-K006: K001-K002 since package-4 spec D2 (its named subset, verified
-    2026-07-16); K003-K006 added by package-7 spec D5/A3.10 (same
-    BearingDataCenter URL scheme -- NOT Zenodo -- sentinel-hashed until
+    K001-K006: K001-K002 verified first (2026-07-16); K003-K006 added later
+    (same BearingDataCenter URL scheme -- NOT Zenodo -- sentinel-hashed until
     their first verified download).
 
 Extraction: MIMII's zip is extracted via `zipfile` into
@@ -49,8 +48,8 @@ Extraction: MIMII's zip is extracted via `zipfile` into
 or `unrar` (whichever is found on PATH first) into a same-stem sibling
 directory (`K001.rar` -> `K001/`); if NEITHER is on PATH, this script prints
 precise manual-extraction instructions and continues -- a missing extractor
-is not a download failure (spec D2's documented fallback). CWRU's `.mat`
-files need no extraction.
+is not a download failure, but a documented, intentional fallback. CWRU's
+`.mat` files need no extraction.
 """
 from __future__ import annotations
 
@@ -70,8 +69,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _SHA256_TBD = "TBD-first-download"
-"""The one sanctioned sha256 placeholder (plan `docs/superpowers/plans/
-2026-07-16-step2-package4-tfc.md`, Task-2 binding contract) -- see this
+"""The one sanctioned sha256 placeholder -- see this
 module's own docstring for how `_download_file` treats it."""
 
 _MIMII_LICENSE = "CC BY-SA 4.0"

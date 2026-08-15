@@ -1,8 +1,8 @@
 """Tests for scripts/verify_data_facts.py (Package-8 D4, A1.6): PURE-logic unit tests
 on the variance criterion, the changeover locator (synthetic series, incl. its
-reference-windowed search and top-k alternatives, T1 review finding 1/2), the
-chronological day-root sort (T1 review finding 3), and the channel-anonymous
-mic-profile math (T1 review finding 4) -- IO seams monkeypatched, no real data."""
+reference-windowed search and top-k alternatives), the
+chronological day-root sort, and the channel-anonymous
+mic-profile math -- IO seams monkeypatched, no real data."""
 from __future__ import annotations
 
 import sys
@@ -48,7 +48,7 @@ def test_locate_changeover_requires_two_points() -> None:
 
 
 def test_locate_changeover_reference_window_avoids_wrong_global_step() -> None:
-    # 080726-shaped scenario (T1 review finding 1): a POWER-only changeover
+    # 080726-shaped scenario: a POWER-only changeover
     # (pump -> phase-shifter) sits at index 60, but an earlier, slightly LARGER
     # same-channel step (pump start) at index 20 wins the unrestricted global
     # argmax -- the WRONG changeover. A reference-windowed search centred on the
@@ -147,7 +147,7 @@ def test_channel_level_profile_and_outlier_are_channel_anonymous() -> None:
     levels[strike, 3] = -39.8
     # a zero-sample strike window (all channels NaN, `_run_window_grid_and_levels`'s
     # own fill value for an empty window) must not poison nanmedian for the OTHER
-    # strike rows' channels (T1 review finding 4).
+    # strike rows' channels.
     levels[55, :] = np.nan
     profile = vdf.channel_level_profile(levels, strike)
     assert profile.shape == (4,)

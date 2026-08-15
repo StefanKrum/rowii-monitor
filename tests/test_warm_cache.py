@@ -272,7 +272,7 @@ def test_unknown_run_name_exits_2_and_lists_available_runs(monkeypatch, tmp_path
 
 def test_unknown_run_name_check_also_applies_under_dry_run(monkeypatch, tmp_path, capsys) -> None:
     """The exit-2 unknown-run-name contract is not exempted by --dry-run (only the
-    beats-import guard is dry-run-exempt, per the brief's step 3)."""
+    beats-import guard is dry-run-exempt)."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
 

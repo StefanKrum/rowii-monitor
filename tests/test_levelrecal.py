@@ -72,7 +72,7 @@ def test_docstring_records_the_verified_log_scale_fact() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T5-review finding 1 (BLOCKER): the empty-set guard is an EMBEDDING-variant
+# The empty-set guard is an EMBEDDING-variant
 # refusal, not a fusion refusal -- fuse() z-scores VALUES only (module
 # docstring), so fusion's feature NAMES retain the level tokens and pattern-match
 # level_columns exactly like audio/vibration. These two tests pin the REAL
@@ -107,7 +107,7 @@ def test_beats_embedding_names_raise_the_empty_set_guard() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T5-review finding 2 (minor): level_recal_offsets now logs a warning naming the
+# level_recal_offsets now logs a warning naming the
 # dropped-key count (+ up to 3 examples) whenever the run/reference key sets
 # differ, instead of dropping the non-overlapping keys silently.
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ def test_offsets_warns_with_dropped_count_and_up_to_three_examples(
 
 
 # ---------------------------------------------------------------------------
-# T5-review finding 3 (minor): column_medians documents its no-NaN precondition
+# column_medians documents its no-NaN precondition
 # and now enforces it (loud, matching this module's posture) -- scoped to the
 # LEVEL columns only, since those are the only ones it reads.
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def test_column_medians_ignores_non_finite_values_outside_level_columns() -> Non
 
 
 # ---------------------------------------------------------------------------
-# T5-review finding 4 (minor): guards that already existed but had no direct
+# Guards that already existed but had no direct
 # test -- apply_level_recal's unknown-offset-key guard, both functions' geometry
 # guards, and apply_level_recal's float64-copy/non-mutation contract.
 # ---------------------------------------------------------------------------

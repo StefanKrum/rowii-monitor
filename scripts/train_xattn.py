@@ -1,6 +1,5 @@
-"""Cross-attention fusion-head training CLI (Step-2 package-5 spec D8, plan Task
-6): trains `rowii.fusionx.model.XattnHead` CLIP-style on `audio-beats`'
-ALREADY-CACHED 768-d embeddings (the PRIMARY-mic column slice of that cache,
+"""Cross-attention fusion-head training CLI: trains `rowii.fusionx.model.XattnHead` CLIP-style
+on `audio-beats`' ALREADY-CACHED 768-d embeddings (the PRIMARY-mic column slice of that cache,
 which concatenates both mic streams -- `rowii.pipeline.stream_columns`, shared
 with `scripts/distill_beats.py`'s teacher slice and `scripts/run_step2.py`'s
 `--xattn-fusion` view) and the `fusion` cache's own vibration-branch

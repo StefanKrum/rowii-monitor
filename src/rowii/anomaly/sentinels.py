@@ -1,8 +1,7 @@
-"""Two label-free drift sentinels for the once-calibrated D1 replay (Package-9,
-spec `docs/superpowers/specs/2026-07-22-step2-package9-once-naming-transitions.md`
-§3.D1 as amended by A1.1). Both fire on a monitored day using thresholds derived
+"""Two label-free drift sentinels for the once-calibrated replay. Both fire on
+a monitored day using thresholds derived
 ONLY from the commissioning (B1) CONFORMAL side, so both are label-free at
-runtime. s1 reuses the P8 mode bank's `no_mode_fits` rate; s2 is a per-stream
+runtime. s1 reuses the mode bank's `no_mode_fits` rate; s2 is a per-stream
 level-step on the RAW mic caches (fusion's z-scored columns are excluded
 upstream -- callers read the raw `audio`/`vibration` caches for s2, never
 fusion's stored columns, A1.1). The sentinel idea echoes the partner's drift

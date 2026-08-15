@@ -1,10 +1,8 @@
 """Score-level fusion of the `fusion` variant's audio and vibration branches via
-p-value combination (design spec `docs/superpowers/specs/2026-07-15-step2-package3-
-baselines-design.md` D5, plan `docs/superpowers/plans/2026-07-15-step2-package3-
-baselines.md` Task 5).
+p-value combination.
 
-Feature-level fusion (package 1) concatenates audio and vibration feature columns onto
-one grid and scores them with a SINGLE scorer. Score-level fusion instead scores each
+Feature-level fusion (the earlier within-day approach) concatenates audio and vibration feature
+columns onto one grid and scores them with a SINGLE scorer. Score-level fusion instead scores each
 branch SEPARATELY -- its own scorer, its own split-conformal calibration set, its own
 conformal p-values (`rowii.anomaly.conformal.p_values`) -- and only combines the two
 branches' evidence at the very end, as one scalar per window:

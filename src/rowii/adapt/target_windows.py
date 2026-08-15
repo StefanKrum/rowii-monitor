@@ -1,6 +1,4 @@
-"""Leakage-aware target-normal training-window iterator (Step-2 package-5
-Task 2, design spec D3: `docs/superpowers/specs/2026-07-16-step2-package5-
-adaptation-design.md`).
+"""Leakage-aware target-normal training-window iterator.
 
 `iter_target_windows` feeds `scripts/adapt_beats.py`'s masked-token
 adaptation objective (Task 1 as amended by spec Amendment A1,
@@ -442,8 +440,8 @@ def _iter_windows_multi(
                 # Exhausted -- this run drops out of the rotation for good
                 # (never re-probed: iter_target_windows yields each
                 # calibration-side window exactly once). A run that never
-                # contributed ANY window is warned about here (T8-review
-                # MEDIUM: sidecar-only visibility is not a runtime signal),
+                # contributed ANY window is warned about here
+                # (sidecar-only visibility is not a runtime signal),
                 # matching the A4.1 nothing-drops-silently posture.
                 if yielded_per_run[name] == 0:
                     logger.warning(
@@ -493,9 +491,7 @@ def iter_target_windows_multi(
     seed: int = 7,
     return_run_names: bool = False,
 ) -> Iterator[np.ndarray] | Iterator[tuple[str, np.ndarray]]:
-    """Round-robin multi-run pooling of `iter_target_windows` (Step-2
-    package-7 Task 8, spec D6 as amended by A3.11: `docs/superpowers/specs/
-    2026-07-18-step2-package7-robustness-design.md`): target-normal windows
+    """Round-robin multi-run pooling of `iter_target_windows`: target-normal windows
     drawn from EVERY run in *runs*, interleaved one window per run per
     rotation pass (a, b, c, a, b, c, ...), stopping after *max_windows*
     TOTAL windows.

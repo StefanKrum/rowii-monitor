@@ -1,9 +1,6 @@
 """Step-1 operating-state detection CLI: discover -> grid -> featurize -> detect -> evaluate.
 
-One CLI drives the whole (run, variant, clusterer) grid described in the design
-spec (`docs/superpowers/specs/2026-07-05-step1-state-detection-design.md` §5)
-and implementation plan Task 12
-(`docs/superpowers/plans/2026-07-05-step1-state-detection.md`). Every stage is
+One CLI drives the whole (run, variant, clusterer) grid. Every stage is
 an importable, unit-testable function; `main` only wires them together per the
 CLI arguments.
 
@@ -640,8 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     n_rows = 0
     for run in runs:
         # A run must only ever be evaluated against its OWN day tree's
-        # Betriebsdaten (spec: docs/superpowers/specs/2026-07-07-step1-
-        # multiday-phase-shifter-addendum.md §2) -- passing the flat, pooled
+        # Betriebsdaten (by design) -- passing the flat, pooled
         # `index.betriebsdaten` here would let `_betriebsdaten_for_grid`'s
         # time-overlap filter match a DIFFERENT day's SCADA file whenever two
         # days' burst/Betriebsdaten timestamps happen to overlap (every day

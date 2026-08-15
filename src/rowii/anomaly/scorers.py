@@ -1,6 +1,5 @@
 """kNN embedding-distance and Mahalanobis anomaly scorers for Step-2 mode-conditioned
-scoring (design spec `docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`,
-plan `docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S3).
+scoring.
 
 Both scorers share the same two-step contract (`Scorer` protocol below): `fit(reference)`
 consumes a `(N, F)` matrix of NORMAL reference embeddings/features for one operating
@@ -25,9 +24,7 @@ structure (design §3.5). `shrinkage` (0 = pure per-feature variance, 1 = fully
 isotropic) keeps a reference feature with near-zero variance from letting a
 correspondingly tiny deviation dominate the score; see `MahalanobisScorer.fit`.
 
-Step-2 package 3 (design spec `docs/superpowers/specs/2026-07-15-step2-package3-
-baselines-design.md` D1, plan `docs/superpowers/plans/2026-07-15-step2-package3-
-baselines.md` Task 1) extends this module with three classical one-class baselines on
+The baselines evaluation extends this module with three classical one-class baselines on
 the SAME `Scorer` contract: `OcSvmScorer` (sklearn `OneClassSVM`, RBF kernel),
 `IsolationForestScorer` (sklearn `IsolationForest`), and `LofScorer` (sklearn
 `LocalOutlierFactor`, novelty mode). Each wraps its underlying sklearn estimator's own
@@ -279,11 +276,10 @@ class MahalanobisScorer:
 
 
 class OcSvmScorer:
-    """One-class SVM baseline (RBF kernel) on the shared Scorer contract (design spec
-    `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md` D1).
+    """One-class SVM baseline (RBF kernel) on the shared Scorer contract.
 
     score = -decision_function(x); higher = more anomalous; polarity is set here by
-    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    construction, never auto-detected (v1 H2 lesson) -- sklearn's own
     `OneClassSVM.decision_function` is signed the opposite way (positive = inlier side
     of the learned boundary, negative = outlier side), so every score this class
     returns is that quantity's negation.
@@ -337,11 +333,10 @@ class OcSvmScorer:
 
 
 class IsolationForestScorer:
-    """Isolation Forest baseline on the shared Scorer contract (design spec
-    `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md` D1).
+    """Isolation Forest baseline on the shared Scorer contract.
 
     score = -score_samples(x); higher = more anomalous; polarity is set here by
-    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    construction, never auto-detected (v1 H2 lesson) -- sklearn's own
     `IsolationForest.score_samples` is signed the opposite way (higher = more normal,
     i.e. harder to isolate with few random splits), so every score this class returns
     is that quantity's negation.
@@ -401,9 +396,7 @@ class IsolationForestScorer:
 
 
 class LofScorer:
-    """Local Outlier Factor baseline (novelty mode) on the shared Scorer contract
-    (design spec `docs/superpowers/specs/2026-07-15-step2-package3-baselines-design.md`
-    D1).
+    """Local Outlier Factor baseline (novelty mode) on the shared Scorer contract.
 
     score = -score_samples(x); higher = more anomalous; polarity is set here by
     construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own

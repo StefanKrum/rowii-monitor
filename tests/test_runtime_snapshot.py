@@ -1,7 +1,5 @@
-"""Tests for `rowii.runtime.snapshot` (Step-2 package-6 Task 1, design spec
-`docs/superpowers/specs/2026-07-16-step2-package6-runtime-pillar3-design.md` D1 +
-amendment A1): pickle-free `MonitorSnapshot` round-trip (bitwise apply/score parity),
-format guards (version mismatch, runtime-scorer whitelist), the k<=1 degenerate
+"""Tests for `rowii.runtime.snapshot`: pickle-free `MonitorSnapshot` round-trip (bitwise
+apply/score parity), format guards (version mismatch, runtime-scorer whitelist), the k<=1 degenerate
 detector (A1.2), and split parity with `run_sweep`'s exact top/nested discipline
 (A1.6).
 
@@ -304,7 +302,7 @@ def test_degenerate_single_state_round_trip(tmp_path: Path) -> None:
     )
     assert np.array_equal(full_labels[prepared.valid_mask], result.frame_labels)
 
-    # T1-review LOW: the degenerate snapshot's SCORING half must work too --
+    # The degenerate snapshot's SCORING half must work too --
     # one threshold, and a scorer that produces finite scores for that label.
     assert set(loaded.thresholds) == {single_id}
     scores = scorer_for_label(loaded, single_id).score(features_valid)
@@ -445,13 +443,13 @@ def test_scorer_for_label_unknown_label_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. T1-review hardening: covars pin, partial valid_mask, truncated archive
+# 8. Hardening: covars pin, partial valid_mask, truncated archive
 # ---------------------------------------------------------------------------
 
 
 def test_covars_diagonals_round_trip_bit_exact(tmp_path: Path) -> None:
-    """Pins Amendment A1.1 directly: the reconstructed GaussianHMM consumes the
-    STORED (k, F) diagonals bit-exactly (the T1 review showed the well-separated
+    """Pins a fixed-covariance guarantee directly: the reconstructed GaussianHMM consumes the
+    STORED (k, F) diagonals bit-exactly (the well-separated
     fixture's Viterbi labels cannot pin this -- covariance never decides a label
     there -- so the array itself is asserted, plus disk-mutation propagation)."""
     prepared = _two_state_prepared()
@@ -478,8 +476,8 @@ def test_covars_diagonals_round_trip_bit_exact(tmp_path: Path) -> None:
 
 
 def test_partial_valid_mask_fit_and_round_trip(tmp_path: Path) -> None:
-    """The operationally-critical path the original fixtures skipped (T1 review
-    MEDIUM): invalid windows must come back as -1 in full_labels, never enter
+    """The operationally-critical path the original fixtures skipped:
+    invalid windows must come back as -1 in full_labels, never enter
     any reference matrix, and round-trip apply parity must hold on valid rows."""
     base = _two_state_prepared()
     valid_mask = base.valid_mask.copy()

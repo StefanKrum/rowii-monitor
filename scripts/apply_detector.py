@@ -1,10 +1,9 @@
-"""Detector-transfer qualitative timeline CLI (package-2 spec D2 stretch, `docs/
-superpowers/specs/2026-07-15-step2-scarcity-crossday-beats-design.md` D2): apply a
+"""Detector-transfer qualitative timeline CLI: apply a
 detector fitted on one SCADA-covered day to a SECOND day with no SCADA ground truth
 at all (27.06 permanently lacks a Betriebsdaten folder), producing a purely
 QUALITATIVE state timeline -- `segments.csv` + `timeline.md`, both carrying an
 explicit "labels are transferred, no ground truth" banner and NO accuracy/ARI/F1 or
-any other GT-based metric (spec: "narrative cross-check ... report-only, no values
+any other GT-based metric (by design: "narrative cross-check ... report-only, no values
 adopted, no metrics claimed").
 
 Detector transfer itself is `rowii.state.detect.FittedDetector.fit`/`.apply`

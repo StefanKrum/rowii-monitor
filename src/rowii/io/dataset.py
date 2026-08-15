@@ -7,8 +7,7 @@ UTC as a *hint* only -- per the format's authoritative source, the UDBF frame
 timestamps recovered by `rowii.io.gantner` are the ground truth for actual
 alignment.
 
-`discover(data_root)` accepts two shapes of `data_root` (spec: docs/superpowers/
-specs/2026-07-07-step1-multiday-phase-shifter-addendum.md §2):
+`discover(data_root)` accepts two shapes of `data_root`:
 
 - **Single-tree (legacy, backward compatible):** `data_root` itself directly
   contains a `"* Messung"` directory (e.g. `<data_root>/20260626 Messung/TU`).

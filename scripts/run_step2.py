@@ -1,11 +1,8 @@
 """Step-2 mode-conditioned anomaly-sweep CLI: prepare -> label -> sweep -> report.
 
-Drives `rowii.anomaly.sweep.run_sweep` (Task S5) over one or more (run, variant,
-labels, conditioning, scorer) combinations for three protocols (design spec
-`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md` §2-4, plan
-`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S6, extended by
-package 2's design spec `docs/superpowers/specs/2026-07-15-step2-scarcity-crossday-
-beats-design.md` §D2 for the third protocol below):
+Drives `rowii.anomaly.sweep.run_sweep` over one or more (run, variant,
+labels, conditioning, scorer) combinations for three protocols (extended for
+the third protocol below):
 
 - **within-day**: per selected run, prepare features (`rowii.pipeline.prepare_run`),
   attach labels, then run one sweep per (conditioning, scorer) pair the CLI was asked
@@ -18,10 +15,9 @@ beats-design.md` §D2 for the third protocol below):
   `cross-day`, but day A's detector is TRANSFERRED to day B (`rowii.state.detect.
   FittedDetector.apply`, no refit) instead of pooling, and day B's windows are scored
   under their own PREDICTED state against day A's per-state reference/threshold for
-  that state -- package 2's answer to whether per-state conditioning restores the FAR
+  that state -- answering whether per-state conditioning restores the FAR
   control `cross-day`'s pooling loses (see the dedicated section below).
-- **cross-day-pooled** (package-7 Task 3, spec `docs/superpowers/specs/2026-07-18-
-  step2-package7-robustness-design.md` D2 as amended by A3): held-out-day-group
+- **cross-day-pooled**: held-out-day-group
   evaluation -- references/detector/frozen thresholds from a POOL of explicitly named
   fit runs (`--fit-runs`), evaluated on ONE held-out test run (`--test-run`) under
   BOTH threshold modes in one invocation (see the dedicated section below).
@@ -1357,8 +1353,7 @@ Append-only log of anomaly candidates surfaced by the Step-2 mode-conditioned sw
 cross-reference only. Every entry carries an explicit **source** (provenance) and an
 **assessment** status. No externally sourced value (score, threshold, timing precision,
 ...) is ever adopted into our own computation -- external entries are comparison-only,
-verified independently against our own sweeps where possible (design spec
-`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md` §1-2).
+verified independently against our own sweeps where possible.
 
 ## External candidates (partner-reported, provenance labeled)
 
@@ -3263,7 +3258,7 @@ def _run_day_groups(run: Run) -> set[str]:
     the recording days as the plant filesystem names them, and every guard
     comparison uses the same convention on both sides.
 
-    A SET, not the first file's date (T3-review MEDIUM): a recording that
+    A SET, not the first file's date: a recording that
     continues past local midnight without a >15-min gap stays ONE discovered
     run, so a first-file-only day group would report just the start date while
     most windows physically sit on the next calendar day -- silently bypassing

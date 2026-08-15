@@ -1,8 +1,6 @@
 """Pillar-3 event-level evaluation CLI (PREPARED-ONLY): labeled fault intervals
 (`events.csv`) vs a monitor/sweep alarms table (`alarms.parquet`) -> per-event
-TPR, detection latency, and false-alarm rates (Step-2 package 6, design spec
-`docs/superpowers/specs/2026-07-16-step2-package6-runtime-pillar3-design.md` D3,
-plan Task 3).
+TPR, detection latency, and false-alarm rates.
 
 Campaign day = `scripts/monitor.py` (snapshot + new recording -> alarms.parquet)
 then THIS script (alarms.parquet + the campaign's labeled fault intervals ->

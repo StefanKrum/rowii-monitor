@@ -1,7 +1,5 @@
 """Cache warm-up CLI: pre-populate `results/cache/<run>--<variant>.npz` for one or
-more (run, variant) combinations (Step-2 package 2, design spec `docs/superpowers/
-specs/2026-07-15-step2-scarcity-crossday-beats-design.md` D4, plan `docs/
-superpowers/plans/2026-07-15-step2-scarcity-crossday-beats.md` Task 6).
+more (run, variant) combinations.
 
 BEATs variants (`audio-beats`, `fusion-beats`) run a frozen transformer over hours
 of recorded audio -- expensive relative to handcrafted features. `rowii.pipeline.

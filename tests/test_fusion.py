@@ -1,7 +1,5 @@
 """Unit tests for `rowii.anomaly.fusion`: score-level fusion of the `fusion` variant's
-audio and vibration branches via p-value combination (design spec `docs/superpowers/
-specs/2026-07-15-step2-package3-baselines-design.md` D5, plan `docs/superpowers/plans/
-2026-07-15-step2-package3-baselines.md` Task 5). Synthetic-only -- no real data.
+audio and vibration branches via p-value combination. Synthetic-only -- no real data.
 """
 from __future__ import annotations
 

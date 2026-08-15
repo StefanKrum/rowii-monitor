@@ -1,15 +1,12 @@
 """D1 replay driver -- "calibrate once, recalibrate only on a label-free drift
-sentinel" (Step-2 package 9, design spec `docs/superpowers/specs/
-2026-07-22-step2-package9-once-naming-transitions.md` §3.D1 as amended by
-A1.1/A1.2/A1.6/A1.8, plan `docs/superpowers/plans/
-2026-07-22-step2-package9-once-naming-transitions.md` Task 6).
+sentinel".
 
-**Framing (binding honesty, spec D1).** A retrospective, day-granular SIMULATION
+**Framing (binding honesty).** A retrospective, day-granular SIMULATION
 over the recorded days -- NOT an online detector, NOT a persistent recalibrated-
 baseline state machine (explicitly out of scope). The chronological order below
 drives WHEN a sentinel fires in the report, not a causal runtime decision:
 sentinels are label-free AT RUNTIME, but every threshold they fire against is
-derived ONCE from the commissioning (B1) pool alone (A1.1). "Once-calibrated" is
+derived ONCE from the commissioning (B1) pool alone. "Once-calibrated" is
 scoped to "once per instrumentation era" -- a caught era boundary (the
 2026-06-29 `MeasName` changeover) IS the success criterion, not a failure of the
 "once" goal.
@@ -17,46 +14,48 @@ scoped to "once per instrumentation era" -- a caught era boundary (the
 **Pipeline.** One `--representation` (`fusion`/`vibration`/`audio-beats`) per
 invocation (the `run_step2` one-arm rule) scores FAR through a pre-built B1
 snapshot (`--snapshot`, built by `scripts/run_step2.py --protocol
-cross-day-pooled --save-snapshot`, plan Task 7). The two drift sentinels
-(`rowii.anomaly.sentinels`, Task 5) are REPRESENTATION-INDEPENDENT by design: s1
-always reads the **audio-beats** mode bank (spec D1: "the era-drift-robust
+cross-day-pooled --save-snapshot`). The two drift sentinels
+(`rowii.anomaly.sentinels`) are REPRESENTATION-INDEPENDENT by design: s1
+always reads the **audio-beats** mode bank ("the era-drift-robust
 representation whose columns are never refused by the contract guard across
 eras"); s2 always reads the RAW `audio`/`vibration` caches (never a
-representation's own, possibly z-scored, columns, A1.1). Both sentinels'
+representation's own, possibly z-scored, columns). Both sentinels'
 thresholds are commissioned ONCE, on `--bank-fit-runs` (the B1 pool, era B --
-Task 7 always passes exactly `_B1_FIT_RUNS`) via its CONFORMAL (held-out) side,
-never a monitored day and never a partner figure (A1.1 firewall). Per monitored
+always exactly `_B1_FIT_RUNS`) via its CONFORMAL (held-out) side,
+never a monitored day and never a partner figure (a strict no-partner-data
+firewall). Per monitored
 day this driver then: (1) evaluates s1 (`no_mode_fits` day-rate vs the B1
 bootstrap threshold) and s2 (raw mic/vibration day-median vs the B1 anchor+MAD
 band, with the `RAWGeneratorVib__2`-only vibration cross-check attributing the
-cause, A1.8) -- the SAME `s1 or s2` verdict gates all three FAR regimes; (2)
+cause) -- the SAME `s1 or s2` verdict gates all three FAR regimes; (2)
 subprocess-invokes `scripts/monitor.py` in `--thresholds frozen` and
 `--thresholds recalibrate` (script-sibling rule: a script never imports another
 script's internals, so monitor.py runs as a real subprocess, behind the
-`_run_monitor` seam tests monkeypatch away, spec §5); (3) reports three FAR
+`_run_monitor` seam tests monkeypatch away); (3) reports three FAR
 regimes -- always-frozen, always-recalibrate, once+triggered -- for NON-event
-days ALL on the common recalibrate scoring-split window population (A1.6
-headline), with the full-population frozen FAR as a labeled secondary column;
+days ALL on the common recalibrate scoring-split window population, with the
+full-population frozen FAR as a labeled secondary column;
 for the EVENT-BEARING day (`080726-pu_strikes`) the headline instead sources
 all three arms from `scripts/eval_events.py`'s own event-free
-`realized_window_far` (T6-review F1 -- the common-window/raw-parquet reading
+`realized_window_far` (the common-window/raw-parquet reading
 silently includes the induced-strike windows, which correctly alarm,
 inflating it ~2.5-3x), labeled `far_basis="event-free per eval_events"`,
 keeping the raw scored-window FAR as the SAME labeled
 `frozen_far_full_population` secondary so the two readings are never
 conflated.
 
-**Pinned run set (A1.2, "no run enumeration by day root anywhere").** `_REPLAY`
-is the P7 rotation run set in true chronological order, including `270626`
+**Pinned run set ("no run enumeration by day root anywhere").** `_REPLAY`
+is the robustness study's rotation run set in true chronological order, including `270626`
 (era A, between `250526` and `290626`) as a SENTINEL-ONLY row: it has no
-Betriebsdaten, so it gets no monitor.py/FAR row at all, only a trigger-log entry
-(A1.2/A1.8). `250526-pu-afternoon` is deliberately EXCLUDED (only its fusion
+Betriebsdaten, so it gets no monitor.py/FAR row at all, only a trigger-log
+entry. `250526-pu-afternoon` is deliberately EXCLUDED (only its fusion
 cache exists on disk). `010726-tu_ph_tu`/`010726-pu` are B1 pool members, so
-their frozen/once monitoring is IN-SAMPLE and tagged `"in-sample"` (D1 honesty
-3) -- computed exactly like every other day, just labeled for interpretation.
+their frozen/once monitoring is IN-SAMPLE and tagged `"in-sample"` --
+computed exactly like every other day, just labeled for interpretation.
 `080726-pu_strikes` (era C, the induced-strike day) is EVENT-BEARING
 (`events_csv` set): `--exclude-calibration-events
-docs/groundtruth/080726_events_pu.csv` (the P7 pillar-3 rule, A2.3.3) is
+docs/groundtruth/080726_events_pu.csv` (by design: calibration windows must
+never contain labelled events) is
 passed to every `monitor.py` call for it so the RECALIBRATE threshold is
 never contaminated by a strike window (frozen mode ignores the flag with a
 warning -- it draws no calibration from the monitored run at all, so there is
@@ -66,7 +65,7 @@ mean is NOT event-free (the induced-strike windows are still scored -- under
 recalibrate they are moved from calibration onto the scoring side by monitor's
 own `_apply_calibration_exclusion`, and under frozen they were always scored
 regardless of the flag -- and they correctly alarm, inflating the raw reading
-~2.5-3x, T6-review F1). The genuinely event-free reading is
+~2.5-3x). The genuinely event-free reading is
 `scripts/eval_events.py`'s own `realized_window_far` (computed over
 `role=="scored"` windows OUTSIDE every tolerance-padded strike interval,
 `rowii.eval.events.evaluate_events`'s contract) -- sourced here for ALL THREE
@@ -74,35 +73,35 @@ regime arms and labeled `far_basis="event-free per eval_events"` in the
 regimes table/sidecar, with the raw scored-window FAR of the frozen arm kept
 visible as the SAME labeled `frozen_far_full_population` secondary so the two
 readings are never conflated. `080726-st_strikes` is used ONLY for the
-pillar-3 event-retention check below (A1.2), never a regime/trigger-log row of
+pillar-3 event-retention check below, never a regime/trigger-log row of
 its own.
 
 **Pillar-3 TPR-retained readout.** For BOTH `080726` sessions (PU pumping, ST
 standstill) this driver reuses the SAME frozen/recalibrate alarms.parquet
 already produced for the FAR table (`080726-pu_strikes`) -- and, for PU, the
-SAME `eval_events.py` summary already computed there for the T6-review F1
+SAME `eval_events.py` summary already computed there for the
 event-free regime FAR (`event_eval_by_run`, never re-invoked as a second
 subprocess call for the identical alarms/events pair) -- or produced once more
-under the SAME era-C decision (`080726-st_strikes` -- A1.2 scopes it to this
-check alone, so it inherits era C's own trigger verdict rather than being
+under the SAME era-C decision (`080726-st_strikes` -- this check alone scopes
+it, so it inherits era C's own trigger verdict rather than being
 independently sentineled: both sessions were recorded the same day under the
 same instrumentation era, so re-deriving an independent sentinel verdict for ST
 would not change anything this driver could act on differently) and feeds ST
 through `scripts/eval_events.py` (subprocess, `_run_eval_events` seam) at the
 README pillar-3 tolerance (5 s) and this driver's own `--alpha`. Reporting BOTH
 the once+triggered (recalibrate) TPR and the frozen-arm TPR side by side is the
-story spec D1 states explicitly: "the sentinel firing on 080726 -> recalibrate
+story this replay makes explicit: "the sentinel firing on 080726 -> recalibrate
 -> strikes remain detectable, whereas staying frozen across the era gives the
 trivially-broken cross-era snapshot" -- both numbers, never only the favorable
 one.
 
-**Attribution (spec §4).** The two-sentinel drift-monitoring idea echoes the
+**Attribution.** The two-sentinel drift-monitoring idea echoes the
 partner's own drift monitoring (Rodrigues & Zhang, 2026); every threshold and
 every reported number here is computed from OUR OWN caches/artifacts -- no
-partner JSON or number is read by any code in this module (A1.8 firewall,
-inherited).
+partner JSON or number is read by any code in this module (a strict
+no-partner-data firewall, inherited from the pipeline's other modules).
 
-**alpha unification.** `--alpha` (default 0.01, matching Task 7's own B1
+**alpha unification.** `--alpha` (default 0.01, matching the B1
 snapshot-build command) is used uniformly for THREE distinct conformal
 calibrations that would otherwise silently disagree: the s1 bank's own
 per-mode conformal threshold (`ModeBank.fit`'s `alpha`), `monitor.py`'s
@@ -115,9 +114,9 @@ Outputs (`_out_dir`, default `<results_root>/step2/once-calibrated/
 entry, sentinel-only included), `<representation>_regimes.csv` (one row per
 FAR-bearing entry: the three regimes + the labeled `frozen_far_full_population`
 secondary + `far_basis` -- `"common-window"` for non-event days, `"event-free
-per eval_events"` for 080726, T6-review F1), and `<representation>.json`
+per eval_events"` for 080726), and `<representation>.json`
 (everything above plus the s1/s2 threshold derivations -- including s1's
-`pct`/`n_boot`/`seed` bootstrap knobs, T6-review F2 -- the era-boundary-caught
+`pct`/`n_boot`/`seed` bootstrap knobs -- the era-boundary-caught
 verdict, and the pillar-3 readout) -- every number traceable to a committed
 artifact, negative results included.
 """
@@ -210,15 +209,15 @@ _S1_BOOTSTRAP_PCT = 97.5
 fixed, named standard-statistics constant per A1.1, not a caller-configurable
 knob, so it cannot be "passed" to `s1_threshold`); kept here ONLY so the
 sidecar can echo the exact value `s1_threshold` uses internally, making the
-A1.1 bootstrap derivation fully self-documenting without a reader having to
-open `sentinels.py` (T6-review F2)."""
+bootstrap derivation fully self-documenting without a reader having to
+open `sentinels.py`."""
 _S1_BOOTSTRAP_N_BOOT = 1000
-"""Passed EXPLICITLY to `s1_threshold` (T6-review F2) -- equal to its own
+"""Passed EXPLICITLY to `s1_threshold` -- equal to its own
 default, but stated as a named constant here so the sidecar's echoed value can
 never silently drift from the value actually used, even if `s1_threshold`'s
 own default ever changes."""
 _S1_BOOTSTRAP_SEED = 7
-"""Passed EXPLICITLY to `s1_threshold` (T6-review F2) -- see
+"""Passed EXPLICITLY to `s1_threshold` -- see
 `_S1_BOOTSTRAP_N_BOOT`'s docstring; the same reproducibility argument."""
 
 _PILLAR3_TOLERANCE_S = 5.0
@@ -240,7 +239,7 @@ FAR is subset onto the recalibrate arm's own scoring-split window population
 (`_far_on_windows`/`_scoring_windows`) before the two are compared."""
 _FAR_BASIS_EVENT_FREE = "event-free per eval_events"
 """`far_basis` value for an EVENT-BEARING `_REPLAY` entry (`entry.events_csv`
-is not `None`, currently only `080726-pu_strikes`, T6-review F1): the raw
+is not `None`, currently only `080726-pu_strikes`): the raw
 `alarms.parquet` scored-window mean silently includes the induced-event
 windows too (they correctly alarm, inflating it ~2.5-3x for 080726) -- the
 correct event-free reading is `scripts/eval_events.py`'s own
@@ -471,7 +470,7 @@ def _commission_s1(
     threshold = s1_threshold(
         conformal_assignment.no_mode_fits, block_ids,
         n_boot=_S1_BOOTSTRAP_N_BOOT, seed=_S1_BOOTSTRAP_SEED,
-    )  # T6-review F2: explicit, never s1_threshold's implicit defaults
+    )  # Explicit, never s1_threshold's implicit defaults
     baseline_rate = (
         float(conformal_assignment.no_mode_fits.mean())
         if conformal_assignment.no_mode_fits.size
@@ -725,7 +724,7 @@ def _read_realized_window_far(event_eval_csv: Path) -> float:
     this is the ONLY correct "event-free window-FAR" reading -- `_read_
     realized_far`/`_far_on_windows` over the raw `alarms.parquet` silently
     score the induced-event windows too (they correctly alarm, inflating the
-    raw reading ~2.5-3x for 080726, T6-review F1)."""
+    raw reading ~2.5-3x for 080726)."""
     df = pd.read_csv(event_eval_csv)
     summary = df[df["row_type"] == "summary"]
     if summary.empty:
@@ -914,7 +913,7 @@ def main(argv: list[str] | None = None) -> int:
     regimes: list[dict[str, object]] = []
     # run -> (frozen, recalibrate) event_eval.csv paths, EVENT-BEARING entries
     # only -- populated in the loop below and reused (never re-invoked) by the
-    # pillar-3 section for 080726-pu_strikes (T6-review F1).
+    # pillar-3 section for 080726-pu_strikes.
     event_eval_by_run: dict[str, tuple[Path, Path]] = {}
     for entry in _REPLAY:
         prepared_beats = prepared_by_variant["audio-beats"][entry.run]
@@ -969,13 +968,13 @@ def main(argv: list[str] | None = None) -> int:
 
         # The raw scored-window FAR of the frozen arm -- the SAME reading
         # regardless of entry type; for a NON-event day this IS its own
-        # full-population secondary (A1.6); for the EVENT-BEARING day this is
-        # the "raw scored-window FAR" T6-review F1(b) requires stay visible,
+        # full-population secondary; for the EVENT-BEARING day the
+        # "raw scored-window FAR" must stay visible too,
         # labeled and distinct from the event-free headline computed below.
         frozen_far_secondary = _read_realized_far(frozen_alarms)
 
         if entry.events_csv is not None:
-            # EVENT-BEARING entry (T6-review F1): the raw alarms.parquet
+            # EVENT-BEARING entry: the raw alarms.parquet
             # scored-window mean silently includes the induced-event windows
             # (they correctly alarm -- under recalibrate they were moved from
             # calibration onto the scoring side by monitor's own
@@ -1028,7 +1027,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Pillar-3 TPR-retained readout (080726, PU + ST) -----------------------
     # PU's frozen/recalibrate eval_events summaries were already computed
-    # above (event-bearing entry, T6-review F1) -- reused here, never
+    # above (event-bearing entry) -- reused here, never
     # re-invoked as a second subprocess call for the identical alarms/events
     # pair.
     pu_frozen_eval, pu_recal_eval = event_eval_by_run["080726-pu_strikes"]
@@ -1111,8 +1110,8 @@ def main(argv: list[str] | None = None) -> int:
         "era_c_triggered": era_c_triggered,
         "pillar3": pillar3,
         "provenance_note": (
-            "D1 replay driver (spec docs/superpowers/specs/"
-            "2026-07-22-step2-package9-once-naming-transitions.md D1). The two-"
+            "D1 replay driver: \"calibrate once, recalibrate only on a "
+            "label-free drift sentinel\". The two-"
             "sentinel drift-monitoring idea echoes the partner's own drift "
             "monitoring (Rodrigues & Zhang, 2026); every threshold/number above "
             "is computed from our own caches (A1.1/A1.8 firewall) -- no partner "
@@ -1127,7 +1126,7 @@ def main(argv: list[str] | None = None) -> int:
             "alarms.parquet scored-window mean (which silently counts the "
             "induced-strike windows too, since they correctly alarm; that raw "
             "reading stays visible as the labeled frozen_far_full_population "
-            "secondary, T6-review F1)."
+            "secondary field)."
         ),
     }
     (out_dir / f"{args.representation}.json").write_text(json.dumps(sidecar, indent=2) + "\n")

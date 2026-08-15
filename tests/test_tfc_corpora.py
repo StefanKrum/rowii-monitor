@@ -193,9 +193,9 @@ class TestIterWindowsPaderbornDir:
     """`iter_windows_paderborn_dir` (Task 3, orchestrator resolution 2): real
     Paderborn KAt `.mat` files hold a NESTED MATLAB struct -- unlike CWRU's
     flat top-level variable (`iter_windows_mat_dir`'s contract), confirmed
-    against real files during this task's sanctioned read-only smoke check
-    (`.superpowers/sdd/task-3-report.md`'s "Paderborn real-file observation"
-    section): `loadmat(path, struct_as_record=False, squeeze_me=True)` on a
+    against real files during a sanctioned read-only smoke check
+    ("Paderborn real-file observation"):
+    `loadmat(path, struct_as_record=False, squeeze_me=True)` on a
     real KAt file yields a root `mat_struct` (named after the file's own
     stem -- but this function never relies on that name, only on it being
     the sole non-dunder top-level key) with fields `Info`/`X`/`Y`/

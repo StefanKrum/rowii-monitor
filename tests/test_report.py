@@ -261,8 +261,8 @@ def test_timeline_png_uses_correct_hours_scale_for_non_default_window_s(
 def test_gt_states_panel_receives_the_actual_gt_state_sequence_when_gt_is_passed(
     tmp_path: Path,
 ) -> None:
-    # Spy-based, independent of pixel content (per the brief's "do NOT assert pixel
-    # content" rule): asserts the GT-states panel is plotted from the REAL per-window
+    # Spy-based, independent of pixel content (by design: "do NOT assert pixel
+    # content"): asserts the GT-states panel is plotted from the REAL per-window
     # `gt["state"]` sequence when `gt` is passed, not silently ignored in favour of the
     # "no GT provided" placeholder (a gap that file-existence/size-only assertions
     # cannot catch -- both code paths still produce a valid, non-trivial PNG).

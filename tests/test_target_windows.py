@@ -1,7 +1,5 @@
-"""Tests for `rowii.adapt.target_windows.iter_target_windows` (Step-2
-package-5 Task 2, design spec D3: `docs/superpowers/specs/2026-07-16-step2-
-package5-adaptation-design.md`): the leakage-aware, primary-mic-stream,
-16 kHz target-normal training-window iterator BEATs adaptation draws from.
+"""Tests for `rowii.adapt.target_windows.iter_target_windows`: the leakage-aware,
+primary-mic-stream, 16 kHz target-normal training-window iterator BEATs adaptation draws from.
 
 Torch-free module under test -- no `pytest.importorskip("torch")` needed,
 unlike `tests/test_adapt_lora.py`/`tests/test_adapt_objective.py` (Task 1's
@@ -508,9 +506,7 @@ def test_negative_max_windows_raises_value_error(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. iter_target_windows_multi: round-robin pooling across runs (Step-2
-#    package-7 Task 8, spec D6 as amended by A3.11: `docs/superpowers/specs/
-#    2026-07-18-step2-package7-robustness-design.md`). The per-run iterators
+# 8. iter_target_windows_multi: round-robin pooling across runs. The per-run iterators
 #    are monkeypatched to known finite sequences (the SAME
 #    `target_windows.iter_target_windows` monkeypatch seam the split tests
 #    above use), so every assertion below pins the ROTATION itself --
@@ -675,7 +671,7 @@ def test_multi_negative_budget_raises_value_error(tmp_path) -> None:
 
 
 def test_multi_zero_contribution_run_warns(monkeypatch, caplog) -> None:
-    """T8-review MEDIUM: a pool member contributing zero windows must produce a
+    """A pool member contributing zero windows must produce a
     RUNTIME warning, not just sidecar-JSON visibility."""
     import logging
     from types import SimpleNamespace

@@ -50,7 +50,7 @@ def test_top_split_parity_with_run_step2_convention() -> None:
 
 
 def test_top_split_literals_match_sweepconfig_defaults() -> None:
-    """Tripwire (T4-review follow-up F1): `_TOP_FRAC`/`_TOP_SEED` are HARD-CODED
+    """Tripwire: `_TOP_FRAC`/`_TOP_SEED` are HARD-CODED
     literals, not read off `SweepConfig`'s own fields (module docstring's BINDING
     split-parity rationale) -- so if `SweepConfig`'s `calibration_frac`/`seed`
     defaults ever drift, nothing else here would notice: the held-out top split
@@ -284,8 +284,8 @@ def test_run_modebank_chain_writes_far_table_with_both_modes_and_pooled_row(
     notes = (out / "notes.md").read_text()
     assert "fitA" in notes and "fitB" in notes and "testC" in notes
     assert "inspired by the partner" in notes
-    # Threshold-regime self-description (T4-review follow-up F3): notes.md must
-    # name its own regime and point at the correct P7 comparison file, not the
+    # Threshold-regime self-description: notes.md must
+    # name its own regime and point at the correct comparison file, not the
     # recalibrate one this probe has no arm for.
     assert "frozen" in notes
     assert "far_table_frozen.csv" in notes

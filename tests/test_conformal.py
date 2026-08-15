@@ -1,6 +1,5 @@
 """Tests for `rowii.anomaly.conformal`: split-conformal calibration (`calibrate`) and
-conformal p-values (`p_values`). Synthetic-only, per the Step-2 plan
-(`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S4) -- no real data.
+conformal p-values (`p_values`). Synthetic-only -- no real data.
 
 The Monte Carlo validity tests below are grounded in the EXACT finite-sample theory of
 split conformal (Angelopoulos & Bates 2022, "A Gentle Introduction to Conformal
@@ -24,8 +23,7 @@ scratch script, not committed): a first-draft per-repetition bound of the form
 `alpha + 3 * sqrt(alpha * (1 - alpha) / 1000) + 1 / (n + 1)` is regularly violated by a
 CORRECT implementation at n=19 (observed per-repetition FAR up to ~0.4 against that
 draft bound's ~0.12) -- so the bounds below use the exact Beta / Beta-Binomial
-distributions instead of that approximation. See `.superpowers/sdd/task-s4-report.md`
-for the full derivation and the counter-evidence.
+distributions instead of that approximation.
 """
 from __future__ import annotations
 

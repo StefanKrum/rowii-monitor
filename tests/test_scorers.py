@@ -1,6 +1,5 @@
 """Tests for `rowii.anomaly.scorers`: `KnnScorer` (cosine/euclidean) and
-`MahalanobisScorer` (diagonal + shrinkage). Synthetic-only, per the Step-2 plan
-(`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S3) -- no real data.
+`MahalanobisScorer` (diagonal + shrinkage). Synthetic-only -- no real data.
 """
 from __future__ import annotations
 
@@ -433,8 +432,7 @@ def test_mahalanobis_score_raises_on_inf_in_query() -> None:
 
 # ---------------------------------------------------------------------------
 # Classical one-class baselines: OcSvmScorer / IsolationForestScorer / LofScorer
-# (Step-2 package 3 Task 1, design spec `docs/superpowers/specs/
-# 2026-07-15-step2-package3-baselines-design.md` D1) -- synthetic-only, no real data,
+# -- synthetic-only, no real data,
 # mirroring the constructed inliers-vs-outliers fixture pattern established above.
 # ---------------------------------------------------------------------------
 

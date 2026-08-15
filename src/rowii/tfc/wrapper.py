@@ -185,7 +185,7 @@ def _standardize(batch: np.ndarray) -> np.ndarray:
 
 def _validate_checkpoint_geometry(cfg: TfcConfig) -> None:
     """Guard `load_tfc_model` against a checkpoint whose `cfg` does not match
-    this module's HARDCODED assumptions (T1-review Medium, closed here):
+    this module's HARDCODED assumptions:
     `_N_FEATURES`/`_TFC_SAMPLE_RATE_HZ` are fixed constants that
     `TfcFeaturizer` (both `feature_names()` and `_resample_to_8khz`) relies
     on unconditionally, regardless of which checkpoint is actually loaded --

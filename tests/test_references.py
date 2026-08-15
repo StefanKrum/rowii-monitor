@@ -1,6 +1,5 @@
 """Tests for `rowii.anomaly.references`: leakage-safe segment splits (`split_by_segments`)
-and per-label normal reference sets (`build_references`). Synthetic-only, per the Step-2
-plan (`docs/superpowers/plans/2026-07-09-step2-first-package.md` Task S2) -- no real data.
+and per-label normal reference sets (`build_references`). Synthetic-only -- no real data.
 """
 from __future__ import annotations
 

@@ -1,8 +1,5 @@
 """Sweep orchestration: per-state (or pooled) conformal anomaly scoring over a single
-prepared run, producing a FAR table, per-window scores, and top-K candidates. Step-2
-mode-conditioned scoring (design spec `docs/superpowers/specs/
-2026-07-09-step2-mode-conditioned-ad-design.md` §2-4, plan `docs/superpowers/plans/
-2026-07-09-step2-first-package.md` Task S5).
+prepared run, producing a FAR table, per-window scores, and top-K candidates.
 
 `run_sweep` composes the three already-built primitives (`rowii.anomaly.references`,
 `rowii.anomaly.scorers`, `rowii.anomaly.conformal`) into ONE deterministic, leakage-safe
@@ -222,8 +219,7 @@ def _make_scorer(name: str) -> Scorer:
     chunk_size=4096)`, `MahalanobisScorer(shrinkage=0.1)`, `OcSvmScorer(nu=0.1,
     gamma="scale")`, `IsolationForestScorer(n_estimators=200, random_seed=7)`,
     `LofScorer(n_neighbors=20)` -- the three classical one-class baselines added by
-    package 3, design spec `docs/superpowers/specs/2026-07-15-step2-package3-
-    baselines-design.md` D1 -- and `MlpAeScorer(hidden=(128, 32), epochs=200,
+    the baselines evaluation -- and `MlpAeScorer(hidden=(128, 32), epochs=200,
     lr=1e-3, batch_size=256, seed=7)`, `LstmAeScorer(hidden=64, epochs=100,
     lr=1e-3, batch_size=128, seed=7, n_mels=64)`, `ConvAeScorer(channels=(16, 32),
     epochs=100, lr=1e-3, batch_size=128, seed=7, n_mels=64)` -- the three

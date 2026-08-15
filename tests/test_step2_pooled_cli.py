@@ -1,6 +1,4 @@
-"""Tests for `scripts/run_step2.py --protocol cross-day-pooled` (Step-2 package-7
-Task 3, design spec `docs/superpowers/specs/2026-07-18-step2-package7-robustness-
-design.md` D2 + A3.1/A3.7/A3.8 + A4.1/A4.2/A4.5): held-out-day-group evaluation of
+"""Tests for `scripts/run_step2.py --protocol cross-day-pooled`: held-out-day-group evaluation of
 pooled references under BOTH threshold modes in one invocation.
 
 Style-2 fixtures throughout (no synthetic Gantner trees): `run_step2.discover` and
@@ -671,13 +669,13 @@ def test_gt_labels_and_scorer_all_rejected(tmp_path, monkeypatch, capsys) -> Non
 
 
 # ---------------------------------------------------------------------------
-# T3-review hardening: midnight-crossing day groups + untested guard branches
+# Hardening: midnight-crossing day groups + untested guard branches
 # ---------------------------------------------------------------------------
 
 
 def _fake_run_two_dates(name: str, date_a: str, date_b: str) -> Run:
     """A discovery-shaped run whose burst files span TWO calendar dates -- the
-    midnight-crossing case the T3 review proved bypassed a first-file-only day
+    midnight-crossing case that testing proved bypassed a first-file-only day
     group (real near-miss: 010726-tu_ph_tu's last file starts 23:57 local)."""
     return Run(
         name=name,
@@ -750,7 +748,7 @@ def test_duplicate_fit_runs_exit_2(tmp_path, monkeypatch, capsys) -> None:
 def test_fit_pooled_runtime_error_exits_2_not_traceback(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    """T3-review mutation probe: narrowing the except clause to ValueError let
+    """Mutation probe: narrowing the except clause to ValueError let
     fit_pooled's own RuntimeError (near-constant pool, unassigned cluster ids)
     escape as a traceback. Pin the RuntimeError branch through the CLI."""
     _install_fakes(monkeypatch, tmp_path, _pooled_prepared(), _default_index())
@@ -1223,7 +1221,7 @@ def test_level_recal_save_snapshot_stores_pool_fit_anchor_medians(
 
 
 # ---------------------------------------------------------------------------
-# T7 follow-up (T6-review binding fix): equivalence tripwire pinning
+# Equivalence tripwire pinning
 # `_first_n_minutes_rows`' window-membership rule to `rowii.anomaly.normalize.
 # fit_session_stats`'s own -- both independently implement "first N minutes of
 # VALID windows" (window start offset < norm_minutes*60s AND valid_mask);

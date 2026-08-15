@@ -1,7 +1,5 @@
-"""Detection-performance scarcity harness on the labeled MIMII proxy (package-6
-pillar-3, design spec `docs/superpowers/specs/2026-07-16-step2-package6-runtime-
-pillar3-design.md` D4 + amendment A1.4/A1.5, plan Task 5) -- the design chapter's
-central figure (detection performance vs. fraction of target-normal training
+"""Detection-performance scarcity harness on the labeled MIMII proxy -- the
+evaluation design's central figure (detection performance vs. fraction of target-normal training
 data, per representation), run NOW on a public proxy because PSHP fault labels
 do not exist yet: MIMII ships `abnormal/` clips, PSHP awaits the induced-fault
 campaign. Every output therefore restates the honesty framing (spec section 4):

@@ -1,7 +1,6 @@
 """Step-2 calibration-scarcity CLI: per-state realized-FAR-vs-calibration-size curves
-(package-2 spec D3 primary curve) plus the segment-accumulation deployment view (spec
-D3 secondary curve), with figures and a cross-combo `summary.md` headline (plan Task
-5, `docs/superpowers/plans/2026-07-15-step2-scarcity-crossday-beats.md`).
+(the primary curve) plus the segment-accumulation deployment view (the
+secondary curve), with figures and a cross-combo `summary.md` headline.
 
 Answers the partner's "enough data per mode" question quantitatively, in two units:
 how many calibration WINDOWS per state until the realized false-alarm rate is

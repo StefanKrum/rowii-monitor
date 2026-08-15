@@ -1,6 +1,5 @@
 """Tests for `rowii.anomaly.sweep`: mode-conditioned conformal sweep orchestration
-(`run_sweep`) -- synthetic end-to-end coverage per the Step-2 plan (`docs/superpowers/
-plans/2026-07-09-step2-first-package.md` Task S5). No real data.
+(`run_sweep`) -- synthetic end-to-end coverage. No real data.
 
 Every numeric bound/seed used below was verified empirically against the real
 implementation before being hardcoded here (scratch scripts, not committed -- see
@@ -387,8 +386,7 @@ def test_run_sweep_raises_on_invalid_labels_dtype(bad_labels: np.ndarray) -> Non
 def test_run_sweep_accepts_int_and_str_labels() -> None:
     """Positive counterpart to the dtype-rejection tests: genuine int (detected cluster
     id) and str (GT state name) labels must both be ACCEPTED end-to-end -- the design's
-    dual `reference_labels: detected | gt` mode (spec `docs/superpowers/specs/
-    2026-07-09-step2-mode-conditioned-ad-design.md` §2)."""
+    dual `reference_labels: detected | gt` mode."""
     prepared, labels_int, _injected = _three_label_run_with_injected_outliers()
 
     result_int = run_sweep(prepared, labels_int, SweepConfig())
@@ -823,8 +821,7 @@ def test_sweep_config_and_result_are_frozen() -> None:
 
 # ---------------------------------------------------------------------------
 # Registry: _make_scorer resolves the classical one-class baseline names too
-# (Step-2 package 3 Task 1, design spec `docs/superpowers/specs/
-# 2026-07-15-step2-package3-baselines-design.md` D1) -- the knn/mahalanobis branches
+# -- the knn/mahalanobis branches
 # are already exercised indirectly by every `run_sweep` test above (`cfg.scorer`
 # defaults to `"knn"`); this is `_make_scorer`'s own first direct test.
 # ---------------------------------------------------------------------------
@@ -841,9 +838,8 @@ def test_make_scorer_knows_classical_names() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Registry: _make_scorer resolves the reconstruction baseline names too (Step-2
-# package 3 Task 3, design spec `docs/superpowers/specs/2026-07-15-step2-package3-
-# baselines-design.md` D2) -- constructing a `rowii.anomaly.recon` scorer never
+# Registry: _make_scorer resolves the reconstruction baseline names too
+# -- constructing a `rowii.anomaly.recon` scorer never
 # imports torch itself (only `fit`/`score` do, module docstring), so this needs
 # no `pytest.importorskip("torch")`/`ROWII_FORCE_CPU` fixture, unlike
 # `tests/test_recon.py`'s own fit/score-exercising suite.

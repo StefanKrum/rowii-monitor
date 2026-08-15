@@ -1,7 +1,5 @@
 """Leakage-safe calibration/scoring window splits and per-label normal reference sets
-for Step-2 mode-conditioned anomaly scoring (design spec `docs/superpowers/specs/
-2026-07-09-step2-mode-conditioned-ad-design.md` §2-3, plan `docs/superpowers/plans/
-2026-07-09-step2-first-package.md` Task S2).
+for Step-2 mode-conditioned anomaly scoring.
 
 `split_by_segments` partitions a run's valid windows into a calibration side and a
 scoring side by shuffling whole 12-minute recording SEGMENTS (`PreparedRun.segment_ids`)

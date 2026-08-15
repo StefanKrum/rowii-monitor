@@ -530,9 +530,9 @@ def test_run_combo_fusion_kmeans_k2_end_to_end(tmp_path, monkeypatch) -> None:
     assert result.clusterer == "kmeans"
     assert result.k == 2
     assert result.n_windows > 0
-    assert result.ari is not None  # "any value" per the brief -- just must be present
+    assert result.ari is not None  # any finite value is fine -- just must be present
 
-    # Step-2 Task S1 regression guard: the pipeline.py extraction must reproduce this
+    # Regression guard: the pipeline.py extraction must reproduce this
     # scenario's numbers EXACTLY (see _PRE_REFACTOR_* constants' docstring above).
     assert result.n_windows == _PRE_REFACTOR_N_WINDOWS
     assert result.n_valid == _PRE_REFACTOR_N_VALID

@@ -135,7 +135,7 @@ ONCE_CALIBRATED_DIR = REPO_ROOT / "results" / "step2" / "once-calibrated"
 """Package-9's "run once per instrumentation era, decide frozen-vs-recalibrate per
 sentinel verdict" replay output (`scripts/run_once_calibrated.py`) -- the ONLY
 existing artifact family that carries the two fields the control-room dashboard's
-Zustand tile needs natively (`state_name`, `near_transition`, both `scripts/
+state tile needs natively (`state_name`, `near_transition`, both `scripts/
 monitor.py` D2/D3c columns of `alarms.parquet`), so `build_dashboard_data` reads
 its per-run `monitor/<run>/<mode>/` outputs directly rather than the older,
 KMeans-clustered `results/pillar3/` family `render_figures`/`extract_clips` above
@@ -147,7 +147,7 @@ all cut from the `RAWGeneratorMic__0` mono stream (module docstring), so the sco
 track the dashboard plots is scoring the SAME signal the live waveform/FFT panels
 visualize."""
 DASHBOARD_VIB_REPRESENTATION = "vibration"
-"""Read ONLY for the Alarm-Feed's "welcher Stream" cross-check (`_load_alarm_intervals`
+"""Read ONLY for the Alarm-Feed's "which stream" cross-check (`_load_alarm_intervals`
 + `has_collision` in `_load_session`) -- an independent accelerometer-only scorer
 run against the SAME grid, never mixed into the primary (mic) score/alarm/state
 trace itself."""
@@ -165,9 +165,9 @@ DASHBOARD_EVENT_TOLERANCE_S = 5.0
 "## Inputs" section) -- an alarm episode is tagged with a ground-truth strike using
 the EXACT SAME pad the event-level evaluation already scored these runs against,
 not a dashboard-invented number."""
-_SESSION_LABEL_DE = {
-    ST_RUN_NAME: "080726 – Stillstand, mit Schonhammer-Schlägen",
-    PU_RUN_NAME: "080726 – Pumpversuch, mit Schonhammer-Schlägen",
+_SESSION_LABEL = {
+    ST_RUN_NAME: "080726 – standstill, with Schonhammer strikes",
+    PU_RUN_NAME: "080726 – pump trial, with Schonhammer strikes",
 }
 DASHBOARD_DEFAULT_SESSION = ST_RUN_NAME
 """`080726-st_strikes` opens first: a compact ~24 min session whose own two demo
@@ -415,7 +415,7 @@ def peak_normalize(samples: np.ndarray, target_dbfs: float = TARGET_DBFS) -> np.
 def quantile_threshold(scores: Sequence[float], alpha: float) -> float:
     """The (1 - alpha) quantile of *scores* -- the illustrative, POOLED-across-the-
     whole-day conformal-style threshold line drawn on the Section-1 score-histogram
-    figure (`render_figures`, Aufgabe A #4). This is NOT the literal per-state
+    figure (`render_figures`, Task A #4). This is NOT the literal per-state
     operational threshold: the real pipeline (`monitor_notes.md` for e.g. this demo's
     own `audio-beats-a0.01` run) fits one threshold PER detected state on that state's
     own calibration-side windows -- 0.0498 for state 1 vs. 0.0679 for state 3 on this
@@ -446,7 +446,7 @@ def nearest_sorted_index(times: Sequence[float], target: float) -> int:
     compares both straddling neighbors and picks the closer one (a tie -- equal
     distance either side -- keeps the EARLIER index, `bisect_left`'s own convention).
 
-    This is the reference implementation for this demo's two Aufgabe-B/A call sites
+    This is the reference implementation for this demo's two Task-B/A call sites
     that both need "closest entry to a given instant in a monotonically increasing
     but IRREGULARLY spaced array of times": (1) here, in `render_figures`, to pick
     which real `demo-data` trace row backs the Section-1 feature-bars figure's example
@@ -479,7 +479,7 @@ def column_zscore_stats(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-column mean/std of *features*, computed over only the `valid_mask`-true
     ROWS -- the day-level reference distribution `top_k_abs_z_indices` scores one
-    window's own row against for the Section-1 "Feature-Balken" figure
+    window's own row against for the Section-1 "feature bars" figure
     (`render_figures`). `ddof=0` (population std, numpy's own default and every other
     z-score in this codebase).
 
@@ -501,7 +501,7 @@ def column_zscore_stats(
 def top_k_abs_z_indices(row: np.ndarray, mean: np.ndarray, std: np.ndarray, k: int) -> list[int]:
     """Indices of the *k* columns of *row* with the largest |z|-score
     `(row - mean) / std`, sorted DESCENDING by |z| -- the pure selection logic behind
-    the Section-1 "Feature-Balken" figure (which columns of one real 243-feature
+    the Section-1 "feature bars" figure (which columns of one real 243-feature
     fusion window deviate most from `column_zscore_stats`' day-level reference).
     Columns with `std == 0` (constant across every valid window that day -- none
     occur in the real `080726-pu_strikes` fusion cache, but the contract must still be
@@ -530,7 +530,7 @@ _STREAM_ABBREV = {"Generator": "Gen", "Turbine": "Tur"}
 def shorten_feature_name(name: str) -> str:
     """A short, chart-label-friendly form of a real `feature_names` entry from the
     fusion cache, e.g. `"RAWGeneratorMic__0::ch0_log_rms"` -> `"GenMic0.ch0.log_rms"`
-    -- pure string transform for the Section-1 "Feature-Balken" figure's bar labels
+    -- pure string transform for the Section-1 "feature bars" figure's bar labels
     (`render_figures`). Strips the `RAW` prefix, abbreviates the `Generator`/`Turbine`
     stream-name component (`_STREAM_ABBREV`), and swaps the `::`/`ch<i>_` separators
     for a compact dotted form. A name that does not match the expected
@@ -552,7 +552,7 @@ def extract_window_samples(
     """The `[start_s, start_s + duration_s)` slice of *pcm* (samples, any dtype --
     typically the int16 array `scipy.io.wavfile.read` returns for one of this demo's
     own clip WAVs), converted to `float64`. The pure "which samples feed the figure"
-    contract behind the Section-1 waveform/spectrogram renderers (Aufgabe A #1/#2,
+    contract behind the Section-1 waveform/spectrogram renderers (Task A #1/#2,
     `render_figures`), kept separate from those two so the slice arithmetic is
     unit-testable without matplotlib (mirrors this module's existing IO-touching vs.
     pure-helper split, module docstring).
@@ -602,26 +602,26 @@ def matching_event_kind(
     return None
 
 
-_STATE_NAME_DE = {
-    "standstill": "Stillstand",
-    "turbine": "Turbinenbetrieb",
-    "pump": "Pumpbetrieb",
-    "phase-shifter": "Phasenschieberbetrieb",
-    "invalid": "Übergang / ungültig",
+_STATE_NAME = {
+    "standstill": "Standstill",
+    "turbine": "Turbine operation",
+    "pump": "Pump operation",
+    "phase-shifter": "Phase-shifter operation",
+    "invalid": "Transition / invalid",
 }
 
 
-def state_name_de(name: str) -> str:
-    """German gloss for one of `rowii.scada.labels._KNOWN_STATES` (`"standstill"`,
-    `"turbine"`, `"pump"`, `"phase-shifter"`) plus this codebase's own `"invalid"`
-    sentinel (`scripts/monitor.py`'s `_state_name_for`) -- the dashboard's Zustands-
-    Badge subtitle. Falls back to a labelled passthrough for `derive_state_names`'
-    own `cluster-<id>` naming fallback (a cluster without a >=50% ground-truth
-    plurality winner at commissioning time) -- not expected on the real 080726 data
-    this dashboard embeds (every state occurring there has a plurality winner), but
-    must stay well-defined rather than raise.
+def state_display_name(name: str) -> str:
+    """Human-readable display label for one of `rowii.scada.labels._KNOWN_STATES`
+    (`"standstill"`, `"turbine"`, `"pump"`, `"phase-shifter"`) plus this codebase's
+    own `"invalid"` sentinel (`scripts/monitor.py`'s `_state_name_for`) -- the
+    dashboard's state-badge subtitle. Falls back to a labelled passthrough for
+    `derive_state_names`' own `cluster-<id>` naming fallback (a cluster without a
+    >=50% ground-truth plurality winner at commissioning time) -- not expected on
+    the real 080726 data this dashboard embeds (every state occurring there has a
+    plurality winner), but must stay well-defined rather than raise.
     """
-    return _STATE_NAME_DE.get(name, f"Zustand ({name})")
+    return _STATE_NAME.get(name, f"State ({name})")
 
 
 def parse_markdown_table(text: str, header_prefix: str) -> tuple[list[str], list[dict[str, str]]]:
@@ -707,7 +707,7 @@ def parse_state_table(monitor_notes_text: str) -> dict[int, dict[str, Any]]:
 def parse_event_summary_table(event_notes_text: str) -> dict[str, float]:
     """`scripts/eval_events.py`'s `event_notes.md` "## Summary" table, parsed into
     `{"n_events": int, "n_detected": int, "event_tpr": float}` -- the dashboard's
-    "X/Y Schläge erkannt" header stat. Deliberately only these three fields (the
+    "X/Y strikes detected" header stat. Deliberately only these three fields (the
     table also carries false-alarm-rate columns not surfaced on the dashboard).
 
     Raises:
@@ -868,7 +868,7 @@ class ClipMeta:
     duration_s: float
     source_run: str
     description: str
-    """One German sentence."""
+    """One English sentence."""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -920,9 +920,9 @@ def _build_state_clips(pu_run: Run, out_dir: Path) -> list[ClipMeta]:
 
         n_windows = int(round(sum(s.duration_s for s in segments if s.cluster_id == cluster_id)))
         description = (
-            f"Unüberwacht erkannter Zustand {cluster_id} ({n_windows} Fenster an diesem "
-            f"Messtag, 1-s-Raster) – 10 s aus der Mitte des längsten zusammenhängenden "
-            f"Segments dieses Zustands, gegen die Schlag-Ground-Truth geprüft."
+            f"Unsupervised-detected state {cluster_id} ({n_windows} windows on this "
+            f"measurement day, 1-s grid) – 10 s from the middle of this state's longest "
+            f"contiguous segment, checked against the strike ground truth."
         )
         clips.append(
             ClipMeta(
@@ -953,9 +953,9 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=pu_events,
             gt_kind="plate-tur_0",
             description=(
-                'Induzierter Schonhammer-Schlag "plate-tur_0" (Referenzplatte '
-                "Turbinenseite, 0°) während des Pumpbetriebs – SCADA-bestätigt bei "
-                "ca. −279 MW / −377.8 U/min."
+                'Induced Schonhammer strike "plate-tur_0" (reference plate, '
+                "turbine side, 0°) during pump operation – SCADA-confirmed at "
+                "approx. −279 MW / −377.8 rpm."
             ),
         ),
         _StrikeTarget(
@@ -965,8 +965,8 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=st_events,
             gt_kind="plate-gen_0",
             description=(
-                'Induzierter Schonhammer-Schlag "plate-gen_0" (Referenzplatte '
-                "Generatorseite, 0°) im Stillstand (Kalibrierungs-Session)."
+                'Induced Schonhammer strike "plate-gen_0" (reference plate, '
+                "generator side, 0°) at standstill (calibration session)."
             ),
         ),
         _StrikeTarget(
@@ -976,8 +976,8 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=st_events,
             gt_kind="vane-sweep",
             description=(
-                "Vane-Sweep – strukturübertragene Anregung am Leitschaufeldeckel, "
-                "erste 10 s der rund dreiminütigen Sweep-Session (Stillstand)."
+                "Vane sweep – structure-borne excitation at the guide-vane cover, "
+                "first 10 s of the roughly three-minute sweep session (standstill)."
             ),
         ),
     ]
@@ -1035,7 +1035,7 @@ def extract_clips(cfg: Config, out_dir: Path) -> list[ClipMeta]:
 # existing demo_080726_pu.html
 # ---------------------------------------------------------------------------
 
-_CLIP_KIND_LABEL_DE = {"state": "Zustand", "strike": "Schlag"}
+_CLIP_KIND_LABEL = {"state": "State", "strike": "Strike"}
 _DEMO_DATA_RE = re.compile(
     r'<script id="demo-data" type="application/json">(.*?)</script>', re.DOTALL
 )
@@ -1045,7 +1045,7 @@ _ANCHOR_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 def _extract_demo_data_block(source_demo_path: Path) -> str:
     """The raw JSON text inside `<script id="demo-data">...</script>` of an EXISTING
     demo page (`demo_080726_pu.html`) -- copied byte-for-byte, never re-serialized
-    (task instruction: "regeneriere die Daten NICHT"), so `demo_live.html` shows
+    (task instruction: "do NOT regenerate the data"), so `demo_live.html` shows
     EXACTLY the same Step-1/Step-2/conformal outputs that page does.
 
     Raises:
@@ -1066,7 +1066,7 @@ def _render_sparkline_png_base64(
 ) -> str:
     """A tiny min/max-envelope waveform sparkline (no axes/ticks/padding),
     base64-encoded PNG -- a cosmetic complement to each `<audio>` player in the
-    "Anhören" section. matplotlib is imported LOCALLY (not at module level): it is a
+    "Listen" section. matplotlib is imported LOCALLY (not at module level): it is a
     required project dependency (`pyproject.toml`), but only this one, optional-in-
     spirit, cosmetic function needs it, so keeping the import scoped here avoids
     forcing every other `make_demo_assets` entry point through matplotlib's "Agg"
@@ -1113,18 +1113,18 @@ def _clip_card_html(clip: dict[str, Any], wav_bytes: bytes, pcm: np.ndarray) -> 
     source_run = html.escape(str(clip["source_run"]))
     duration_s = html.escape(str(clip["duration_s"]))
     anchor_id = f"clip-{kind}-{_ANCHOR_SANITIZE_RE.sub('_', label_raw)}"
-    kind_de = _CLIP_KIND_LABEL_DE.get(kind, kind)
+    kind_label = _CLIP_KIND_LABEL.get(kind, kind)
     kind_attr = html.escape(kind)
-    # `data-start-utc`/`data-duration-s` (feat/demo-replay, Aufgabe B #4/#5): the
+    # `data-start-utc`/`data-duration-s` (feat/demo-replay, Task B #4/#5): the
     # live-replay JS reads these to align this clip's own audio.currentTime onto the
     # shared `demo-data` trace time axis (`(new Date(data-start-utc) - t0) / 1000`)
-    # when its "Live mitverfolgen" button is clicked -- kept as machine-readable
+    # when its "Follow live" button is clicked -- kept as machine-readable
     # attributes rather than re-parsing the already-escaped, human-formatted
     # `.clip-time` text.
     return (
         f'<div class="clip" id="{anchor_id}" data-kind="{kind_attr}" data-label="{label}" '
         f'data-run="{source_run}" data-start-utc="{start_utc}" data-duration-s="{duration_s}">\n'
-        f'  <div class="clip-head"><span class="badge">{kind_de} {label}</span>'
+        f'  <div class="clip-head"><span class="badge">{kind_label} {label}</span>'
         f'<span class="clip-time">{start_utc} · {source_run}</span></div>\n'
         f'  <div class="clip-wave-wrap">\n'
         f'    <img class="clip-wave" src="data:image/png;base64,{sparkline_b64}" alt="Waveform">\n'
@@ -1133,7 +1133,7 @@ def _clip_card_html(clip: dict[str, Any], wav_bytes: bytes, pcm: np.ndarray) -> 
         f"  </div>\n"
         f'  <audio controls preload="none" src="data:audio/wav;base64,{audio_b64}"></audio>\n'
         f'  <p class="clip-desc">{description}</p>\n'
-        f'  <button class="clip-live-btn" type="button">&#9654; Live mitverfolgen</button>\n'
+        f'  <button class="clip-live-btn" type="button">&#9654; Follow live</button>\n'
         f"</div>"
     )
 
@@ -1158,7 +1158,7 @@ a fresh checkout/worktree never has either). Pass `--fusion-cache` explicitly fr
 one that does not."""
 DEFAULT_FIGURES_DIR = DEFAULT_ASSETS_DIR / "figures"
 DEFAULT_FIGURE_STATE_CLIP = "state_cluster1.wav"
-"""Zustand 1 (Pumpbetrieb, SCADA-verified 98.6% pure on this run -- see
+"""State 1 (pump operation, SCADA-verified 98.6% pure on this run -- see
 `demo_live_template.html`'s own live-panel legend) -- the cleanest single-mode state
 clip to anchor the Section-1 waveform/spectrogram/feature-bars figures to one real,
 nameable moment."""
@@ -1197,7 +1197,7 @@ def _pyplot() -> ModuleType:
 
 def _strip_axes_frame(ax: Any, *, keep: str = "bottom") -> None:
     """Hide every spine except *keep* (or all of them, `keep=""`) and color the
-    survivor `_FIG_GRID` -- the "Achsen minimal" look (Aufgabe A) shared by all four
+    survivor `_FIG_GRID` -- the "minimal axes" look (Task A) shared by all four
     figures below."""
     for side in ("top", "right", "left", "bottom"):
         spine = ax.spines[side]
@@ -1211,10 +1211,10 @@ def _render_waveform_png_bytes(
     samples: np.ndarray, sample_rate_hz: int, *, width_px: int = 320, height_px: int = 110
 ) -> bytes:
     """A minimal-axis 1 s waveform figure (amplitude vs. time) for the Section-1
-    "Rohsignal" pipe-step tile -- real samples (one of this demo's own
+    "raw signal" pipe-step tile -- real samples (one of this demo's own
     `docs/demo/assets/*.wav` clips), not synthetic. Unlike the pre-existing per-clip
     sparkline (`_render_sparkline_png_base64`, a bare axis-less envelope), this keeps
-    a small time axis: Aufgabe A calls these four figures "echte Mini-Grafiken",
+    a small time axis: Task A calls these four figures "real mini graphics",
     distinct from that purely cosmetic sparkline.
     """
     plt = _pyplot()
@@ -1237,8 +1237,8 @@ def _render_spectrogram_png_bytes(
     samples: np.ndarray, sample_rate_hz: int, *, width_px: int = 320, height_px: int = 110
 ) -> bytes:
     """A minimal-axis spectrogram of the SAME 1 s window `_render_waveform_png_bytes`
-    plots, for the Section-1 "1-s-Fenster" pipe-step tile -- `Axes.specgram` (Aufgabe
-    A instruction: "matplotlib specgram reicht"), not a reproduction of this
+    plots, for the Section-1 "1-s window" pipe-step tile -- `Axes.specgram` (Task
+    A instruction: "matplotlib specgram is enough"), not a reproduction of this
     codebase's real feature/BEATs frontend (`rowii.features`/`rowii.encoders.ssl`
     elsewhere) -- a cosmetic pipeline-overview figure only.
     """
@@ -1298,7 +1298,7 @@ def _render_histogram_png_bytes(
     height_px: int = 190,
 ) -> bytes:
     """Score histogram + the pooled `quantile_threshold` line for the Section-1
-    "Split-Conformal-Schwelle" pipe-step tile -- see that helper's own docstring for
+    "split-conformal threshold" pipe-step tile -- see that helper's own docstring for
     why the single line is a pooled-across-the-day illustrative simplification, not
     the literal per-state operational threshold.
     """
@@ -1315,7 +1315,7 @@ def _render_histogram_png_bytes(
     ax.text(
         0.97,
         0.94,
-        f"Conformal-Schwelle (α={alpha:g})\n≈ {threshold:.3f}",
+        f"Conformal threshold (α={alpha:g})\n≈ {threshold:.3f}",
         transform=ax.transAxes,
         color=_FIG_ALARM,
         fontsize=6.3,
@@ -1341,8 +1341,8 @@ def render_figures(
 ) -> dict[str, Path]:
     """Render the four Section-1 pipeline-overview PNGs (waveform, spectrogram,
     feature-bars, score-histogram) and write them into *out_dir*. Reads exactly one
-    already-extracted clip WAV from *assets_dir* (no new burst-file access -- Aufgabe
-    A #1: "kein Neuzugriff auf Bursts nötig"), the fusion feature cache (real data,
+    already-extracted clip WAV from *assets_dir* (no new burst-file access -- Task
+    A #1: "no fresh burst access needed"), the fusion feature cache (real data,
     *fusion_cache_path* -- see `DEFAULT_FUSION_CACHE`'s own docstring on why this
     needs to be passed explicitly from a checkout that actually has it), and the
     `demo-data` trace embedded in *source_demo_path* (the same source `build_html`
@@ -1495,7 +1495,7 @@ def build_html(
 # a different (newer, package-9) artifact family -- see ONCE_CALIBRATED_DIR's own
 # docstring for why. Not unit-tested (real CSV/parquet/markdown disk reads,
 # `json.dumps` assembly) -- the DATA feeding it (`parse_state_table`,
-# `parse_event_summary_table`, `matching_event_kind`, `state_name_de`) is the
+# `parse_event_summary_table`, `matching_event_kind`, `state_display_name`) is the
 # separately-tested part, same pure/IO-touching split as this module's other two
 # subcommands (module docstring).
 # ---------------------------------------------------------------------------
@@ -1575,7 +1575,7 @@ def _load_session(run: str, events_csv: Path) -> dict[str, Any]:
         threshold = info["threshold"]
         states[str(state_id)] = {
             "name": info["name"],
-            "name_de": state_name_de(info["name"]),
+            "name_label": state_display_name(info["name"]),
             "threshold": (
                 None if threshold is None or math.isinf(threshold) else round(threshold, 6)
             ),
@@ -1685,7 +1685,7 @@ def _load_session(run: str, events_csv: Path) -> dict[str, Any]:
 
     return {
         "run": run,
-        "label": _SESSION_LABEL_DE[run],
+        "label": _SESSION_LABEL[run],
         "t0_utc": _to_pydatetime_quiet(t0).isoformat(),
         "duration_s": round(duration_s, 3),
         "representation": DASHBOARD_REPRESENTATION,

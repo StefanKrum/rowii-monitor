@@ -807,7 +807,7 @@ def test_unknown_run_in_runs_exits_2(tmp_path, monkeypatch, capsys):
 
 
 def test_seed_not_seven_logs_leakage_warning(tmp_path, monkeypatch, caplog):
-    """T8-review seed-tension resolution: a non-canonical --seed must WARN that
+    """A non-canonical --seed must WARN that
     the leakage guarantee no longer holds vs the seed-7 evaluations."""
     import logging
 
@@ -825,8 +825,8 @@ def test_seed_not_seven_logs_leakage_warning(tmp_path, monkeypatch, caplog):
 
 
 def test_single_item_runs_list_matches_single_run_bitwise(tmp_path, monkeypatch):
-    """T8-review LOW: the commit claimed 1-run --runs parity but only distill
-    tested it. Same stubbed window source + same seed -> the two CLIs must
+    """The 1-run --runs parity claim previously covered only distill;
+    same stubbed window source + same seed -> the two CLIs must
     produce bitwise-identical checkpoints."""
     torch = pytest.importorskip("torch")
 

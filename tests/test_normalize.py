@@ -1,7 +1,5 @@
-"""Tests for `rowii.anomaly.normalize` (Step-2 package-7 Task 4, design spec
-`docs/superpowers/specs/2026-07-18-step2-package7-robustness-design.md` D3 as
-amended by A3.5): label-free per-session robust normalization -- median/MAD*1.4826
-stats from the first `norm_minutes` of a run's VALID windows, scale floored at the
+"""Tests for `rowii.anomaly.normalize`: label-free per-session robust normalization --
+median/MAD*1.4826 stats from the first `norm_minutes` of a run's VALID windows, scale floored at the
 house 1e-8 (`rowii.adapt.target_windows._standardize_1d`'s convention), applied to
 the SCORING space only (the detector always consumes RAW features -- wiring tested
 in `tests/test_monitor_cli.py` / `tests/test_step2_pooled_cli.py`; this file pins

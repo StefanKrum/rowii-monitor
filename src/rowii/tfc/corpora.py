@@ -310,8 +310,8 @@ def iter_windows_mat_dir(
 _PADERBORN_NATIVE_HZ = 64_000.0
 """Nominal sample rate of Paderborn KAt's `vibration_1`/`phase_current_*`
 channels (the "HostService" raster). Confirmed both by community
-documentation (Task 2's URL-research concerns) and, now, by this task's
-sanctioned real-file smoke check (`.superpowers/sdd/task-3-report.md`):
+documentation and, now, by a
+sanctioned real-file smoke check:
 `Data.shape[0] / Description.Measurement.Length` measured ~64000.25 Hz
 across 4 real K001/K002 files -- within 0.0004% of this nominal constant, the
 same "nominal, not measured-per-file" convention `iter_windows_mat_dir`
@@ -405,9 +405,9 @@ def iter_windows_paderborn_dir(
     this gap; `_extract_paderborn_vibration` (this function's only real
     difference from `iter_windows_mat_dir`) closes it.
 
-    Confirmed real layout (this task's sanctioned read-only smoke check
+    Confirmed real layout (a sanctioned read-only smoke check
     against `data/public/paderborn/K001/K001/N15_M07_F04_K001_1.mat` and 3
-    further real K001/K002 files, `.superpowers/sdd/task-3-report.md`):
+    further real K001/K002 files):
     `scipy.io.loadmat(path, struct_as_record=False, squeeze_me=True)` yields
     a root `mat_struct` (named after the file's own stem -- never relied on
     here, only that it is the sole non-dunder top-level key) with fields

@@ -1,8 +1,7 @@
-"""Post-training INT8 dynamic quantization CLI (Step-2 package-5 spec D6,
-Task 5): loads the frozen fp32 BEATs encoder from `ROWII_BEATS_CHECKPOINT` and
-applies `torch.ao.quantization.quantize_dynamic` (`nn.Linear` layers only,
-`torch.qint8`) -- a WEIGHT-ONLY quantization scheme that needs no calibration
-data (unlike static/observer-based quantization), so this script is a pure
+"""Post-training INT8 dynamic quantization CLI: loads the frozen fp32 BEATs encoder from
+`ROWII_BEATS_CHECKPOINT` and applies `torch.ao.quantization.quantize_dynamic`
+(`nn.Linear` layers only, `torch.qint8`) -- a WEIGHT-ONLY quantization scheme that needs
+no calibration data (unlike static/observer-based quantization), so this script is a pure
 load -> quantize -> save transform: no run, no windows, no training loop.
 
 Usage: `quantize_beats.py --out models/adapted/beats_int8.pt` -> saves the

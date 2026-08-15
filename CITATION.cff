@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software or refer to it, please cite the thesis below."
+type: software
+title: "rowii-monitor"
+abstract: >-
+  Acoustic and vibration condition-monitoring implementation for the
+  Rodundwerk II pump-turbine, developed as part of an HSG master thesis on
+  self-supervised transfer learning for acoustic anomaly detection in
+  pumped-storage hydropower plants.
+authors:
+  - family-names: Krummenacher
+    given-names: Stefan
+    affiliation: "University of St. Gallen (HSG)"
+repository-code: "https://github.com/StefanKrum/rowii-monitor"
+license: MIT
+version: 0.1.0
+date-released: "2026-08-15"
+preferred-citation:
+  type: thesis
+  thesis-type: "Master's Thesis"
+  title: "Self-Supervised Transfer Learning for Acoustic Anomaly Detection in Pumped-Storage Hydropower Plants"
+  authors:
+    - family-names: Krummenacher
+      given-names: Stefan
+      affiliation: "University of St. Gallen (HSG)"
+  institution:
+    name: "University of St. Gallen (HSG)"
+  year: 2026

@@ -1,7 +1,5 @@
-"""Step-2 Package 9: `min_dwell` sweep -- grounding `DetectConfig.min_dwell_s`'s
-default in data (design spec `docs/superpowers/specs/2026-07-22-step2-package9-
-once-naming-transitions.md` §3.D3(b), plan `docs/superpowers/plans/
-2026-07-22-step2-package9-once-naming-transitions.md` Task 4).
+"""`min_dwell` sweep -- grounding `DetectConfig.min_dwell_s`'s
+default in data.
 
 `DetectConfig.min_dwell_s` defaults to 5.0 (`rowii.config`); via
 `FittedDetector._finish`'s `min_dwell = max(1, round(min_dwell_s / window_s))`

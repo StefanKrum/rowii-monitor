@@ -10,12 +10,10 @@ its own tokenizer network) is not reproducible here -- that tokenizer is not
 part of the vendored inference-time module, and training one from scratch is
 out of this package's scope (design spec D1, non-goals). Both objectives here
 are therefore DOCUMENTED PROXIES, always described as such wherever
-adapted-model results appear (spec D1, acceptance criteria). Two variants:
+adapted-model results appear. Two variants:
 
-- `masked_token_loss` -- THE adaptation objective for BEATs (spec D1 as
-  amended by Amendment A1, `docs/superpowers/specs/2026-07-16-step2-package5-
-  adaptation-design.md`): operates on the model's own NATIVE pre-encoder
-  patch tokens (`(B, T, D)`, produced by the frozen preprocess ->
+- `masked_token_loss` -- THE adaptation objective for BEATs: operates on the model's own NATIVE
+  pre-encoder patch tokens (`(B, T, D)`, produced by the frozen preprocess ->
   patch_embedding -> layer_norm -> post_extract_proj pipeline in
   `scripts/adapt_beats.py`), masks a random subset of token ROWS (zeroing
   them), runs the (possibly-adapted) encoder on the masked token sequence,

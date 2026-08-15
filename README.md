@@ -9,6 +9,12 @@ detected states against SCADA-derived ground truth. Results are reported per
 input modality (audio-only / vibration-only / fusion), audio featurizer
 (handcrafted / frozen BEATs embeddings), and clusterer (KMeans / GMM).
 
+This code accompanies the thesis *"Self-Supervised Transfer Learning for
+Acoustic Anomaly Detection in Pumped-Storage Hydropower Plants"* (Krummenacher,
+2026, University of St. Gallen); see [`CITATION.cff`](CITATION.cff) for the
+full citation. The sensor recordings used throughout are proprietary plant
+data and are not included — see [`DATA_ACCESS.md`](DATA_ACCESS.md).
+
 ## Install
 
 ```bash
@@ -31,9 +37,13 @@ cp .env.example .env
 
 ## Data layout
 
-Sensor data is never committed to this repo. `ROWII_DATA_ROOT` (env var or
-`.env`) points at a local **parent root** containing one subdirectory per
-measurement day (`illwerke-<dayid>/`), each itself a full day tree:
+Sensor data is never committed to this repo. The recordings are proprietary
+plant data and are not redistributable — see [`DATA_ACCESS.md`](DATA_ACCESS.md)
+for how to request access, and for what runs perfectly well without them
+(the full test suite, and the public-data scarcity study). `ROWII_DATA_ROOT`
+(env var or `.env`) points at a local **parent root** containing one
+subdirectory per measurement day (`illwerke-<dayid>/`), each itself a full
+day tree:
 
 ```
 <ROWII_DATA_ROOT>/
@@ -59,8 +69,8 @@ The sensor HARDWARE has been installed since **2026-06-15** (see
 re-saved on **2026-06-29**: the 250526 (recorded 2026-06-25; the run label is an
 inherited misnomer) and 270626 deliveries carry `MeasName: 2026-06-15`, while
 290626 and 010726 carry `MeasName: 2026-06-29`. Cross-day comparisons therefore
-distinguish the two CONFIG eras, not the installation date (package-7 spec §1;
-the 250526 frozen-threshold blow-up is the cross-config case). Delivered
+distinguish the two CONFIG eras, not the installation date (the 250526
+frozen-threshold blow-up is the cross-config case). Delivered
 coverage per window:
 
 All times below are true UTC (derived from filename hints; corrected 2026-07-15
@@ -184,6 +194,46 @@ pytest -m data -v           # real-data smoke tests (needs ROWII_DATA_ROOT)
 ruff check .
 mypy src scripts
 ```
+
+## Reproducing the thesis results
+
+Every number in the sections below was produced by one of the scripts under
+`scripts/`, run against either the public corpora or the plant recordings
+(see [`DATA_ACCESS.md`](DATA_ACCESS.md)). Commands are grouped by what they
+need and listed in the order a from-scratch reproduction would run them.
+
+**Without any plant data** (works immediately after `pip install -e ".[dev]"`):
+
+```bash
+pytest tests/ -q                              # full suite, 1,547 tests, synthetic fixtures only
+python scripts/download_corpora.py            # fetch + sha256-verify MIMII/CWRU/Paderborn into data/public/
+python scripts/pretrain_tfc.py --corpus mimii     # pretrain the audio TF-C encoder
+python scripts/pretrain_tfc.py --corpus bearings  # pretrain the vibration TF-C encoder
+python scripts/scarcity_detection.py          # public-data scarcity study (the TF-C section below)
+```
+
+**With `ROWII_DATA_ROOT` set** (see "Data layout" above and `DATA_ACCESS.md`):
+
+| step | command | produces |
+|---|---|---|
+| 1. intake check | `python scripts/verify_data_facts.py` | confirms a new delivery matches the pipeline's assumptions |
+| 2. copy | `python scripts/copy_data.py --source <path>` | selective copy into `ROWII_DATA_ROOT` |
+| 3. Step 1 grid | `python scripts/run_step1.py --run all --variant all --clusterer all` | "Step-1 grid results" / "Multi-day results" below |
+| 3b. parameters | `python scripts/verify_parameters.py` | plant-specific constants (nominal speed, `MACHINE_HZ`, ...) measured from data, not assumed |
+| 3c. Step 1 digest | `python scripts/analyze_step1.py` | `results/analysis/` consolidated tables + figures |
+| 4. cache warm-up | `python scripts/warm_cache.py --runs <names> --variants <variants>` | pre-populated `results/cache/` (needed before BEATs-heavy sweeps) |
+| 5. Step 2 sweeps | `python scripts/run_step2.py --protocol within-day\|cross-day\|cross-day-pooled ...` | "Step 2" evidence sections below |
+| 5b. calibration scarcity | `python scripts/run_step2_scarcity.py` | plant-data calibration-scarcity curves |
+| 6. adaptation | `python scripts/adapt_beats.py`, `distill_beats.py`, `quantize_beats.py`, `train_xattn.py` | "adaptation and model compactness" section |
+| 7. mode bank | `python scripts/run_modebank.py`, `run_modebank_chain.py` | "mode model bank" section |
+| 8. explainability | `python scripts/analyze_days.py` | `results/analysis-days/` figures + digest |
+| 9. once-calibrated replay | `python scripts/run_once_calibrated.py` | "once-calibrated operation, named states, and transitions" section |
+| 10. runtime + events | `python scripts/monitor.py <snapshot> <new-run>`, then `python scripts/eval_events.py` | runtime prototype + pillar-3 event evaluation |
+| 11. baseline comparison | `python scripts/run_mad_baseline.py` | fixed-threshold MAD baseline (comparison point, not the thesis system) |
+
+Every script accepts `--help` for its full option set; module-level
+docstrings document each script's inputs, outputs, and the exact artifact
+paths it writes under `results/`.
 
 ## Step-1 grid results (TU + PU-morning + PU-afternoon, 2026-06-25)
 
@@ -552,13 +602,12 @@ of one stream and crashed feature extraction with a width mismatch; the
 std is now computed in float64, where a constant channel is exactly 0.0
 for every batch shape.
 
-## Step 2 first evidence (2026-07-09)
+## Step 2: mode-conditioned anomaly detection — first evidence (2026-07-09)
 
 First real-data results from the Step-2 mode-conditioned anomaly-detection
-skeleton (`scripts/run_step2.py`; design spec
-`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md`).
+skeleton (`scripts/run_step2.py`).
 No anomaly labels exist yet -- these are the two label-free evidence
-artifacts the spec defines: false-alarm-rate (FAR) control on held-out
+artifacts used throughout this evaluation: false-alarm-rate (FAR) control on held-out
 normal windows, and an anomaly-candidate register. Handcrafted features,
 kNN (k=1, cosine) scorer, split-conformal thresholds at nominal
 alpha = 0.05, per-run blocked segment splits (calibration and scoring
@@ -672,7 +721,8 @@ states were excluded per-state (below `min_ref` = 20 fit windows):
 that day's detected states are concentrated in few 12-min segments
 (39-min PH hold, short standstill), so segment-granular splits starve
 their references -- per-state conditioning needs either more data per
-state or cross-day reference pooling (future package).
+state or cross-day reference pooling (addressed in the cross-day
+robustness evaluation below).
 
 ### Diagnostic: detected vs. GT labels (010726-tu_ph_tu, fusion, kNN)
 
@@ -745,7 +795,7 @@ reference. Caveat: these cells conflate genuine day-to-day acoustic
 shift with operating-mode-mix differences (the pooled reference has no
 state alignment across days -- a pump session scored against a
 turbine-day reference inflates trivially); disentangling the two needs
-the per-state cross-day alignment deferred to a later package.
+the per-state cross-day alignment deferred to later work (see below).
 
 ### Candidate highlights (top-3 per headline run, fusion, per-state kNN)
 
@@ -809,12 +859,11 @@ values carry the DAQ's mis-set clock (see caveat at top). No candidate
 has been auditioned yet -- "operationally-explained" marks are
 mechanical SCADA-rule annotations, not human review.
 
-## Step 2 package-2 evidence (2026-07-15): cross-day transfer, calibration scarcity, BEATs
+## Step 2: cross-day transfer, calibration scarcity, and BEATs embeddings (2026-07-15)
 
 All artifacts under `results/step2/` on the true-UTC axis (regenerated after the
 DAQ-clock fix; FARs identical to the raw-axis originals in
-`results/step2-rawaxis-archive/`). Full numeric digest with per-table source
-paths: `.superpowers/sdd/results_digest.md`. Grid: ordered pairs of
+`results/step2-rawaxis-archive/`). Grid: ordered pairs of
 {250526-tu, 290626-tu, 010726-tu_ph_tu} × {fusion, audio, audio-beats} ×
 {kNN, Mahalanobis}; alpha = 0.05 throughout; detected labels (runtime path).
 
@@ -842,7 +891,7 @@ Findings (all 36 combos in the digest):
 1. **No cross-day protocol reaches nominal FAR reliably.** Only 14 of 72
    aggregate FARs are <= 0.05, and 12 of those are Mahalanobis POOLED values
    whose apparent control is the cancellation mechanism already demonstrated
-   within-day in package 1: e.g. fusion-Mahalanobis 290626->010726 reports a
+   within-day above: e.g. fusion-Mahalanobis 290626->010726 reports a
    pooled FAR of 0.004 while the per-state view of the same transfer has state
    0 at 0.531 — a mode-aware monitor would flood one mode with alarms and stay
    silent elsewhere; the pooled number hides exactly that.
@@ -852,7 +901,7 @@ Findings (all 36 combos in the digest):
    0.007; audio-beats-Mahalanobis state 3: 0.004) while sibling states of the
    same transfer fail badly (up to 1.000). Anything involving 25.06 as source
    or target transfers poorly.
-3. **Consequence (the package's practical claim):** transfer the DETECTOR
+3. **Consequence (the practical takeaway):** transfer the DETECTOR
    (Step-1 state detection survives the day change), but RECALIBRATE the
    per-state thresholds on the target day. The scarcity results below show
    that recalibration is cheap.
@@ -871,7 +920,7 @@ as the successes: fusion state 3 never stabilises under kNN (full-pool anchor
 budget (FAR 0.000 with real thresholds — under-band, not "well controlled").
 Neither scorer dominates. On the starved day (290626) only 1–2 states are
 curvable at all (min_ref = 20 on the fit side), which is the quantitative form
-of package 1's "calibration windows per state is the binding constraint".
+of the earlier "calibration windows per state is the binding constraint" finding.
 
 The deployment-facing secondary curve (segment accumulation, "record N more
 minutes") reaches band-stability for 2 of 4 states within 10–22 accumulated
@@ -915,14 +964,13 @@ Microsoft and stored once (no training on our side, encoder frozen); embedding
 extraction is cached once per run × variant under `results/cache/`
 (sha256-fingerprinted; the true-UTC fix reuses caches byte-identically, only
 the grid anchor moves); clusterers, scorers, and conformal thresholds refit in
-seconds by design (deterministic, seed 7), so the entire package-2 evidence
-suite above regenerates from warm caches in ~15 minutes. `FittedDetector` is
+seconds by design (deterministic, seed 7), so this entire evidence suite
+regenerates from warm caches in ~15 minutes. `FittedDetector` is
 the future serialisation point for the runtime prototype.
 
-## Step 2 package-3 evidence (2026-07-16): baselines, reconstruction, ensemble, score fusion, granularity
+## Step 2: classical baselines, reconstruction, ensembling, and score fusion (2026-07-16)
 
-All artifacts under `results/step2/within-day/`; full numeric digest with per-table
-source paths: `.superpowers/sdd/results_digest_p3.md`. Within-day protocol, three
+All artifacts under `results/step2/within-day/`. Within-day protocol, three
 SCADA days, alpha = 0.05, detected labels; every scorer runs on the SAME splits and
 conformal harness, so differences are attributable to the scorer alone.
 
@@ -933,9 +981,9 @@ in 5, LOF in 3, OC-SVM in 2, kNN and Mahalanobis in 1 each — and kNN is the WO
 6/12. Per-cell spreads run 0.015–0.116; the smaller spreads are within single-split
 Beta scatter while the largest (010726 fusion pooled, 0.027–0.143) reflects the same
 within-day exchangeability violations noted under score fusion below, which hit some
-scorers harder than others. The design-cited kNN default is not an empirical
-champion here; the honest reading is that all five scorers are competitive and
-representation × day effects dominate scorer choice.
+scorers harder than others. kNN, used as the default scorer elsewhere in this
+evaluation, is not an empirical champion here; the honest reading is that all five
+scorers are competitive and representation × day effects dominate scorer choice.
 The starved-day pattern (290626: 3/4 states excluded) is scorer-independent — it is
 a property of the split, confirmed identical across all five scorers.
 
@@ -967,11 +1015,11 @@ four exceed alpha by far more than scatter explains (up to 0.139 vs a 99% Beta
 bound of 0.069) — and the SAME states exceed under every rule including the
 single-branch baselines, so these are genuine within-day exchangeability
 violations (operating-point drift between held-out calibration and scoring
-segments, the finite-sample limitation already documented in package 2), not a
+segments, the finite-sample limitation already documented above), not a
 Fisher artifact. Tippett (documented-excess max-rule contrast) behaves similarly
-on a different subset. Neither rule consistently beats package-1's feature-level
-fusion numbers — score fusion is a validity-preserving alternative, not an
-accuracy upgrade, on this data.
+on a different subset. Neither rule consistently beats the feature-level
+fusion numbers from the first evidence pass above — score fusion is a
+validity-preserving alternative, not an accuracy upgrade, on this data.
 
 ### Conditioning granularity: sub-state structure is real, and it costs calibration
 
@@ -981,9 +1029,9 @@ achievability for resolution exactly as the conformal floor predicts. The top-20
 candidate lists of k8 and k12 agree strongly with each other (Jaccard 0.667) but
 barely with k4 (0.08–0.11): sub-cluster conditioning surfaces a consistent,
 DIFFERENT candidate population than state-level conditioning — the quantified form
-of package 1's "detected labels beat GT" sub-cluster mechanism.
+of the earlier "detected labels beat GT" sub-cluster mechanism.
 
-## Step 2 package-4 evidence (2026-07-16): the TF-C industrial-pretraining pole
+## Step 2: the TF-C industrial-pretraining pole (2026-07-16)
 
 Compact TF-C (time+frequency 1-D CNN encoder pair, cross-view NT-Xent; a documented
 simplification of Zhang et al. 2022) pre-trained ONCE offline: `tfc_audio.pt` on
@@ -991,8 +1039,7 @@ simplification of Zhang et al. 2022) pre-trained ONCE offline: `tfc_audio.pt` on
 and `tfc_vib.pt` on only **808 windows** of CWRU + Paderborn K001/K002 — the public
 vibration corpora are short recordings, so every vibration-tfc number below carries
 a DATA-FLOOR caveat: it is a floor on what vibration-native SSL could do, not a fair
-test. Variants `audio-tfc` / `vibration-tfc`; digest:
-`.superpowers/sdd/results_digest_p4.md`.
+test. Variants `audio-tfc` / `vibration-tfc`.
 
 ### Industrial pretraining transfers for STATE SEPARATION where general-audio failed
 
@@ -1008,7 +1055,7 @@ best load-alignment ARI in the whole grid (0.697 vs handcrafted vibration's 0.49
 ### Within-day scoring: competitive, no new champion
 
 Aggregate FARs for both TF-C variants sit in the same band as fusion/audio-beats
-(no uniform winner, consistent with package 3's verdict); on the starved day
+(no uniform winner, consistent with the baselines verdict above); on the starved day
 (290626) audio-tfc calibrates 2 of 4 states — matching audio-beats and beating
 fusion's 1 of 4. The per-state-vs-pooled cancellation mechanism replicates exactly
 for both TF-C variants.
@@ -1016,7 +1063,7 @@ for both TF-C variants.
 ### Cross-day: still no free lunch, but a more CONSISTENT one
 
 No audio-tfc cross-day per-state combo clears alpha = 0.05 (aggregates 0.020–0.385)
-— industrial pretraining does not repeal the package-2 finding that thresholds must
+— industrial pretraining does not repeal the earlier finding that thresholds must
 be recalibrated per day. It does make day-pair difficulty SCORER-CONSISTENT (best
 290626→250526 and worst 250526→010726 under both kNN and Mahalanobis, where
 fusion's ordering flips by scorer) — the representation, not the scorer, now
@@ -1033,11 +1080,11 @@ Provenance: corpora under `data/public/` with sha256 manifests + licenses
 (MIMII CC BY-SA 4.0, CWRU academic-free, Paderborn CC BY-NC 4.0); checkpoints
 `models/pretrained/tfc/` (~1.9 MB each, seed 7, 40 epochs); one-off pre-training
 ~35 min total on MPS. The cache-fingerprint payload is now golden-pinned by tests —
-a lesson from this package: a payload-shape change silently invalidated every
+a lesson learned here: a payload-shape change silently invalidated every
 existing cache and was caught by the analyze_step2 beats guard, then fixed for
 byte-identical backward compatibility.
 
-## Step 2 package-5 evidence (2026-07-16): adaptation & compactness
+## Step 2: adaptation and model compactness (2026-07-16)
 
 Can the frozen general-audio encoder be ADAPTED to the plant, and how small can
 scoring get? Four adaptation/compression paths off the same BEATs-iter3+ base
@@ -1074,7 +1121,7 @@ already-well-calibrated 250526 both adapted encoders are worse than frozen
 (0.05–0.07 vs 0.007). Verdict: adaptation is a same-condition tool; nothing here
 justifies replacing the frozen default across days. Step-1 state ARI on 010726
 moves 0.9220 (frozen) → 0.9290/0.9291 (LoRA/FT) — small, consistent, not the
-package-4 rescue story (BEATs is not degenerate on this day to begin with).
+TF-C-style rescue seen above (BEATs is not degenerate on this day to begin with).
 
 ### A 0.78-MB student keeps most of the story (with one honest asterisk)
 
@@ -1146,11 +1193,11 @@ checkpoints under `models/adapted/` with JSON sidecars (objective caveat,
 leakage note, seeds); adapters merge back into the standard `{"cfg","model"}`
 format, so every downstream path loads them unchanged.
 
-## Step 2 package-6 evidence (2026-07-17): runtime prototype + pillar-3 readiness
+## Step 2: runtime prototype and event-level (pillar-3) readiness (2026-07-17)
 
-The LAST package of the code roadmap: the "runs at the plant" requirement made
-concrete, the labeled-fault evaluation prepared for the induced-fault campaign,
-and the design's central figure realized on a public proxy.
+This closes out the core implementation work: the "runs at the plant" requirement
+made concrete, the labeled-fault evaluation prepared for the induced-fault
+campaign, and the evaluation design's central figure realized on a public proxy.
 
 ### One artifact runs the plant recipe: snapshot + monitor CLI
 
@@ -1167,8 +1214,8 @@ BITWISE on 29,344 real windows (apply labels, per-state scores, thresholds).
 | 250526-tu | pooled alarm rate **0.022** | **0.776** (state 2: 100%) |
 | 290626-tu | pooled alarm rate **0.052** | 0.522 |
 
-Package-2's central finding ("transfer detector + references, recalibrate
-thresholds per day") is now a one-command contrast at nominal alpha = 0.05; the
+The cross-day evidence's central finding ("transfer detector + references,
+recalibrate thresholds per day") is now a one-command contrast at nominal alpha = 0.05; the
 frozen mode's notes carry the distribution-shift warning verbatim. 290626
 honestly reports `no_conformal_data` for one state (683 windows with no
 calibration-side coverage). Alarms remain CANDIDATES — no fault labels exist.
@@ -1215,26 +1262,28 @@ absolute-level cues, pAUC = standardized/McClish (sklearn max_fpr=0.1).
 
 ### Review honesty
 
-Per-task adversarial reviews: T1 approved (zero functional defects; covars
-bit-exactness, split parity, on-disk mutation propagation all probed), T2
-fix-required → resolved (an --alpha mutation-test gap closed; the min_ref
-question resolved as a documented sweeps-identical reading), T3 approved with
-zero findings, T4/T5 fix-required → resolved (window_s-aware resampling,
-machine-id collision refusal, mtime in the cache fingerprint, corpus-gone
-honesty with exit 1). The scarcity harness's leakage-freedom and clip-level
-calibration coherence were confirmed by the reviewer with adversarially
-constructed divergence cases, not just re-reads.
+Every component here was independently code-reviewed before being accepted.
+Reviews confirmed zero functional defects in the covariance bit-exactness,
+split-parity, and on-disk mutation-propagation logic; caught and closed an
+`--alpha` mutation-test gap (the `min_ref` question was resolved as a
+documented sweeps-identical reading); found zero issues in the harness wiring;
+and caught four fixable defects — window_s-aware resampling, machine-id
+collision refusal, mtime in the cache fingerprint, and corpus-gone honesty
+with exit 1 — all resolved before merge. The scarcity harness's
+leakage-freedom and clip-level calibration coherence were confirmed with
+deliberately constructed edge cases designed to break the logic, not just
+re-reads.
 
-## Step 2 package-7 evidence (2026-07-21): robustness & the best-system comparison
+## Step 2: cross-day robustness and the best-system comparison (2026-07-21)
 
 Does the pipeline hold up ACROSS days, configurations, and modes — and which
 representation earns the best-system statement? Multi-day reference pools with
 held-out-day-group rotations, session normalization, TF-C continued pretraining
 on the plant's own audio, a 4x-larger vibration corpus, multi-day adaptation,
 rolling recalibration, and the first induced-anomaly evaluation (080726 hammer
-strikes). Universality tags per A2.1: [same-cfg] = fit and test days share a
-DAQ config era (MeasName), [cross-cfg] = they do not, [cross-mode] = the
-monitored mode is absent from the fit day.
+strikes). Universality tags used throughout this section: [same-cfg] = fit and
+test days share a DAQ config era (MeasName), [cross-cfg] = they do not,
+[cross-mode] = the monitored mode is absent from the fit day.
 
 ### Setup: pools, k selection, and the 080726 day
 
@@ -1273,7 +1322,7 @@ Fusion, pooled kNN (k=4), pooled FAR at alpha=0.05, frozen | recalibrate:
 Recalibrate holds within ~2x of alpha on EVERY rotation including cross-config;
 frozen degrades 1.5–6x on same-config rotations and fails totally (FAR 1.0) on
 the cross-config PU day. Same pattern at alpha 0.01/0.10 (per-alpha artifacts:
-`fusion-pooled-a<alpha>/`). Versus the single-day P6 snapshot the pool helps
+`fusion-pooled-a<alpha>/`). Versus the single-day runtime-prototype snapshot the pool helps
 exactly where coverage was the problem: monitor 290626-pu with the single-day
 010726 snapshot alarms at 0.932 frozen (cross-mode-starved) vs the pool's 0.301;
 on 250526-pu-morning both fail frozen (1.0) — a config change breaks frozen
@@ -1354,7 +1403,8 @@ approximates full recalibration without a second pass; M=60 is the default.
 
 Corrected ground truth, ±5 s tolerance, event-level TPR | realized window-FAR;
 pool-B1 snapshots, recalibrate mode WITH event-free calibration
-(`--exclude-calibration-events`, spec A2.3.3): the ground-truth intervals
+(`--exclude-calibration-events`; by design: calibration windows must never
+contain labelled events): the ground-truth intervals
 (±5 s) are banned from the calibration side and scored instead, so thresholds
 are calibrated on strike-free windows and every event is evaluable. (The first
 pass omitted this; strike minutes landing in calibration segments were consumed
@@ -1400,7 +1450,7 @@ with D3's falsification.
 
 Readings: (1) frozen BEATs — zero plant-specific training — is the best
 strict-alpha operating point in BOTH sessions (PU 11/13 at 0.008 FAR, ST 13/13
-at 0.003 FAR), the strongest universality datum in the package; (2) the 0.8 MB
+at 0.003 FAR), the strongest universality datum in this evaluation; (2) the 0.8 MB
 distilled student matches or beats its 361 MB teacher in every cell but
 strict-alpha PU — the compact deployment path costs almost nothing on real
 anomalies; (3) audio-tfc, the best STATE-structure transfer, is the weakest
@@ -1412,7 +1462,7 @@ the SAME artifacts read as TPR ceilings of 0.38 (ST) / 0.77 (PU) — induced-
 event days MUST ban event windows from calibration or they understate the
 detector and contaminate its thresholds.
 
-### The best-system statement (comparison-derived, A2.1/A4.5)
+### The best-system statement
 
 Per-state kNN + split conformal on FROZEN representations, pooled multi-day
 references, per-day or rolling (M=60) recalibration with event-aware
@@ -1420,12 +1470,12 @@ calibration exclusion on induced-event days. Representation by target: fusion
 for cross-day FAR control (0.03–0.10 across all six rotations), frozen BEATs
 for strict-alpha event detection (11/13 pumping + 13/13 standstill at
 alpha 0.01), handcrafted audio or the 0.8 MB student for maximum event recall
-at alpha >= 0.05. Every plant-tuning attempt in this package — TF-C-PSHP
+at alpha >= 0.05. Every plant-tuning attempt in this evaluation — TF-C-PSHP
 continued pretraining, session normalization, multi-day LoRA/student pools —
 failed to beat its frozen/universal counterpart on held-out days: with scarce
 data, the universal-encoder + calibration-layer architecture IS the best system
 we can justify, which is the thesis' universality claim made empirical. The
-final deployed artifact pools ALL available days (A4.5); the rotation numbers
+final deployed artifact pools ALL available days; the rotation numbers
 above are its honest generalization estimate.
 
 Honesty: no real machine faults exist in any recording — induced strikes are
@@ -1442,7 +1492,7 @@ audio-beats and logmel caches (distill now pairs by integer window shift), and
 event-contaminated calibration on induced-event days (monitor now supports
 `--exclude-calibration-events`; found by the final whole-branch review).
 
-## Step 2 package-8 evidence (2026-07-21): mode-model-bank, level-recal, explainable results
+## Step 2: mode model bank, level recalibration, and explainability (2026-07-21)
 
 Stefan's per-mode model-bank idea as a real Step-1 alternative, an independent
 test of the partner-inspired level-only recalibration, an explainability figure
@@ -1457,8 +1507,8 @@ figures + plain-language digest: `results/analysis-days/README.md`.
   structurally blind to pump->phase-shifter, as documented.)
 - **`RAWTurbineVib__3` ch0: std exactly 0.0 on EVERY day through 01.07, live
   (std 3.1–3.5) on 08.07** — the channel was cabled between eras B and C; the
-  documented cause of the 243-vs-231 column drift the P7 monitor projection
-  handles and the bank's contract guard refuses.
+  documented cause of the 243-vs-231 column drift the robustness study's
+  monitor projection handles and the bank's contract guard refuses.
 - Gen-mic channel profile at the ST strikes recorded (channel-anonymous; no
   azimuth claim — the sensor-drawing mapping is not delivered).
 
@@ -1469,7 +1519,7 @@ Six held-out rotations x 3 families x 3 representations; ARI on the identical
 (SCADA labels at commissioning time) vs the unsupervised KMeans+HMM — an
 information advantage, stated as such, not a method win. Mean ARI:
 
-| representation | bank gaussian | bank knn | bank gmm | P7 pooled clusterer |
+| representation | bank gaussian | bank knn | bank gmm | pooled clusterer |
 |---|---|---|---|---|
 | audio-beats | 0.476 | **0.882** | 0.746 | 0.606 |
 | vibration | **0.824** | 0.686 | 0.641 | 0.614 |
@@ -1481,8 +1531,8 @@ the bank holds: 250526-tu best-family ARI 0.83–0.98 vs the clusterer's
 `--smooth` (duration-filter only) adds small consistent gains (up to +0.07).
 The chain probe converts label quality into alarm quality: bank-gaussian
 per-mode references drop the frozen pooled FAR on B1->290626-tu to **0.011 vs
-0.075** for the P7 detected-state chain under split-parity. Era-C zero-shot
-mode-ID readout (A1.7, audio-beats): knn accuracy **0.918** / ARI 0.71 on
+0.075** for the pooled-clusterer detected-state chain under split-parity.
+Era-C zero-shot mode-ID readout (audio-beats): knn accuracy **0.918** / ARI 0.71 on
 080726-pu_strikes with a 19.5% `no_mode_fits` rate — the rejection signal
 fires on era drift, exactly the "nothing fits" behavior the bank was built to
 expose (gaussian degrades to 0.41 accuracy: Mahalanobis is era-shift-fragile).
@@ -1492,8 +1542,8 @@ expose (gaussian degrades to 0.41 accuracy: Mahalanobis is era-shift-fragile).
 The quad `raw-frozen | level-recal-frozen | session-norm-frozen | recalibrate`
 on identical cells, six rotations, audio + vibration (fusion excluded by
 design — its `fuse()` per-run z-score is ITSELF an implicit level
-normalization, the A1.1 finding that plausibly explains fusion's cross-day FAR
-advantage all along):
+normalization, which plausibly explains fusion's cross-day FAR advantage all
+along):
 
 - **audio: level-recal is a no-op** (e.g. 290626-tu 0.481 -> 0.483; both
   250526 cells unchanged). Structural reason: our kNN scoring is cosine on
@@ -1505,7 +1555,8 @@ advantage all along):
   0.010 -> 1.000): the label-free first-20-min offsets conflate the prefix's
   MODE MIX with a session gain — vibration levels are strongly
   mode-dependent, so the "session offset" is really a mode offset. The same
-  confound that falsified session-norm in P7, now reproduced level-only.
+  confound that falsified session normalization in the robustness evaluation
+  above, now reproduced level-only.
 - **Positive finding instead: raw-frozen VIBRATION survives the era boundary**
   (250526 cells 0.122 / 0.010 at alpha=0.05) — microphones step, vibration
   doesn't, independently reproduced in our pipeline. On the 080726 strike day
@@ -1551,7 +1602,7 @@ design — audio-beats is the drift-free representation there); no partner
 number enters any computation; ST vibration-frozen failure and the level-recal
 falsification are reported as measured.
 
-## Step 2 package-9 evidence (2026-07-22): once-calibrated operation, named states, transitions
+## Step 2: once-calibrated operation, named states, and transitions (2026-07-22)
 
 Stefan's three directives answered with numbers: calibrate ONCE per plant
 (drift-triggered recalibration instead of daily), name the states, and ground
@@ -1589,7 +1640,8 @@ decision, identical sentinel verdicts across all three scored representations:
   also miss alpha there at 0.096 — an in-sample PU peculiarity, tagged). Pillar-3 retention: once+triggered keeps the
   recalibrate TPR exactly (PU 0.92, ST 1.00 for fusion; 0.85/1.00
   audio-beats); frozen's nominal TPR 1.0 is trivial (it alarms on most
-  windows). Vibration replays confirm P8: frozen-vibration is the era-robust
+  windows). Vibration replays confirm the mode-bank evaluation's finding:
+  frozen-vibration is the era-robust
   arm (always-frozen 0.005-0.112 on every held-out day — the in-sample
   010726-pu floor is 0.002 — 080726 event-free 0.041 at TPR 0.85 — where recalibrate DROPS vibration's strike TPR to 0.31); for a
   vibration-first deployment, frozen + sentinel is already the best regime.
@@ -1635,4 +1687,4 @@ claim; sentinel thresholds come from B1 data alone (97.5/1000/3/1.4826 are
 named standard-statistics constants, nothing partner-derived); 010726 rows are
 in-sample (tagged); the s1 near-miss on 290626-tu and s2's deafness to the
 mic step are reported as measured; ST stays out of reach for operation-pool
-vibration snapshots (TPR <= 0.08) as in P8.
+vibration snapshots (TPR <= 0.08) as in the mode-bank evaluation above.

@@ -411,19 +411,19 @@ def test_matching_event_kind_returns_first_overlap_or_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 15. state_name_de (feat/demo-dashboard: Zustands-Badge subtitle)
+# 15. state_display_name (feat/demo-dashboard: state-badge subtitle)
 # ---------------------------------------------------------------------------
 
 
-def test_state_name_de_covers_known_states_and_falls_back() -> None:
-    assert mda.state_name_de("turbine") == "Turbinenbetrieb"
-    assert mda.state_name_de("pump") == "Pumpbetrieb"
-    assert mda.state_name_de("phase-shifter") == "Phasenschieberbetrieb"
-    assert mda.state_name_de("standstill") == "Stillstand"
-    assert mda.state_name_de("invalid") == "Übergang / ungültig"
-    # derive_state_names' own cluster-<id> naming fallback: never invented German
-    # prose, just a labelled passthrough.
-    assert mda.state_name_de("cluster-2") == "Zustand (cluster-2)"
+def test_state_display_name_covers_known_states_and_falls_back() -> None:
+    assert mda.state_display_name("turbine") == "Turbine operation"
+    assert mda.state_display_name("pump") == "Pump operation"
+    assert mda.state_display_name("phase-shifter") == "Phase-shifter operation"
+    assert mda.state_display_name("standstill") == "Standstill"
+    assert mda.state_display_name("invalid") == "Transition / invalid"
+    # derive_state_names' own cluster-<id> naming fallback: never invented prose,
+    # just a labelled passthrough.
+    assert mda.state_display_name("cluster-2") == "State (cluster-2)"
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,4 @@
-"""Split-conformal calibration for Step-2 per-mode anomaly thresholds (design spec
-`docs/superpowers/specs/2026-07-09-step2-mode-conditioned-ad-design.md` §2-3, design
-chapter §3.5 "Mode conditioning and thresholds", plan `docs/superpowers/plans/
-2026-07-09-step2-first-package.md` Task S4).
+"""Split-conformal calibration for Step-2 per-mode anomaly thresholds.
 
 `calibrate` turns one mode's held-out normal calibration scores (from
 `rowii.anomaly.scorers`, one scalar per window, higher = more anomalous) into a single

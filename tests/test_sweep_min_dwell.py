@@ -36,8 +36,7 @@ _NAMES = [f"ch0_octave_{i}" for i in range(4)]
 
 
 # ---------------------------------------------------------------------------
-# Plan's own RED tests (verbatim, docs/superpowers/plans/
-# 2026-07-22-step2-package9-once-naming-transitions.md, Task 4)
+# RED tests written directly against the design's own acceptance criteria
 # ---------------------------------------------------------------------------
 
 
