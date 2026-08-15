@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Replay — ROWII Monitor</title>
+<style>
+:root {
+  --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
+  --muted2: #5b6a8c; --grid: #26304a; --step: #0f1420; --accent: #4c8dff;
+  --alarm: #ff5c5c; --gt: #ffd166; --good: #37c992;
+  --s-standstill: #7c8aab; --s-turbine: #37c992; --s-pump: #4c8dff;
+  --s-phaseshifter: #b48cff;
+  --radius: 10px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at 20% -10%, #131b2e 0%, var(--bg) 55%);
+  color: var(--ink);
+  font: 15px/1.55 "SF Pro Text", -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+h1, h2, h3, p { margin: 0 0 .6em; }
+a { color: #9fc0ff; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: #9fc0ff; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
+
+header.topbar {
+  display: flex; align-items: center; gap: 22px; padding: 14px 22px;
+  border-bottom: 1px solid var(--grid);
+  background: linear-gradient(180deg, #0d1220, #0a0e17);
+  position: sticky; top: 0; z-index: 10;
+}
+.brand { display: flex; align-items: baseline; gap: 6px; font-weight: 800; }
+.brand-mark { font-size: 16px; letter-spacing: .04em; }
+.brand-sub { font-size: 13px; color: var(--muted); font-weight: 600; }
+nav.nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav.nav a {
+  color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
+  padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
+}
+nav.nav a:hover { color: var(--ink); border-color: var(--grid); }
+nav.nav a.active {
+  color: var(--ink); background: var(--panel); border-color: var(--grid);
+}
+
+main.page { max-width: 980px; margin: 0 auto; padding: 34px 22px 60px; }
+.page-head h1 { font-size: 26px; font-weight: 800; }
+.page-head p { color: var(--muted); max-width: 68ch; }
+
+.notice {
+  background: #1c1608; border: 1px solid #4a3d16; color: #ffd166;
+  border-radius: var(--radius);
+  padding: 12px 16px; font-size: 13.5px; line-height: 1.5; margin: 18px 0 28px;
+}
+.notice strong { color: #ffe6a3; }
+
+.hero { padding: 10px 0 6px; }
+.hero h1 { font-size: 32px; font-weight: 800; letter-spacing: -.01em; }
+.hero .lede { color: var(--muted); font-size: 16px; max-width: 74ch; }
+
+.cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px;
+}
+@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+a.card {
+  display: block; background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius);
+  padding: 18px 18px 20px; text-decoration: none; color: var(--ink);
+  transition: border-color .15s ease, transform .15s ease;
+}
+a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+a.card h2 { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+a.card p { color: var(--muted); font-size: 13.5px; margin: 0; }
+a.card .go {
+  display: block; margin-top: 12px; font-size: 12px; font-weight: 700;
+  color: var(--accent);
+}
+
+.site-footer {
+  max-width: 980px; margin: 0 auto; padding: 24px 22px 46px;
+  color: var(--muted2); font-size: 12px;
+  border-top: 1px solid var(--grid);
+}
+
+/* ---------- sensors page ---------- */
+.sensor-layout {
+  display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.sensor-diagram {
+  flex: 0 0 auto; background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius); padding: 14px;
+}
+.sensor-diagram svg { width: 320px; height: auto; display: block; }
+.sensor rect, .sensor circle, .sensor line {
+  transition: fill .15s ease, stroke .15s ease;
+}
+.sensor.mic circle {
+  fill: var(--accent); stroke: #06101f; stroke-width: 1; cursor: pointer;
+}
+.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--gt); }
+.sensor.vib rect {
+  fill: #3a2a10; stroke: #ffb84c; stroke-width: 1.1; cursor: pointer;
+}
+.sensor.vib line { stroke: #ffb84c; stroke-width: 1; }
+.sensor.vib:hover rect, .sensor.vib:focus rect { fill: #ffb84c; }
+.m-block { fill: #16203a; stroke: var(--grid); stroke-width: 1.4; }
+.m-shaft { fill: #202c48; }
+.m-label {
+  fill: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+}
+.sensor-readout {
+  flex: 1 1 260px; background: var(--panel2); border: 1px solid var(--grid);
+  border-radius: var(--radius);
+  padding: 16px 18px; min-height: 84px; font-size: 13.5px; color: var(--muted);
+}
+.sensor-readout .rlabel {
+  display: block; color: var(--ink); font-weight: 800; font-size: 15px;
+  margin-bottom: 4px;
+}
+.sensor-readout code { display: block; margin-top: 6px; }
+table.sensor-table {
+  width: 100%; border-collapse: collapse; margin-top: 26px; font-size: 13px;
+}
+table.sensor-table th, table.sensor-table td {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid);
+}
+table.sensor-table th {
+  color: var(--muted); font-weight: 700; text-transform: uppercase;
+  font-size: 10.5px; letter-spacing: .05em;
+}
+.callout {
+  background: var(--panel); border: 1px solid var(--grid);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px;
+  color: var(--muted); line-height: 1.55;
+}
+.callout strong { color: var(--ink); }
+
+/* ---------- live page ---------- */
+.iframe-wrap {
+  border: 1px solid var(--grid); border-radius: var(--radius); overflow: hidden;
+  margin-top: 14px;
+  background: #05070c; height: min(78vh, 860px);
+}
+.iframe-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 12px; }
+
+/* ---------- snippets page ---------- */
+.clip-section { margin-top: 34px; }
+.clip-section h2 { font-size: 19px; font-weight: 800; }
+.clip-section > p { color: var(--muted); max-width: 74ch; font-size: 13.5px; }
+.clip-subhead {
+  font-size: 13px; color: var(--muted); margin: 16px 0 4px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.clip-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px; margin-top: 14px;
+}
+.clip-card {
+  background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius); padding: 14px 15px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.clip-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; flex-wrap: wrap;
+}
+.clip-title { font-weight: 700; font-size: 13.5px; }
+.clip-tag {
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
+  background: #1c2740; color: var(--muted); white-space: nowrap;
+}
+.clip-tag.sustained { color: #ffb84c; }
+.clip-tag.transient { color: #ff9fd6; }
+.badge.unverified {
+  font-size: 9.5px; font-weight: 800; color: #ffd166; background: #2c2410;
+  border: 1px solid #4a3d16; border-radius: 5px; padding: 3px 7px;
+  white-space: nowrap;
+}
+.badge.in-sample {
+  font-size: 9px; font-weight: 700; color: var(--muted); background: #1c2740;
+  border-radius: 5px; padding: 2px 6px;
+}
+.clip-card audio { width: 100%; height: 32px; }
+.clip-audios { display: flex; flex-direction: column; gap: 6px; }
+.clip-audios label {
+  font-size: 10.5px; color: var(--muted2); text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.clip-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.clip-meta {
+  font-size: 11px; color: var(--muted2); margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div><nav class="nav"><a href="index.html">Overview</a><a href="sensors.html">Sensors</a><a href="live.html" class="active">Live Replay</a><a href="snippets.html">Listening Library</a></nav></header>
+<main class="page">
+
+<section class="page-head">
+  <h1>Live replay</h1>
+  <p>A replay of the control room as it would have looked while a recorded session
+  played: the plant schematic, the detection pipeline from raw signal to alarm, the
+  current operating state, and the alarm feed with its reasoning. Alarms fire on two
+  independent paths &mdash; a sustained anomaly (several consecutive seconds
+  scored anomalous against the current mode's normal model) or a single strong
+  transient impulse (one second, much more extreme) &mdash; both are visible in the
+  feed as they occur, alongside the logged induced strikes they are being checked
+  against.</p>
+</section>
+<div class="iframe-wrap">
+  <iframe src="../demo/demo_dashboard.html"
+    title="ROWII Monitor control room replay" loading="lazy"></iframe>
+</div>
+<p class="hint">Prefer a full page? <a href="../demo/demo_dashboard.html">Open the
+control room by itself</a>. There is also a single-clip
+<a href="../demo/demo_live.html">pipeline walkthrough</a> (raw signal &rarr;
+features &rarr; state &rarr; score &rarr; alarm) covering one recording in detail.</p>
+
+</main>
+<footer class="site-footer">Krummenacher, 2026, University of St. Gallen — see README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>
+</body>
+</html>

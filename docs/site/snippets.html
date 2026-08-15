@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listening Library — ROWII Monitor</title>
+<style>
+:root {
+  --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
+  --muted2: #5b6a8c; --grid: #26304a; --step: #0f1420; --accent: #4c8dff;
+  --alarm: #ff5c5c; --gt: #ffd166; --good: #37c992;
+  --s-standstill: #7c8aab; --s-turbine: #37c992; --s-pump: #4c8dff;
+  --s-phaseshifter: #b48cff;
+  --radius: 10px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at 20% -10%, #131b2e 0%, var(--bg) 55%);
+  color: var(--ink);
+  font: 15px/1.55 "SF Pro Text", -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+h1, h2, h3, p { margin: 0 0 .6em; }
+a { color: #9fc0ff; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: #9fc0ff; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
+
+header.topbar {
+  display: flex; align-items: center; gap: 22px; padding: 14px 22px;
+  border-bottom: 1px solid var(--grid);
+  background: linear-gradient(180deg, #0d1220, #0a0e17);
+  position: sticky; top: 0; z-index: 10;
+}
+.brand { display: flex; align-items: baseline; gap: 6px; font-weight: 800; }
+.brand-mark { font-size: 16px; letter-spacing: .04em; }
+.brand-sub { font-size: 13px; color: var(--muted); font-weight: 600; }
+nav.nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav.nav a {
+  color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
+  padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
+}
+nav.nav a:hover { color: var(--ink); border-color: var(--grid); }
+nav.nav a.active {
+  color: var(--ink); background: var(--panel); border-color: var(--grid);
+}
+
+main.page { max-width: 980px; margin: 0 auto; padding: 34px 22px 60px; }
+.page-head h1 { font-size: 26px; font-weight: 800; }
+.page-head p { color: var(--muted); max-width: 68ch; }
+
+.notice {
+  background: #1c1608; border: 1px solid #4a3d16; color: #ffd166;
+  border-radius: var(--radius);
+  padding: 12px 16px; font-size: 13.5px; line-height: 1.5; margin: 18px 0 28px;
+}
+.notice strong { color: #ffe6a3; }
+
+.hero { padding: 10px 0 6px; }
+.hero h1 { font-size: 32px; font-weight: 800; letter-spacing: -.01em; }
+.hero .lede { color: var(--muted); font-size: 16px; max-width: 74ch; }
+
+.cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px;
+}
+@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+a.card {
+  display: block; background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius);
+  padding: 18px 18px 20px; text-decoration: none; color: var(--ink);
+  transition: border-color .15s ease, transform .15s ease;
+}
+a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+a.card h2 { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+a.card p { color: var(--muted); font-size: 13.5px; margin: 0; }
+a.card .go {
+  display: block; margin-top: 12px; font-size: 12px; font-weight: 700;
+  color: var(--accent);
+}
+
+.site-footer {
+  max-width: 980px; margin: 0 auto; padding: 24px 22px 46px;
+  color: var(--muted2); font-size: 12px;
+  border-top: 1px solid var(--grid);
+}
+
+/* ---------- sensors page ---------- */
+.sensor-layout {
+  display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.sensor-diagram {
+  flex: 0 0 auto; background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius); padding: 14px;
+}
+.sensor-diagram svg { width: 320px; height: auto; display: block; }
+.sensor rect, .sensor circle, .sensor line {
+  transition: fill .15s ease, stroke .15s ease;
+}
+.sensor.mic circle {
+  fill: var(--accent); stroke: #06101f; stroke-width: 1; cursor: pointer;
+}
+.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--gt); }
+.sensor.vib rect {
+  fill: #3a2a10; stroke: #ffb84c; stroke-width: 1.1; cursor: pointer;
+}
+.sensor.vib line { stroke: #ffb84c; stroke-width: 1; }
+.sensor.vib:hover rect, .sensor.vib:focus rect { fill: #ffb84c; }
+.m-block { fill: #16203a; stroke: var(--grid); stroke-width: 1.4; }
+.m-shaft { fill: #202c48; }
+.m-label {
+  fill: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+}
+.sensor-readout {
+  flex: 1 1 260px; background: var(--panel2); border: 1px solid var(--grid);
+  border-radius: var(--radius);
+  padding: 16px 18px; min-height: 84px; font-size: 13.5px; color: var(--muted);
+}
+.sensor-readout .rlabel {
+  display: block; color: var(--ink); font-weight: 800; font-size: 15px;
+  margin-bottom: 4px;
+}
+.sensor-readout code { display: block; margin-top: 6px; }
+table.sensor-table {
+  width: 100%; border-collapse: collapse; margin-top: 26px; font-size: 13px;
+}
+table.sensor-table th, table.sensor-table td {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid);
+}
+table.sensor-table th {
+  color: var(--muted); font-weight: 700; text-transform: uppercase;
+  font-size: 10.5px; letter-spacing: .05em;
+}
+.callout {
+  background: var(--panel); border: 1px solid var(--grid);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px;
+  color: var(--muted); line-height: 1.55;
+}
+.callout strong { color: var(--ink); }
+
+/* ---------- live page ---------- */
+.iframe-wrap {
+  border: 1px solid var(--grid); border-radius: var(--radius); overflow: hidden;
+  margin-top: 14px;
+  background: #05070c; height: min(78vh, 860px);
+}
+.iframe-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 12px; }
+
+/* ---------- snippets page ---------- */
+.clip-section { margin-top: 34px; }
+.clip-section h2 { font-size: 19px; font-weight: 800; }
+.clip-section > p { color: var(--muted); max-width: 74ch; font-size: 13.5px; }
+.clip-subhead {
+  font-size: 13px; color: var(--muted); margin: 16px 0 4px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.clip-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px; margin-top: 14px;
+}
+.clip-card {
+  background: var(--panel); border: 1px solid var(--grid);
+  border-radius: var(--radius); padding: 14px 15px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.clip-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; flex-wrap: wrap;
+}
+.clip-title { font-weight: 700; font-size: 13.5px; }
+.clip-tag {
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
+  background: #1c2740; color: var(--muted); white-space: nowrap;
+}
+.clip-tag.sustained { color: #ffb84c; }
+.clip-tag.transient { color: #ff9fd6; }
+.badge.unverified {
+  font-size: 9.5px; font-weight: 800; color: #ffd166; background: #2c2410;
+  border: 1px solid #4a3d16; border-radius: 5px; padding: 3px 7px;
+  white-space: nowrap;
+}
+.badge.in-sample {
+  font-size: 9px; font-weight: 700; color: var(--muted); background: #1c2740;
+  border-radius: 5px; padding: 2px 6px;
+}
+.clip-card audio { width: 100%; height: 32px; }
+.clip-audios { display: flex; flex-direction: column; gap: 6px; }
+.clip-audios label {
+  font-size: 10.5px; color: var(--muted2); text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.clip-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.clip-meta {
+  font-size: 11px; color: var(--muted2); margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div><nav class="nav"><a href="index.html">Overview</a><a href="sensors.html">Sensors</a><a href="live.html">Live Replay</a><a href="snippets.html" class="active">Listening Library</a></nav></header>
+<main class="page">
+
+<section class="page-head">
+  <h1>Listening library</h1>
+  <p>Three kinds of audio, side by side: known induced test strikes (ground truth),
+  ordinary audio from each detected operating mode, and windows the model itself
+  flagged as unusual on days without any induced anomaly.</p>
+</section>
+
+<section class="clip-section">
+  <h2>Induced test strikes</h2>
+  <p>On 2026-07-08, a Schonhammer reference hammer was struck at each microphone
+  position (and three additional plant landmarks, plus a guide-vane cover sweep) during
+  both pump operation and standstill, to build seconds-level ground truth for detector
+  evaluation. One representative 10&nbsp;s clip per position/kind is shown below, all
+  from the pump-operation session for one consistent background condition; two
+  standstill-session clips are included for contrast.</p>
+  <div class="clip-grid"><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — generator ring, 0°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-01_plate-gen_0_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:42:59.568000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — generator ring, 90°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-02_plate-gen_90_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:43:59.822000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — generator ring, 180°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-03_plate-gen_180_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:45:01.051000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — generator ring, 270°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-04_plate-gen_270_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:46:00.120000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — turbine bottom microphone</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-05_plate-tur_bottom_tur.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, turbine mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:47:00.454000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Landmark B — 11TG</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-06_landmark-B_11TG_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:48:01.190000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Landmark A — ball valve (Kugelschieber)</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-07_landmark-A_kugelschieber_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. no seconds-level strike timestamp compiled yet for this event — clip starts at the top of the logged minute.</p>
+  <p class="clip-meta">2026-07-08T12:48:45+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Guide-vane cover sweep (structure-borne excitation)</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-08_vane-sweep_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. 57 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:50:27.216000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — turbine ring, 0°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-09_plate-tur_0_tur.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, turbine mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:54:00.531000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — turbine ring, 90°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-10_plate-tur_90_tur.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, turbine mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:54:59.795000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — turbine ring, 180°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-11_plate-tur_180_tur.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, turbine mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:56:00.339000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Reference plate — turbine ring, 270°</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-12_plate-tur_270_tur.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, turbine mic recording, pump
+  operation. 3 logged strike(s) in this clip.</p>
+  <p class="clip-meta">2026-07-08T12:57:00.221000+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">Landmark C — EG</span>
+  <span class="clip-tag">PU</span></div>
+  <audio controls preload="none" src="assets/strikes/pu-13_landmark-C_EG_gen.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike, generator mic recording, pump
+  operation. no seconds-level strike timestamp compiled yet for this event — clip starts at the top of the logged minute.</p>
+  <p class="clip-meta">2026-07-08T13:00:45+00:00</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">plate-tur_0</span>
+  <span class="clip-tag">080726-pu_strikes</span></div>
+  <audio controls preload="none" src="../demo/assets/strike_pump_plate_tur_0.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike &quot;plate-tur_0&quot; (reference plate, turbine side, 0°) during pump operation – SCADA-confirmed at approx. −279 MW / −377.8 rpm.</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">plate-gen_0</span>
+  <span class="clip-tag">080726-st_strikes</span></div>
+  <audio controls preload="none" src="../demo/assets/strike_standstill_plate_gen_0.wav"></audio>
+  <p class="clip-note">Induced Schonhammer strike &quot;plate-gen_0&quot; (reference plate, generator side, 0°) at standstill (calibration session).</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">vane-sweep</span>
+  <span class="clip-tag">080726-st_strikes</span></div>
+  <audio controls preload="none" src="../demo/assets/strike_standstill_vane_sweep.wav"></audio>
+  <p class="clip-note">Vane sweep – structure-borne excitation at the guide-vane cover, first 10 s of the roughly three-minute sweep session (standstill).</p>
+</div></div>
+</section>
+
+<section class="clip-section">
+  <h2>Normal operation</h2>
+  <p>10&nbsp;s clips from the middle of the longest contiguous run of each
+  unsupervised-detected operating state on the same measurement day, checked against
+  the strike ground truth.</p>
+  <div class="clip-grid"><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">State 0</span>
+  <span class="clip-tag">unsupervised cluster</span></div>
+  <audio controls preload="none" src="../demo/assets/state_cluster0.wav"></audio>
+  <p class="clip-note">Unsupervised-detected state 0 (11 windows on this measurement day, 1-s grid) – 10 s from the middle of this state&#x27;s longest contiguous segment, checked against the strike ground truth.</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">State 1</span>
+  <span class="clip-tag">unsupervised cluster</span></div>
+  <audio controls preload="none" src="../demo/assets/state_cluster1.wav"></audio>
+  <p class="clip-note">Unsupervised-detected state 1 (6740 windows on this measurement day, 1-s grid) – 10 s from the middle of this state&#x27;s longest contiguous segment, checked against the strike ground truth.</p>
+</div><div class="clip-card">
+  <div class="clip-head"><span class="clip-title">State 3</span>
+  <span class="clip-tag">unsupervised cluster</span></div>
+  <audio controls preload="none" src="../demo/assets/state_cluster3.wav"></audio>
+  <p class="clip-note">Unsupervised-detected state 3 (6076 windows on this measurement day, 1-s grid) – 10 s from the middle of this state&#x27;s longest contiguous segment, checked against the strike ground truth.</p>
+</div></div>
+</section>
+
+<section class="clip-section">
+  <h2>Model-flagged, unverified candidates</h2>
+  <p>On days WITHOUT any induced anomaly, the detector still occasionally scores a
+  window as anomalous against its own learned normal model. Every clip below is
+  <strong>model-flagged and unverified</strong> &mdash; a qualitative listening
+  candidate, not a confirmed fault. Alarms fire on two independent paths: a
+  <strong>sustained</strong> anomaly (at least 3 consecutive 1&nbsp;s windows with
+  p&nbsp;&lt;&nbsp;0.01 against the operating mode's normal model, fusion
+  representation) or a <strong>transient</strong> one (a single window with
+  p&nbsp;&lt;&nbsp;0.001, BEATs representation). The exact trigger reason is stated
+  under each clip. The 10 shown here are the
+  5 strongest (lowest minimum p-value) of each class across every
+  measurement day.</p>
+  <h3 class="clip-subhead">Sustained</h3>
+  <div class="clip-grid"><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Sustained · 010726-tu1-morning</span>
+    <span class="clip-tag sustained">sustained</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-01_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-01_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 2.024e-04.</p>
+  <p class="clip-meta">2026-07-01T04:07:49.732000+00:00 · detected state:
+  turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Sustained · 080726-pu_strikes</span>
+    <span class="clip-tag sustained">sustained</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/080726-pu_strikes-01_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/080726-pu_strikes-01_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a sustained anomaly (fusion path): 4 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 4.0 s total (minimum duration 3 s) -- lowest value p = 4.032e-04.</p>
+  <p class="clip-meta">2026-07-08T15:16:24.411000+00:00 · detected state:
+  turbine · SCADA: transition</p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Sustained · 290626-tu</span>
+    <span class="clip-tag sustained">sustained</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-02_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-02_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a sustained anomaly (fusion path): 12 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 12.0 s total (minimum duration 3 s) -- lowest value p = 4.037e-04.</p>
+  <p class="clip-meta">2026-06-29T04:47:21.834000+00:00 · detected state:
+  standstill · SCADA: transition</p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Sustained · 010726-tu1-morning</span>
+    <span class="clip-tag sustained">sustained</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-09_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-09_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.</p>
+  <p class="clip-meta">2026-07-01T04:02:57.732000+00:00 · detected state:
+  turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Sustained · 010726-tu1-morning</span>
+    <span class="clip-tag sustained">sustained</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-10_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-10_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a sustained anomaly (fusion path): 8 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 8.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.</p>
+  <p class="clip-meta">2026-07-01T04:08:26.732000+00:00 · detected state:
+  turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+</div></div>
+  <h3 class="clip-subhead">Transient</h3>
+  <div class="clip-grid"><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Transient · 270626-pu_ph_pu_ph_pu_ph-1</span>
+    <span class="clip-tag transient">transient</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/270626-pu_ph_pu_ph_pu_ph-1-01_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/270626-pu_ph_pu_ph_pu_ph-1-01_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 1.461e-04).</p>
+  <p class="clip-meta">2026-06-27T05:49:18.337000+00:00 · detected state:
+  turbine · SCADA: unknown</p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Transient · 290626-tu</span>
+    <span class="clip-tag transient">transient</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-01_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-01_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 2.497e-04).</p>
+  <p class="clip-meta">2026-06-29T04:31:35.737000+00:00 · detected state:
+  turbine · SCADA: transition</p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Transient · 270626-pu_ph_pu_ph_pu_ph-1</span>
+    <span class="clip-tag transient">transient</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/270626-pu_ph_pu_ph_pu_ph-1-02_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/270626-pu_ph_pu_ph_pu_ph-1-02_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 2.922e-04).</p>
+  <p class="clip-meta">2026-06-27T05:46:40.337000+00:00 · detected state:
+  turbine · SCADA: unknown</p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Transient · 010726-tu1-morning</span>
+    <span class="clip-tag transient">transient</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-02_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/010726-tu1-morning-02_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 3.610e-04).</p>
+  <p class="clip-meta">2026-07-01T03:07:51.731000+00:00 · detected state:
+  turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+</div><div class="clip-card candidate">
+  <div class="clip-head">
+    <span class="clip-title">Transient · 290626-tu</span>
+    <span class="clip-tag transient">transient</span>
+  </div>
+  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
+  <div class="clip-audios">
+    <label>Generator mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-11_gen.wav"></audio></label>
+    <label>Turbine mic<audio controls preload="none"
+      src="assets/candidates/290626-tu-11_tur.wav"></audio></label>
+  </div>
+  <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 8.917e-04).</p>
+  <p class="clip-meta">2026-06-29T02:00:22.737000+00:00 · detected state:
+  turbine · SCADA: transition</p>
+</div></div>
+</section>
+
+</main>
+<footer class="site-footer">Krummenacher, 2026, University of St. Gallen — see README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>
+</body>
+</html>

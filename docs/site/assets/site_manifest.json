@@ -1,0 +1,245 @@
+{
+  "clip_duration_s": 10.0,
+  "strike_session": "pu",
+  "strikes": [
+    {
+      "event_id": "01",
+      "kind": "plate-gen_0",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:42:59.568000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-01_plate-gen_0_gen.wav"
+    },
+    {
+      "event_id": "02",
+      "kind": "plate-gen_90",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:43:59.822000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-02_plate-gen_90_gen.wav"
+    },
+    {
+      "event_id": "03",
+      "kind": "plate-gen_180",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:45:01.051000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-03_plate-gen_180_gen.wav"
+    },
+    {
+      "event_id": "04",
+      "kind": "plate-gen_270",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:46:00.120000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-04_plate-gen_270_gen.wav"
+    },
+    {
+      "event_id": "05",
+      "kind": "plate-tur_bottom",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:47:00.454000+00:00",
+      "side": "tur",
+      "wav": "strikes/pu-05_plate-tur_bottom_tur.wav"
+    },
+    {
+      "event_id": "06",
+      "kind": "landmark-B_11TG",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:48:01.190000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-06_landmark-B_11TG_gen.wav"
+    },
+    {
+      "event_id": "07",
+      "kind": "landmark-A_kugelschieber",
+      "session": "pu",
+      "n_strikes": 0,
+      "clip_utc": "2026-07-08T12:48:45+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-07_landmark-A_kugelschieber_gen.wav"
+    },
+    {
+      "event_id": "08",
+      "kind": "vane-sweep",
+      "session": "pu",
+      "n_strikes": 57,
+      "clip_utc": "2026-07-08T12:50:27.216000+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-08_vane-sweep_gen.wav"
+    },
+    {
+      "event_id": "09",
+      "kind": "plate-tur_0",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:54:00.531000+00:00",
+      "side": "tur",
+      "wav": "strikes/pu-09_plate-tur_0_tur.wav"
+    },
+    {
+      "event_id": "10",
+      "kind": "plate-tur_90",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:54:59.795000+00:00",
+      "side": "tur",
+      "wav": "strikes/pu-10_plate-tur_90_tur.wav"
+    },
+    {
+      "event_id": "11",
+      "kind": "plate-tur_180",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:56:00.339000+00:00",
+      "side": "tur",
+      "wav": "strikes/pu-11_plate-tur_180_tur.wav"
+    },
+    {
+      "event_id": "12",
+      "kind": "plate-tur_270",
+      "session": "pu",
+      "n_strikes": 3,
+      "clip_utc": "2026-07-08T12:57:00.221000+00:00",
+      "side": "tur",
+      "wav": "strikes/pu-12_plate-tur_270_tur.wav"
+    },
+    {
+      "event_id": "13",
+      "kind": "landmark-C_EG",
+      "session": "pu",
+      "n_strikes": 0,
+      "clip_utc": "2026-07-08T13:00:45+00:00",
+      "side": "gen",
+      "wav": "strikes/pu-13_landmark-C_EG_gen.wav"
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "010726-tu1-morning-01",
+      "class": "sustained",
+      "session": "010726-tu1-morning",
+      "start_utc": "2026-07-01T04:07:49.732000+00:00",
+      "criterion_text": "Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p < 0.01 against the operating mode's normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 2.024e-04.",
+      "state_name": "turbine",
+      "scada_state": "turbine",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu1-morning-01_gen.wav",
+      "tur_wav": "candidates/010726-tu1-morning-01_tur.wav"
+    },
+    {
+      "candidate_id": "080726-pu_strikes-01",
+      "class": "sustained",
+      "session": "080726-pu_strikes",
+      "start_utc": "2026-07-08T15:16:24.411000+00:00",
+      "criterion_text": "Triggered by a sustained anomaly (fusion path): 4 consecutive windows with p < 0.01 against the operating mode's normal model, 4.0 s total (minimum duration 3 s) -- lowest value p = 4.032e-04.",
+      "state_name": "turbine",
+      "scada_state": "transition",
+      "in_sample": false,
+      "gen_wav": "candidates/080726-pu_strikes-01_gen.wav",
+      "tur_wav": "candidates/080726-pu_strikes-01_tur.wav"
+    },
+    {
+      "candidate_id": "290626-tu-02",
+      "class": "sustained",
+      "session": "290626-tu",
+      "start_utc": "2026-06-29T04:47:21.834000+00:00",
+      "criterion_text": "Triggered by a sustained anomaly (fusion path): 12 consecutive windows with p < 0.01 against the operating mode's normal model, 12.0 s total (minimum duration 3 s) -- lowest value p = 4.037e-04.",
+      "state_name": "standstill",
+      "scada_state": "transition",
+      "in_sample": false,
+      "gen_wav": "candidates/290626-tu-02_gen.wav",
+      "tur_wav": "candidates/290626-tu-02_tur.wav"
+    },
+    {
+      "candidate_id": "010726-tu1-morning-09",
+      "class": "sustained",
+      "session": "010726-tu1-morning",
+      "start_utc": "2026-07-01T04:02:57.732000+00:00",
+      "criterion_text": "Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p < 0.01 against the operating mode's normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.",
+      "state_name": "turbine",
+      "scada_state": "turbine",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu1-morning-09_gen.wav",
+      "tur_wav": "candidates/010726-tu1-morning-09_tur.wav"
+    },
+    {
+      "candidate_id": "010726-tu1-morning-10",
+      "class": "sustained",
+      "session": "010726-tu1-morning",
+      "start_utc": "2026-07-01T04:08:26.732000+00:00",
+      "criterion_text": "Triggered by a sustained anomaly (fusion path): 8 consecutive windows with p < 0.01 against the operating mode's normal model, 8.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.",
+      "state_name": "turbine",
+      "scada_state": "turbine",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu1-morning-10_gen.wav",
+      "tur_wav": "candidates/010726-tu1-morning-10_tur.wav"
+    },
+    {
+      "candidate_id": "270626-pu_ph_pu_ph_pu_ph-1-01",
+      "class": "transient",
+      "session": "270626-pu_ph_pu_ph_pu_ph-1",
+      "start_utc": "2026-06-27T05:49:18.337000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 1.461e-04).",
+      "state_name": "turbine",
+      "scada_state": "unknown",
+      "in_sample": false,
+      "gen_wav": "candidates/270626-pu_ph_pu_ph_pu_ph-1-01_gen.wav",
+      "tur_wav": "candidates/270626-pu_ph_pu_ph_pu_ph-1-01_tur.wav"
+    },
+    {
+      "candidate_id": "290626-tu-01",
+      "class": "transient",
+      "session": "290626-tu",
+      "start_utc": "2026-06-29T04:31:35.737000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 2.497e-04).",
+      "state_name": "turbine",
+      "scada_state": "transition",
+      "in_sample": false,
+      "gen_wav": "candidates/290626-tu-01_gen.wav",
+      "tur_wav": "candidates/290626-tu-01_tur.wav"
+    },
+    {
+      "candidate_id": "270626-pu_ph_pu_ph_pu_ph-1-02",
+      "class": "transient",
+      "session": "270626-pu_ph_pu_ph_pu_ph-1",
+      "start_utc": "2026-06-27T05:46:40.337000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 2.922e-04).",
+      "state_name": "turbine",
+      "scada_state": "unknown",
+      "in_sample": false,
+      "gen_wav": "candidates/270626-pu_ph_pu_ph_pu_ph-1-02_gen.wav",
+      "tur_wav": "candidates/270626-pu_ph_pu_ph_pu_ph-1-02_tur.wav"
+    },
+    {
+      "candidate_id": "010726-tu1-morning-02",
+      "class": "transient",
+      "session": "010726-tu1-morning",
+      "start_utc": "2026-07-01T03:07:51.731000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 3.610e-04).",
+      "state_name": "turbine",
+      "scada_state": "turbine",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu1-morning-02_gen.wav",
+      "tur_wav": "candidates/010726-tu1-morning-02_tur.wav"
+    },
+    {
+      "candidate_id": "290626-tu-11",
+      "class": "transient",
+      "session": "290626-tu",
+      "start_utc": "2026-06-29T02:00:22.737000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 8.917e-04).",
+      "state_name": "turbine",
+      "scada_state": "transition",
+      "in_sample": false,
+      "gen_wav": "candidates/290626-tu-11_gen.wav",
+      "tur_wav": "candidates/290626-tu-11_tur.wav"
+    }
+  ]
+}
