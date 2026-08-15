@@ -839,3 +839,169 @@ def test_pin_stable_ids_only_pins_within_the_same_session() -> None:
     out = ck.pin_stable_ids(ranked, prior_ids)
 
     assert out[0].candidate_id == "s-01"  # unaffected by a different session's prior id
+
+
+# ---------------------------------------------------------------------------
+# 13. SCADA context panel: slicing, 1 Hz resampling, ribbon rows, readout, colors
+# ---------------------------------------------------------------------------
+
+
+def test_slice_window_series_keeps_only_windows_overlapping_the_span() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [10.0, 20.0, 30.0, 40.0])  # type: ignore[arg-type]
+
+    sliced_starts, sliced_values = ck.slice_window_series(
+        starts, 1.0, values, t0 + timedelta(seconds=1), t0 + timedelta(seconds=3)
+    )
+
+    assert sliced_starts == [t0 + timedelta(seconds=1), t0 + timedelta(seconds=2)]
+    assert sliced_values == [20.0, 30.0]
+
+
+def test_slice_window_series_excludes_a_window_touching_the_span_boundary() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [1.0, 2.0, 3.0])  # type: ignore[arg-type]
+
+    # Span starts exactly where window 0 ([t0, t0+1)) ends -- touching, not overlapping.
+    sliced_starts, _sliced_values = ck.slice_window_series(
+        starts, 1.0, values, t0 + timedelta(seconds=1), t0 + timedelta(seconds=2)
+    )
+
+    assert sliced_starts == [t0 + timedelta(seconds=1)]
+
+
+def test_slice_window_series_empty_when_span_is_far_outside() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [1.0, 2.0])  # type: ignore[arg-type]
+
+    sliced_starts, sliced_values = ck.slice_window_series(
+        starts, 1.0, values, t0 + timedelta(hours=1), t0 + timedelta(hours=1, seconds=1)
+    )
+
+    assert sliced_starts == []
+    assert sliced_values == []
+
+
+def test_resample_channel_to_seconds_passes_through_native_1s_windows() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [10.0, 12.0, 14.0])  # type: ignore[arg-type]
+
+    out = ck.resample_channel_to_seconds(starts, 1.0, values, t0, 3)
+
+    assert out == [10.0, 12.0, 14.0]
+
+
+def test_resample_channel_to_seconds_averages_sub_second_native_windows() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts = [t0, t0 + timedelta(seconds=0.5)]
+    values = [10.0, 20.0]
+
+    out = ck.resample_channel_to_seconds(starts, 0.5, values, t0, 1)
+
+    assert out == [pytest.approx(15.0)]
+
+
+def test_resample_channel_to_seconds_ignores_nan_values_in_the_mean() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts = [t0, t0 + timedelta(seconds=0.5)]
+    values = [float("nan"), 20.0]
+
+    out = ck.resample_channel_to_seconds(starts, 0.5, values, t0, 1)
+
+    assert out == [pytest.approx(20.0)]
+
+
+def test_resample_channel_to_seconds_none_when_no_window_overlaps() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [5.0])  # type: ignore[arg-type]
+
+    out = ck.resample_channel_to_seconds(starts, 1.0, values, t0 + timedelta(seconds=10), 1)
+
+    assert out == [None]
+
+
+def test_resample_channel_to_seconds_none_when_every_overlapping_value_is_nan() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, values = _window_series(t0, [float("nan"), float("nan")])  # type: ignore[arg-type]
+
+    out = ck.resample_channel_to_seconds(starts, 1.0, values, t0, 2)
+
+    assert out == [None, None]
+
+
+def test_resample_states_to_seconds_majority_per_second() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, states = _window_series(t0, ["pump", "pump", "standstill"])
+
+    out = ck.resample_states_to_seconds(starts, 1.0, states, t0, 3)
+
+    assert out == ["pump", "pump", "standstill"]
+
+
+def test_resample_states_to_seconds_unknown_when_no_window_overlaps_that_second() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, states = _window_series(t0, ["pump"])
+
+    out = ck.resample_states_to_seconds(starts, 1.0, states, t0 + timedelta(seconds=10), 1)
+
+    assert out == ["unknown"]
+
+
+def _session_scada(
+    *,
+    has_scada: bool = True,
+    window_start_utc: list[datetime] | None = None,
+    window_s: float = 1.0,
+    state: list[str] | None = None,
+    power_mw: list[float] | None = None,
+    speed_rpm: list[float] | None = None,
+    flow_net_m3s: list[float] | None = None,
+) -> ck.SessionScada:
+    return ck.SessionScada(
+        window_start_utc=window_start_utc or [],
+        window_s=window_s,
+        state=state or [],
+        has_scada=has_scada,
+        power_mw=power_mw or [],
+        speed_rpm=speed_rpm or [],
+        flow_net_m3s=flow_net_m3s or [],
+    )
+
+
+def test_build_readout_series_blank_for_a_session_with_no_betriebsdaten() -> None:
+    """The 270626-pu_ph_pu_ph_pu_ph-1 placeholder path: `has_scada=False` short-circuits
+    to all-`None` series without attempting to resample anything."""
+    t0 = _utc(2026, 6, 27, 10, 0, 0)
+    sc = _session_scada(has_scada=False)
+
+    power, speed = ck.build_readout_series(sc, t0, 3)
+
+    assert power == [None, None, None]
+    assert speed == [None, None, None]
+
+
+def test_build_readout_series_returns_real_values_when_scada_is_present() -> None:
+    t0 = _utc(2026, 6, 29, 4, 47, 20)
+    starts, _ = _window_series(t0, ["_", "_", "_"])
+    sc = _session_scada(
+        window_start_utc=starts, state=["turbine", "turbine", "turbine"],
+        power_mw=[10.0, 12.0, 14.0], speed_rpm=[300.0, 305.0, 310.0],
+    )
+
+    power, speed = ck.build_readout_series(sc, t0, 3)
+
+    assert power == [10.0, 12.0, 14.0]
+    assert speed == [300.0, 305.0, 310.0]
+
+
+def test_state_color_known_scada_and_detected_states_have_fixed_distinct_colors() -> None:
+    names = ("standstill", "turbine", "pump", "phase-shifter", "transition", "unknown")
+    colors = [ck.state_color(name) for name in names]
+
+    assert all(c.startswith("#") for c in colors)
+    assert len(set(colors)) == len(colors)  # every known state gets its own color
+
+
+def test_state_color_falls_back_to_the_shared_other_color_for_an_unnamed_cluster() -> None:
+    assert ck.state_color("cluster-3") == ck.state_color("cluster-7") == ck._STATE_OTHER_COLOR
+    assert ck._STATE_OTHER_COLOR not in {ck.state_color("turbine"), ck.state_color("unknown")}

@@ -125,15 +125,18 @@ vs IO-touching" split `annotation_kit.py`'s own module docstring documents).
 from __future__ import annotations
 
 import argparse
+import bisect
 import dataclasses
 import json
 import logging
+import math
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -638,11 +641,32 @@ class SessionScada:
     """One session's full-run SCADA/GT window series: `window_start_utc[i]` is the
     start of the window whose rule-based state is `state[i]` (same length, both
     ascending in time) -- `scada_majority_state`'s own input shape. Produced by
-    `load_session_scada`."""
+    `load_session_scada`.
+
+    `power_mw`/`speed_rpm`/`flow_net_m3s` (SCADA CONTEXT PANEL, Stefan's decision
+    2026-08-16) are the SAME per-window means `load_session_scada` already computes
+    (`rowii.scada.labels.load_scada_window_means`'s own `"power"`/`"speed"` columns,
+    plus `"flow_tu"`/`"flow_pu"` combined into one SIGNED net-flow series --
+    `flow_tu - flow_pu`, positive during turbine operation, negative during pump
+    operation, mirroring `speed`'s own turbine-positive/pump-negative sign
+    convention; NaN only where BOTH source channels are NaN, never where just one
+    is, since the inactive path's true value is ~0 m3/s, not unknown) -- carried
+    alongside `state` rather than recomputed, so `build`'s SCADA strip/live-readout
+    never re-reads Betriebsdaten. `has_scada` is `False` only for a session with NO
+    Betriebsdaten files at all for its own day (`270626-pu_ph_pu_ph_pu_ph-1`, the
+    ONLY such session) -- every list is then empty and every candidate's
+    `scada_state` already resolves to `"unknown"` via `scada_majority_state`'s own
+    no-overlap fallback (module docstring); `has_scada` exists so `build` can
+    render the neutral "no SCADA available for this day" strip placeholder
+    explicitly, instead of silently plotting three empty (all-NaN) mini-axes."""
 
     window_start_utc: list[datetime]
     window_s: float
     state: list[str]
+    has_scada: bool
+    power_mw: list[float]
+    speed_rpm: list[float]
+    flow_net_m3s: list[float]
 
 
 def scada_majority_state(
@@ -759,10 +783,181 @@ def load_session_scada(index: RecordingIndex, session: str, cfg: Config) -> Sess
     gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
 
     window_start_utc = [_utc_from_ns(int(t)) for t in grid.edges_ns()[:-1]]
+    flow_tu = scada["flow_tu"].to_numpy(dtype=np.float64)
+    flow_pu = scada["flow_pu"].to_numpy(dtype=np.float64)
+    both_flows_nan = np.isnan(flow_tu) & np.isnan(flow_pu)
+    flow_net = np.where(
+        both_flows_nan, np.nan, np.nan_to_num(flow_tu) - np.nan_to_num(flow_pu)
+    )
     return SessionScada(
         window_start_utc=window_start_utc, window_s=cfg.window.window_s,
         state=[str(s) for s in gt["state"].tolist()],
+        has_scada=bool(matched_files),
+        power_mw=scada["power"].tolist(),
+        speed_rpm=scada["speed"].tolist(),
+        flow_net_m3s=flow_net.tolist(),
     )
+
+
+# ---------------------------------------------------------------------------
+# SCADA context panel (build, Stefan's decision 2026-08-16): fixed state colors,
+# window-series slicing, 1 Hz downsampling for the strip/ribbon/live-readout.
+# ---------------------------------------------------------------------------
+
+_STATE_COLORS: dict[str, str] = {
+    "standstill": "#4b5563",
+    "turbine": "#0072b2",
+    "pump": "#d55e00",
+    "phase-shifter": "#cc79a7",
+    "transition": "#f0e442",
+    "unknown": "#cbd5e1",
+}
+"""Fixed color per state name -- the closed `rowii.scada.labels.STATES` vocabulary
+(standstill/turbine/pump/phase-shifter/transition) plus `scada_majority_state`'s
+own `"unknown"` fallback (module docstring: "unknown = grey"). A colorblind-safe
+qualitative palette (Okabe & Ito, 2008), deliberately DISTINCT from `_CANDIDATE_CSS`'s
+own `--sustained`/`--transient` class-badge colors (amber/purple) so the ribbon's
+state colors are never confused with the class badge above it. ONE shared mapping
+for BOTH ribbon rows (SCADA state and detected state) -- a detector `state_name`
+that carries a named mapping (`rowii.eval.metrics.derive_state_names`) uses the
+SAME vocabulary and therefore the SAME color as the SCADA row."""
+
+_STATE_OTHER_COLOR = "#111827"
+"""Fallback swatch for any state name outside `_STATE_COLORS` -- in practice only
+ever a detector `cluster-<id>` fallback name (`derive_state_names`'s own
+un-named-cluster case; the SCADA vocabulary above is closed and never produces
+one). ONE fixed color for every such name, so the ribbon/legend never needs a new
+entry per un-named cluster id."""
+
+STATE_LEGEND: tuple[tuple[str, str], ...] = (
+    ("standstill", _STATE_COLORS["standstill"]),
+    ("turbine", _STATE_COLORS["turbine"]),
+    ("pump", _STATE_COLORS["pump"]),
+    ("phase-shifter", _STATE_COLORS["phase-shifter"]),
+    ("transition", _STATE_COLORS["transition"]),
+    ("unknown", _STATE_COLORS["unknown"]),
+    ("other (unnamed cluster)", _STATE_OTHER_COLOR),
+)
+"""`(English name, hex color)` pairs in display order -- `render_index_html`'s
+single, page-top state-color legend (module docstring build/2: "a small legend
+once at the page top")."""
+
+
+def state_color(state_name: str) -> str:
+    """Fixed hex color for *state_name* -- `_STATE_COLORS` for the closed SCADA
+    vocabulary (also covers every NAMED detected state, since a named detector
+    state reuses that same vocabulary), else `_STATE_OTHER_COLOR` (an un-named
+    `cluster-<id>` detector fallback)."""
+    return _STATE_COLORS.get(state_name, _STATE_OTHER_COLOR)
+
+
+def slice_window_series[T](
+    window_start_utc: Sequence[datetime],
+    window_s: float,
+    values: Sequence[T],
+    start_utc: datetime,
+    end_utc: datetime,
+) -> tuple[list[datetime], list[T]]:
+    """The subsequence of `(window_start_utc[i], values[i])` pairs whose own window
+    `[window_start_utc[i], window_start_utc[i] + window_s)` overlaps `[start_utc,
+    end_utc)` (half-open, `_spans_overlap`'s own convention) -- a `bisect`
+    pre-filter (*window_start_utc* must be sorted ascending, `load_session_scada`'s
+    own contract) so `resample_channel_to_seconds`/`resample_states_to_seconds`
+    below never re-scan an entire session's window series (tens of thousands of
+    rows) for one candidate's 20-60 s asset window: O(log n) to locate the slice
+    bounds, regardless of how large *window_start_utc* is.
+    """
+    span = timedelta(seconds=window_s)
+    lo = bisect.bisect_right(window_start_utc, start_utc - span)
+    hi = max(bisect.bisect_left(window_start_utc, end_utc), lo)
+    return list(window_start_utc[lo:hi]), list(values[lo:hi])
+
+
+def resample_channel_to_seconds(
+    window_start_utc: Sequence[datetime],
+    window_s: float,
+    values: Sequence[float],
+    asset_start_utc: datetime,
+    n_seconds: int,
+) -> list[float | None]:
+    """The LIVE READOUT's own 1 Hz series (module docstring build/3): mean of
+    *values* (NaN ignored) over each whole second `[asset_start_utc + i,
+    asset_start_utc + i + 1)` for `i` in `range(n_seconds)`. A second with no
+    overlapping window, or where every overlapping value is NaN, resamples to
+    `None` (JSON `null`) rather than a fabricated number -- the JS readout blanks
+    out for that second instead of showing stale/wrong data. Slices first
+    (`slice_window_series`) so this never re-scans a whole session's series.
+    """
+    asset_end_utc = asset_start_utc + timedelta(seconds=n_seconds)
+    starts, vals = slice_window_series(
+        window_start_utc, window_s, values, asset_start_utc, asset_end_utc
+    )
+    span = timedelta(seconds=window_s)
+    out: list[float | None] = []
+    for i in range(n_seconds):
+        sec_start = asset_start_utc + timedelta(seconds=i)
+        sec_end = sec_start + timedelta(seconds=1)
+        overlapping = [
+            float(v)
+            for ws, v in zip(starts, vals, strict=True)
+            if _spans_overlap(ws, ws + span, sec_start, sec_end)
+        ]
+        finite = [v for v in overlapping if not math.isnan(v)]
+        out.append(sum(finite) / len(finite) if finite else None)
+    return out
+
+
+def resample_states_to_seconds(
+    window_start_utc: Sequence[datetime],
+    window_s: float,
+    states: Sequence[str],
+    asset_start_utc: datetime,
+    n_seconds: int,
+) -> list[str]:
+    """The STATE RIBBON's own per-second row (module docstring build/2): the
+    majority state (`scada_majority_state`, reused unchanged -- works identically
+    for SCADA states or detector `state_name` values, since both are just a state
+    label per window) over each whole second `[asset_start_utc + i, asset_start_utc
+    + i + 1)`. `"unknown"` (`scada_majority_state`'s own no-overlap fallback, the
+    ribbon's grey cell) for a second with no overlapping window. Slices first
+    (`slice_window_series`), same rationale as `resample_channel_to_seconds`.
+    """
+    asset_end_utc = asset_start_utc + timedelta(seconds=n_seconds)
+    starts, vals = slice_window_series(
+        window_start_utc, window_s, states, asset_start_utc, asset_end_utc
+    )
+    out: list[str] = []
+    for i in range(n_seconds):
+        sec_start = asset_start_utc + timedelta(seconds=i)
+        sec_end = sec_start + timedelta(seconds=1)
+        state, _touches = scada_majority_state(starts, window_s, vals, sec_start, sec_end)
+        out.append(state)
+    return out
+
+
+def build_readout_series(
+    session_scada: SessionScada, asset_start_utc: datetime, n_seconds: int
+) -> tuple[list[float | None], list[float | None]]:
+    """The LIVE READOUT's own `(power_mw, speed_rpm)` 1 Hz pair for one candidate's
+    asset window (module docstring build/3) -- `resample_channel_to_seconds` over
+    *session_scada*'s own `power_mw`/`speed_rpm` channels, EXCEPT when
+    *session_scada.has_scada* is False (the 270626-pu_ph_pu_ph_pu_ph-1
+    no-Betriebsdaten placeholder path): both series are then `[None] * n_seconds`
+    without attempting to resample anything (there is nothing to resample --
+    `session_scada.power_mw`/`speed_rpm` are empty for that session), so the UI's
+    readout blanks out rather than showing a misleading all-NaN-derived value.
+    """
+    if not session_scada.has_scada:
+        return [None] * n_seconds, [None] * n_seconds
+    power = resample_channel_to_seconds(
+        session_scada.window_start_utc, session_scada.window_s, session_scada.power_mw,
+        asset_start_utc, n_seconds,
+    )
+    speed = resample_channel_to_seconds(
+        session_scada.window_start_utc, session_scada.window_s, session_scada.speed_rpm,
+        asset_start_utc, n_seconds,
+    )
+    return power, speed
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1207,43 @@ class CandidateAssetResult:
     tur_png: str
     gen_flat_png: str
     tur_flat_png: str
+    scada_png: str
+    """SCADA CONTEXT PANEL (Stefan's decision 2026-08-16): the combined strip
+    (power/speed/flow mini-axes, or the neutral no-Betriebsdaten placeholder) plus
+    the two-row state ribbon, one PNG per candidate -- `render_scada_strip_png`.
+    Unlike `gen_wav`/`tur_wav`/the four spectrogram PNGs above, this is NEVER
+    reused across a `build` re-run (`build_all`'s own docstring): it is
+    cheap-to-recompute from already-loaded SCADA/alarms data, never audio-derived,
+    so it is always freshly rendered alongside `candidates_meta.json`/`index.html`
+    themselves."""
+    power_mw_1hz: list[float | None]
+    speed_rpm_1hz: list[float | None]
+    """The LIVE READOUT's own 1 Hz `(power, speed)` series over the asset window
+    (`build_readout_series`) -- `None` entries (JSON `null`) where SCADA coverage
+    is missing, and BOTH lists empty when `n_seconds == 0` (never happens in
+    practice, `asset_duration_s` is always >= `ASSET_MIN_DURATION_S`) or
+    all-`None` for a `has_scada=False` session (270626-pu_ph_pu_ph_pu_ph-1)."""
+
+
+@dataclass(frozen=True)
+class _AudioAssets:
+    """The WAV/spectrogram half of one candidate's rendered assets -- exactly what
+    `_reuse_existing_assets` can reconstruct without touching audio data, and what
+    `render_candidate_assets` produces when it can't. Kept separate from the full
+    `CandidateAssetResult` because the SCADA strip (`CandidateAssetResult.
+    scada_png`/`power_mw_1hz`/`speed_rpm_1hz`) is NEVER part of the reuse decision
+    (see `CandidateAssetResult.scada_png`'s own docstring) -- `build_all` always
+    combines one of these with a freshly rendered SCADA strip into the final
+    `CandidateAssetResult`."""
+
+    asset_start_utc: datetime
+    asset_duration_s: float
+    gen_wav: str
+    tur_wav: str
+    gen_png: str
+    tur_png: str
+    gen_flat_png: str
+    tur_flat_png: str
 
 
 def _load_prior_meta_by_id(out_dir: Path) -> dict[str, dict[str, object]]:
@@ -1033,16 +1265,18 @@ def _load_prior_meta_by_id(out_dir: Path) -> dict[str, dict[str, object]]:
 
 def _reuse_existing_assets(
     candidate: Candidate, prior_meta: Mapping[str, object] | None, out_dir: Path
-) -> CandidateAssetResult | None:
-    """A `CandidateAssetResult` reconstructed WITHOUT touching a single audio
-    sample, if *prior_meta* (this candidate's own entry in a previous `build`'s
-    `candidates_meta.json`, `_load_prior_meta_by_id`) proves the assets already on
-    disk were rendered for the EXACT SAME candidate span/extremity -- `start_utc`/
+) -> _AudioAssets | None:
+    """An `_AudioAssets` reconstructed WITHOUT touching a single audio sample, if
+    *prior_meta* (this candidate's own entry in a previous `build`'s `candidates_
+    meta.json`, `_load_prior_meta_by_id`) proves the assets already on disk were
+    rendered for the EXACT SAME candidate span/extremity -- `start_utc`/
     `duration_s`/`min_p`/`class` all matching -- AND every one of the six expected
     files is still present. Extracting a WAV clip from a multi-gigabyte burst file
     is expensive; a candidate whose identity (module docstring: pinned by
     `pin_stable_ids`) AND whose own span/extremity are BOTH unchanged since the
-    last `build` would only ever re-produce the identical bytes.
+    last `build` would only ever re-produce the identical bytes. (The SCADA strip
+    PNG is deliberately NOT part of this reuse check -- `CandidateAssetResult.
+    scada_png`'s own docstring.)
 
     Returns `None` (render for real) otherwise: no prior entry, a mismatched one
     (rare -- an id kept its identity via `pin_stable_ids` but its underlying span
@@ -1077,8 +1311,8 @@ def _reuse_existing_assets(
     if not all((out_dir / rel).is_file() for rel in all_rel):
         return None
 
-    return CandidateAssetResult(
-        candidate=candidate, asset_start_utc=asset_start_utc, asset_duration_s=asset_duration_s,
+    return _AudioAssets(
+        asset_start_utc=asset_start_utc, asset_duration_s=asset_duration_s,
         gen_wav=gen_wav, tur_wav=tur_wav, gen_png=gen_png, tur_png=tur_png,
         gen_flat_png=gen_flat_png, tur_flat_png=tur_flat_png,
     )
@@ -1086,7 +1320,7 @@ def _reuse_existing_assets(
 
 def render_candidate_assets(
     index: RecordingIndex, candidate: Candidate, out_dir: Path
-) -> CandidateAssetResult:
+) -> _AudioAssets:
     """Render one candidate's WAV/PNG assets under `<out_dir>/<session>/`, exactly
     like `annotation_kit.build_session`'s own per-event loop -- `extract_stream_
     clip`/`render_spectrogram_png`/`render_flat_spectrogram_png`/`_resample_to_
@@ -1131,13 +1365,253 @@ def render_candidate_assets(
             stream_key, wav_rel[stream_key],
         )
 
-    return CandidateAssetResult(
-        candidate=candidate, asset_start_utc=asset_start,
+    return _AudioAssets(
+        asset_start_utc=asset_start,
         asset_duration_s=(asset_end - asset_start).total_seconds(),
         gen_wav=wav_rel["gen"], tur_wav=wav_rel["tur"],
         gen_png=png_rel["gen"], tur_png=png_rel["tur"],
         gen_flat_png=flat_png_rel["gen"], tur_flat_png=flat_png_rel["tur"],
     )
+
+
+# ---------------------------------------------------------------------------
+# SCADA context panel: strip PNG (power/speed/flow or placeholder) + state ribbon
+# ---------------------------------------------------------------------------
+
+_SCADA_ACCENT_HEX = "#3b82f6"
+"""Candidate-span shading on every mini-axis/the ribbon -- matches `_CANDIDATE_CSS`'s
+`--accent` so the strip reads as part of the same visual language as the rest of
+the card."""
+_SCADA_MARKER_HEX = "#dc2626"
+"""Anomaly-start dashed line -- matches `_CANDIDATE_CSS`'s `--err` (distinct from
+`--playhead`'s `#ef4444`, which the LIVE playhead canvas overlay uses, so a
+static "where the anomaly starts" marker is never confused with the moving
+"where playback is now" line even when both happen to fall at the same x)."""
+_SCADA_BG_HEX = "#f8f9fb"
+_SCADA_PLACEHOLDER_BG_HEX = "#eef0f4"
+_SCADA_PLACEHOLDER_TEXT = "No SCADA available for this day"
+
+_SCADA_MINI_AXIS_HEIGHT_PX = 54
+_SCADA_N_MINI_AXES = 3
+_SCADA_RIBBON_ROW_HEIGHT_PX = 16
+_SCADA_RIBBON_N_ROWS = 2
+_SCADA_STRIP_HEIGHT_PX = _SCADA_MINI_AXIS_HEIGHT_PX * _SCADA_N_MINI_AXES
+_SCADA_RIBBON_HEIGHT_PX = _SCADA_RIBBON_ROW_HEIGHT_PX * _SCADA_RIBBON_N_ROWS
+_SCADA_TOTAL_HEIGHT_PX = _SCADA_STRIP_HEIGHT_PX + _SCADA_RIBBON_HEIGHT_PX
+
+_SCADA_CHANNELS_META: tuple[tuple[str, str], ...] = (
+    ("P [MW]", "#2563eb"),
+    ("n [rpm]", "#059669"),
+    ("Q [m3/s]", "#7c3aed"),
+)
+"""`(small English axis label, line color)` for the three stacked mini-axes, in
+display order -- active power, shaft speed, net flow (`SessionScada.power_mw`/
+`speed_rpm`/`flow_net_m3s`, module docstring build/1). `P`/`n` match the LIVE
+READOUT's own variable names (module docstring build/3)."""
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
+    """`"#rrggbb"` -> `(r, g, b)` floats in `[0, 1]` -- `matplotlib.imshow`'s own
+    expected float-RGB range, for the state-ribbon raster (`_draw_state_ribbon`)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
+    return r, g, b
+
+
+def _draw_scada_mini_axis(
+    ax: Any,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    *,
+    duration_s: float,
+    color: str,
+    label: str,
+    span_s: tuple[float, float],
+    marker_s: float,
+) -> None:
+    """One power/speed/flow mini-axis: full horizontal bleed (the caller's
+    `fig.add_axes` rect already spans x=[0,1] of the figure) so the x-axis stays
+    pixel-linear with the flat spectrogram -- no matplotlib x-margin, no x-ticks.
+    "axis labels small" (module docstring build/1) is a small in-plot text label
+    (*label*) rather than a conventional matplotlib y-axis label, which would
+    need left-margin space that breaks the pixel-linear width contract. A zero
+    reference line is drawn when 0 falls within the (padded) value range -- power
+    and speed are both signed (turbine positive / pump negative, `SessionScada`'s
+    own docstring)."""
+    ax.set_facecolor("none")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(0.0, duration_s)
+    ax.margins(x=0)
+
+    finite = ys[~np.isnan(ys)] if ys.size else ys
+    if finite.size:
+        lo, hi = float(np.min(finite)), float(np.max(finite))
+        pad = max((hi - lo) * 0.15, 1e-6)
+        ax.set_ylim(lo - pad, hi + pad)
+        if lo - pad <= 0.0 <= hi + pad:
+            ax.axhline(0.0, color="#9ca3af", linewidth=0.5, zorder=1)
+        ax.plot(xs, ys, color=color, linewidth=1.1, zorder=3)
+    else:
+        ax.set_ylim(0.0, 1.0)
+        ax.text(
+            0.5, 0.5, "no data", transform=ax.transAxes, ha="center", va="center",
+            fontsize=7, color="#9ca3af",
+        )
+
+    span_start_s, span_end_s = span_s
+    ax.axvspan(span_start_s, span_end_s, color=_SCADA_ACCENT_HEX, alpha=0.15, zorder=0, linewidth=0)
+    ax.axvline(marker_s, color=_SCADA_MARKER_HEX, linewidth=1.2, linestyle="--", zorder=4)
+    ax.text(
+        0.006, 0.9, label, transform=ax.transAxes, fontsize=7, va="top", ha="left",
+        color="#374151", zorder=5,
+    )
+
+
+def _draw_state_ribbon(
+    ax: Any,
+    scada_row: Sequence[str],
+    detected_row: Sequence[str],
+    *,
+    duration_s: float,
+    span_s: tuple[float, float],
+    marker_s: float,
+) -> None:
+    """The two-row per-second state ribbon (module docstring build/2): row 0 (top)
+    is the SCADA state, row 1 (bottom) the detected state, each per-second cell
+    colored by `state_color` (the ONE shared legend, `STATE_LEGEND`). Rendered as
+    a small RGB raster (`imshow`, `interpolation="nearest"` for crisp per-second
+    cell edges) stretched across `extent=(0, duration_s, 0, 2)` -- full
+    horizontal bleed, the SAME pixel-linear x-mapping as the mini-axes above and
+    the flat spectrogram."""
+    n = max(len(scada_row), len(detected_row), 1)
+    rgb = np.zeros((2, n, 3), dtype=np.float64)
+    for col in range(n):
+        top = scada_row[col] if col < len(scada_row) else "unknown"
+        bottom = detected_row[col] if col < len(detected_row) else "unknown"
+        rgb[0, col] = _hex_to_rgb01(state_color(top))
+        rgb[1, col] = _hex_to_rgb01(state_color(bottom))
+
+    ax.set_xlim(0.0, duration_s)
+    ax.set_ylim(0.0, 2.0)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.margins(x=0)
+    ax.imshow(
+        rgb, extent=(0.0, duration_s, 0.0, 2.0), origin="upper", aspect="auto",
+        interpolation="nearest", zorder=0,
+    )
+    ax.axhline(1.0, color="white", linewidth=0.6, zorder=1)
+    span_start_s, span_end_s = span_s
+    ax.axvspan(
+        span_start_s, span_end_s, fill=False, edgecolor=_SCADA_ACCENT_HEX,
+        linewidth=1.2, zorder=2,
+    )
+    ax.axvline(marker_s, color=_SCADA_MARKER_HEX, linewidth=1.2, linestyle="--", zorder=3)
+    ax.text(
+        0.006, 0.97, "SCADA", transform=ax.transAxes, fontsize=6.5, va="top", ha="left",
+        color="white", zorder=4,
+    )
+    ax.text(
+        0.006, 0.47, "Detected", transform=ax.transAxes, fontsize=6.5, va="top", ha="left",
+        color="white", zorder=4,
+    )
+
+
+def render_scada_strip_png(
+    path: Path,
+    *,
+    candidate: Candidate,
+    asset_start_utc: datetime,
+    asset_duration_s: float,
+    n_seconds: int,
+    session_scada: SessionScada,
+    detected_window_start_utc: Sequence[datetime],
+    detected_window_s: float,
+    detected_states: Sequence[str],
+) -> None:
+    """The SCADA CONTEXT PANEL's single combined PNG for one candidate (Stefan's
+    decision 2026-08-16, module docstring build/1-2): three stacked mini-axes
+    (active power, shaft speed, net flow) OR the neutral no-Betriebsdaten
+    placeholder (`session_scada.has_scada is False`, e.g.
+    `270626-pu_ph_pu_ph_pu_ph-1`), followed by a two-row per-second state ribbon
+    (SCADA state, detected state) -- ONE image so a single overlay canvas
+    (index.html's own JS) can draw ONE playhead line through both at once.
+
+    EXACTLY `ak.flat_spectrogram_width_px(asset_duration_s)` pixels wide -- the
+    SAME `ak._FLAT_PX_PER_S` linear px-per-second mapping as `gen_flat_png`/
+    `tur_flat_png` (both rendered over the SAME *asset_duration_s*), so the
+    playhead stays in sync across the spectrogram lanes and this strip. The
+    candidate's own `[start_utc, end_utc)` span is shaded and its start marked
+    (dashed) on every mini-axis and the ribbon alike, in the same colors
+    `_CANDIDATE_CSS` already uses for `--accent`/`--err`.
+    """
+    width_px = max(1, ak.flat_spectrogram_width_px(asset_duration_s))
+    asset_end_utc = asset_start_utc + timedelta(seconds=asset_duration_s)
+    span_s = (
+        (candidate.start_utc - asset_start_utc).total_seconds(),
+        (candidate.end_utc - asset_start_utc).total_seconds(),
+    )
+    marker_s = span_s[0]
+
+    plt = mda._pyplot()
+    fig = plt.figure(figsize=(width_px / 100, _SCADA_TOTAL_HEIGHT_PX / 100), dpi=100)
+    fig.patch.set_facecolor(_SCADA_BG_HEX)
+
+    ribbon_frac = _SCADA_RIBBON_HEIGHT_PX / _SCADA_TOTAL_HEIGHT_PX
+    strip_frac = 1.0 - ribbon_frac
+
+    if session_scada.has_scada:
+        mini_frac = strip_frac / _SCADA_N_MINI_AXES
+        channel_values = (
+            session_scada.power_mw, session_scada.speed_rpm, session_scada.flow_net_m3s,
+        )
+        for i, ((label, color), values) in enumerate(
+            zip(_SCADA_CHANNELS_META, channel_values, strict=True)
+        ):
+            y0 = ribbon_frac + strip_frac - (i + 1) * mini_frac
+            ax = fig.add_axes((0.0, y0, 1.0, mini_frac))
+            starts, vals = slice_window_series(
+                session_scada.window_start_utc, session_scada.window_s, values,
+                asset_start_utc, asset_end_utc,
+            )
+            xs = np.array([(s - asset_start_utc).total_seconds() for s in starts])
+            ys = np.array(vals, dtype=np.float64)
+            _draw_scada_mini_axis(
+                ax, xs, ys, duration_s=asset_duration_s, color=color, label=label,
+                span_s=span_s, marker_s=marker_s,
+            )
+    else:
+        ax = fig.add_axes((0.0, ribbon_frac, 1.0, strip_frac))
+        ax.set_xlim(0.0, asset_duration_s)
+        ax.set_ylim(0.0, 1.0)
+        ax.axis("off")
+        ax.set_facecolor(_SCADA_PLACEHOLDER_BG_HEX)
+        ax.text(
+            0.5, 0.5, _SCADA_PLACEHOLDER_TEXT, transform=ax.transAxes,
+            ha="center", va="center", fontsize=9, color="#6b7280",
+        )
+
+    ribbon_ax = fig.add_axes((0.0, 0.0, 1.0, ribbon_frac))
+    scada_row = resample_states_to_seconds(
+        session_scada.window_start_utc, session_scada.window_s, session_scada.state,
+        asset_start_utc, n_seconds,
+    )
+    detected_row = resample_states_to_seconds(
+        detected_window_start_utc, detected_window_s, detected_states, asset_start_utc, n_seconds,
+    )
+    _draw_state_ribbon(
+        ribbon_ax, scada_row, detected_row, duration_s=asset_duration_s, span_s=span_s,
+        marker_s=marker_s,
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
 
 
 def _asset_result_to_meta(r: CandidateAssetResult) -> dict[str, object]:
@@ -1153,6 +1627,8 @@ def _asset_result_to_meta(r: CandidateAssetResult) -> dict[str, object]:
         "asset_start_utc": r.asset_start_utc.isoformat(), "asset_duration_s": r.asset_duration_s,
         "gen_wav": r.gen_wav, "tur_wav": r.tur_wav,
         "gen_flat_png": r.gen_flat_png, "tur_flat_png": r.tur_flat_png,
+        "scada_png": r.scada_png,
+        "power_mw_1hz": r.power_mw_1hz, "speed_rpm_1hz": r.speed_rpm_1hz,
     }
 
 
@@ -1170,37 +1646,91 @@ def write_candidates_meta_json(results: Sequence[CandidateAssetResult], out_dir:
     return path
 
 
+def _load_detected_state_series(path: Path) -> tuple[list[datetime], list[str]]:
+    """`(window_start_utc, state_name)` from one `alarms.parquet` file, sorted
+    ascending by time -- the STATE RIBBON's own "detected state" row source
+    (module docstring build/2), read via the SAME `_read_alarms` `select` already
+    uses. Explicit `sort_values` (defensive, mirrors `build_sustained_episodes`'
+    own `.sort_values("window")`): `slice_window_series`'s `bisect` pre-filter
+    requires ascending order, and nothing about `_read_alarms`'s contract
+    guarantees the on-disk row order."""
+    df = _read_alarms(path).sort_values("t_utc_ns")
+    starts = [_utc_from_ns(int(t)) for t in df["t_utc_ns"]]
+    states = [str(s) for s in df["state_name"]]
+    return starts, states
+
+
 def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[CandidateAssetResult]:
-    """Render (or reuse, `_reuse_existing_assets`) every candidate's assets, then
-    (re)write `candidates_meta.json`/`index.html` -- ALWAYS, even when every
-    candidate's assets were reused, since those two files also encode the
-    (cheap-to-recompute, never audio-derived) `scada_state`/`mode_mismatch`/
-    `criterion_text` fields and must stay in sync with the current
-    `candidates.csv`. `discover(cfg.data_root)` is deferred until the first
-    candidate that actually NEEDS real rendering -- a rebuild where every asset is
-    reused (e.g. this kit's own metadata-only enhancements) never touches
-    `cfg.data_root` at all.
+    """Render (or reuse, `_reuse_existing_assets`) every candidate's WAV/spectrogram
+    assets, ALWAYS (re)render its SCADA strip PNG (`render_scada_strip_png`) and
+    1 Hz live-readout series (`build_readout_series`), then (re)write `candidates_
+    meta.json`/`index.html` -- the SCADA context panel is cheap-to-recompute,
+    never audio-derived (`CandidateAssetResult.scada_png`'s own docstring), so it
+    is never gated behind the WAV/spectrogram reuse check, mirroring `scada_state`/
+    `mode_mismatch`/`criterion_text`'s own pre-existing "always fresh" treatment.
+
+    `discover(cfg.data_root)` is no longer deferred (unlike before the SCADA
+    context panel existed): every session's `SessionScada` (`load_session_scada`,
+    loaded once per session and reused across that session's own candidates,
+    `session_scada_by_session`) needs `index` regardless of whether any candidate
+    in it needs real WAV rendering. `discover` itself is a cheap filesystem index
+    (no audio decoding), so this is not a meaningful cost. Each unique
+    `alarms.parquet` (`Candidate.alarms_path`) is likewise read and time-converted
+    only ONCE (`detected_state_by_alarms_path`), reused across every candidate
+    that shares it (typically ~25 per session).
     """
     candidates = candidates_from_csv(candidates_csv)
     out_dir.mkdir(parents=True, exist_ok=True)
     prior_meta_by_id = _load_prior_meta_by_id(out_dir)
+    index = discover(cfg.data_root)
 
-    index: RecordingIndex | None = None
+    session_scada_by_session: dict[str, SessionScada] = {}
+    detected_state_by_alarms_path: dict[str, tuple[list[datetime], list[str]]] = {}
+
     results: list[CandidateAssetResult] = []
     n_reused = 0
     for c in candidates:
-        reused = _reuse_existing_assets(c, prior_meta_by_id.get(c.candidate_id), out_dir)
-        if reused is not None:
-            results.append(reused)
+        audio = _reuse_existing_assets(c, prior_meta_by_id.get(c.candidate_id), out_dir)
+        if audio is not None:
             n_reused += 1
-            continue
-        if index is None:
-            index = discover(cfg.data_root)
-        results.append(render_candidate_assets(index, c, out_dir))
+        else:
+            audio = render_candidate_assets(index, c, out_dir)
+
+        if c.session not in session_scada_by_session:
+            session_scada_by_session[c.session] = load_session_scada(index, c.session, cfg)
+        session_scada = session_scada_by_session[c.session]
+
+        if c.alarms_path not in detected_state_by_alarms_path:
+            detected_state_by_alarms_path[c.alarms_path] = _load_detected_state_series(
+                cfg.results_root / c.alarms_path
+            )
+        detected_starts, detected_states = detected_state_by_alarms_path[c.alarms_path]
+
+        n_seconds = max(1, math.ceil(audio.asset_duration_s))
+        scada_png_rel = f"{c.session}/{c.candidate_id}_scada.png"
+        render_scada_strip_png(
+            out_dir / scada_png_rel, candidate=c, asset_start_utc=audio.asset_start_utc,
+            asset_duration_s=audio.asset_duration_s, n_seconds=n_seconds,
+            session_scada=session_scada, detected_window_start_utc=detected_starts,
+            detected_window_s=cfg.window.window_s, detected_states=detected_states,
+        )
+        power_1hz, speed_1hz = build_readout_series(session_scada, audio.asset_start_utc, n_seconds)
+
+        results.append(
+            CandidateAssetResult(
+                candidate=c, asset_start_utc=audio.asset_start_utc,
+                asset_duration_s=audio.asset_duration_s,
+                gen_wav=audio.gen_wav, tur_wav=audio.tur_wav,
+                gen_png=audio.gen_png, tur_png=audio.tur_png,
+                gen_flat_png=audio.gen_flat_png, tur_flat_png=audio.tur_flat_png,
+                scada_png=scada_png_rel, power_mw_1hz=power_1hz, speed_rpm_1hz=speed_1hz,
+            )
+        )
 
     logger.info(
-        "candidate_kit: build reused existing assets for %d/%d candidate(s), rendered %d fresh",
-        n_reused, len(candidates), len(candidates) - n_reused,
+        "candidate_kit: build reused existing WAV/spectrogram assets for %d/%d candidate(s), "
+        "rendered %d fresh (SCADA strip always freshly rendered for all %d)",
+        n_reused, len(candidates), len(candidates) - n_reused, len(candidates),
     )
     write_candidates_meta_json(results, out_dir)
     render_index_html(results, out_dir)
@@ -1299,6 +1829,22 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .lane-time { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
              font-size: 0.82rem; color: var(--muted); }
 
+.scada-block { margin: 0.7rem 0 0.3rem; }
+.scada-title { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
+.scada-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; }
+.scada-wrapper { position: relative; display: block; }
+.scada-img { display: block; width: 100%; height: 100%; }
+.scada-overlay-canvas { position: absolute; top: 0; left: 0; display: block; pointer-events: none; }
+.scada-readout { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
+                  font-size: 0.82rem; color: var(--muted); margin-top: 0.3rem; }
+.scada-readout b { color: inherit; font-weight: 600; }
+
+.state-legend { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-top: 0.5rem;
+                 font-size: 0.82rem; }
+.state-legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
+.state-swatch { width: 0.85em; height: 0.85em; border-radius: 3px; border: 1px solid var(--border);
+                 display: inline-block; flex: none; }
+
 .assessment-row { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;
                   margin: 0.6rem 0; }
 .assessment-options { display: flex; gap: 0.8rem; flex-wrap: wrap; font-size: 0.85rem; }
@@ -1343,6 +1889,19 @@ majority of a non-uniform set of windows.</p>
 whose recording day was itself used to fit the detector/scoring model &ndash; its
 evidentiary status is weaker than a genuinely held-out day, shown here rather than
 left implicit.</p>
+<p><strong>SCADA context panel:</strong> below the two audio lanes, each card also
+shows the actual operating data (active power, shaft speed, net flow) over the
+same snippet, with the candidate window shaded and its start marked (dashed) --
+so you can judge what the machine was actually doing, not just what the model
+flagged. Underneath it, a two-row <strong>state ribbon</strong> shows the
+SCADA-derived state (top row) and the detector's own state (bottom row) for every
+second of the snippet, colored per the legend below. While a lane plays, the
+current power/speed reading is shown next to the panel's own time display,
+following the playhead. 27.06. has no Betriebsdaten at all, so its panel shows a
+placeholder instead of power/speed/flow (the state ribbon's SCADA row is then
+uniformly grey/&ldquo;unknown&rdquo;, correctly, since there is nothing to derive
+a state from).</p>
+<div class="state-legend">__STATE_LEGEND_HTML__</div>
 <p><strong>Assessment:</strong> <em>plausible anomaly</em> = sounds like a genuine
 anomaly &middot; <em>operational/explained</em> = plausibly explained by normal
 operation (e.g. a switching event) &middot; <em>artifact/sensor</em> =
@@ -1371,6 +1930,19 @@ sessions&rdquo;</strong> above &ndash; this file is the input for
 </section>
 """
 
+
+def _render_state_legend_html() -> str:
+    """The state-color legend swatches (module docstring build/2: "a small legend
+    once at the page top") -- built from `STATE_LEGEND` (the SAME source
+    `state_color` reads for both ribbon rows), so the legend can never drift out
+    of sync with the ribbon's own actual colors."""
+    return "".join(
+        f'<span class="state-legend-item"><span class="state-swatch" '
+        f'style="background:{color}"></span>{name}</span>'
+        for name, color in STATE_LEGEND
+    )
+
+
 _CANDIDATE_JS = r"""
 (function () {
 "use strict";
@@ -1378,6 +1950,7 @@ _CANDIDATE_JS = r"""
 var STORAGE_PREFIX = "candidate-review:v1:";
 var FLAT_PX_PER_S = __FLAT_PX_PER_S__;
 var FLAT_HEIGHT_PX = __FLAT_HEIGHT_PX__;
+var SCADA_HEIGHT_PX = __SCADA_HEIGHT_PX__;
 var ASSESSMENT_VALUES = __ASSESSMENT_VALUES_JSON__;
 var ARROW_STEP_S = 0.5;
 var ARROW_STEP_FINE_S = 0.05;
@@ -1548,7 +2121,7 @@ function buildLane(card, key, wavPath, flatPngPath, label) {
     }
   });
 
-  audio.addEventListener("play", function () { renderLane(lane); });
+  audio.addEventListener("play", function () { card.activeLaneKey = lane.key; renderLane(lane); });
   audio.addEventListener("pause", function () { renderLane(lane); });
   audio.addEventListener("seeked", function () { renderLane(lane); });
   img.addEventListener("load", function () {
@@ -1576,12 +2149,16 @@ function seekLane(lane, t) {
   var dur = isFinite(lane.audioEl.duration) && lane.audioEl.duration > 0
     ? lane.audioEl.duration : lane.card.meta.asset_duration_s;
   lane.audioEl.currentTime = clamp(t, 0, dur);
+  lane.card.activeLaneKey = lane.key;
   renderLane(lane);
 }
 
 function renderLane(lane) {
   drawLaneOverlay(lane);
   updateLaneTimeDisplay(lane);
+  if (lane.card.activeLaneKey === lane.key) {
+    renderScadaBlock(lane.card);
+  }
 }
 
 function drawLaneOverlay(lane) {
@@ -1621,6 +2198,100 @@ function updateLaneTimeDisplay(lane) {
   var t = lane.audioEl.currentTime || 0;
   var total = lane.card.meta.asset_duration_s;
   lane.timeDisplayEl.textContent = formatClock(t) + " / " + formatClock(total);
+}
+
+// ---------------------------------------------------------------------------
+// SCADA context panel: strip+ribbon image, shared playhead, live P/n readout.
+// The panel is ONE per card (not per mic lane, unlike the spectrogram lanes
+// above) -- its playhead/readout follow whichever lane is "active"
+// (card.activeLaneKey, set on that lane's own play/seek, defaulted to the
+// first lane at card-build time), since SCADA context does not depend on
+// which microphone is playing.
+// ---------------------------------------------------------------------------
+
+function buildScadaBlock(card, meta) {
+  var scada = { card: card, naturalWidth: 0, naturalHeight: 0 };
+
+  var wrap = el("div", { class: "scada-block" });
+  wrap.appendChild(
+    el("div", { class: "scada-title", text: "Operating data (SCADA context)" })
+  );
+
+  var scroll = el("div", { class: "scada-scroll" });
+  var wrapper = el("div", { class: "scada-wrapper" });
+  var img = el("img", { class: "scada-img", alt: "SCADA strip and state ribbon" });
+  var canvas = el("canvas", { class: "scada-overlay-canvas" });
+  wrapper.appendChild(img);
+  wrapper.appendChild(canvas);
+  scroll.appendChild(wrapper);
+  wrap.appendChild(scroll);
+
+  var readout = el("div", { class: "scada-readout" });
+  wrap.appendChild(readout);
+
+  scada.el = wrap;
+  scada.imgEl = img;
+  scada.canvasEl = canvas;
+  scada.wrapperEl = wrapper;
+  scada.readoutEl = readout;
+
+  img.addEventListener("load", function () {
+    scada.naturalWidth = img.naturalWidth || flatWidthPx(meta.asset_duration_s);
+    scada.naturalHeight = img.naturalHeight || SCADA_HEIGHT_PX;
+    var w = scada.naturalWidth, h = scada.naturalHeight;
+    wrapper.style.width = w + "px";
+    wrapper.style.height = h + "px";
+    canvas.width = w;
+    canvas.height = h;
+    renderScadaBlock(card);
+  });
+  img.src = meta.scada_png;
+
+  return scada;
+}
+
+function drawScadaOverlay(scada, t) {
+  var ctx = scada.canvasEl.getContext("2d");
+  var w = scada.canvasEl.width;
+  var h = scada.canvasEl.height;
+  ctx.clearRect(0, 0, w, h);
+  var dur = scada.card.meta.asset_duration_s;
+  if (!dur || dur <= 0 || !w) return;
+
+  var x = clamp((t / dur) * w, 0, w);
+  ctx.strokeStyle = "#ef4444";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, h);
+  ctx.stroke();
+}
+
+function formatReading(value, unit, digits) {
+  return (value === null || value === undefined) ? "–" : value.toFixed(digits) + " " + unit;
+}
+
+function updateScadaReadout(scada, meta, t) {
+  var total = meta.asset_duration_s;
+  var secIdx = Math.floor(clamp(t, 0, Math.max(total - 1e-6, 0)));
+  var powerSeries = meta.power_mw_1hz || [];
+  var speedSeries = meta.speed_rpm_1hz || [];
+  var power = secIdx < powerSeries.length ? powerSeries[secIdx] : null;
+  var speed = secIdx < speedSeries.length ? speedSeries[secIdx] : null;
+  scada.readoutEl.textContent =
+    formatClock(t) + " / " + formatClock(total) +
+    "  ·  P: " + formatReading(power, "MW", 1) +
+    "  ·  n: " + formatReading(speed, "rpm", 0);
+}
+
+function renderScadaBlock(card) {
+  var scada = card.scada;
+  if (!scada) return;
+  var laneKey = card.activeLaneKey || (card.lanes[0] && card.lanes[0].key);
+  var lane = card.lanes.filter(function (l) { return l.key === laneKey; })[0];
+  var t = lane ? (lane.audioEl.currentTime || 0) : 0;
+  drawScadaOverlay(scada, t);
+  updateScadaReadout(scada, card.meta, t);
 }
 
 function tick() {
@@ -1690,6 +2361,10 @@ function buildCard(meta) {
   lanes.appendChild(turLane.el);
   card.el.appendChild(lanes);
   card.lanes = [genLane, turLane];
+  card.activeLaneKey = genLane.key;
+
+  card.scada = buildScadaBlock(card, meta);
+  card.el.appendChild(card.scada.el);
 
   var assessmentRow = el("div", { class: "assessment-row" });
   var options = el("div", { class: "assessment-options" });
@@ -1883,6 +2558,10 @@ def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) ->
     metas_json = ak._json_script_safe(metas)
     labels_json = ak._json_script_safe(labels)
 
+    legend_html = _CANDIDATE_LEGEND_HTML.replace(
+        "__STATE_LEGEND_HTML__", _render_state_legend_html()
+    )
+
     # Plain token .replace() rather than `%`-style formatting: the JS body itself
     # contains literal `%` (the modulo operator, `t % 60`), which `%`-formatting
     # would misparse as a conversion spec -- tokens sidestep that whole class of
@@ -1891,6 +2570,7 @@ def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) ->
         _CANDIDATE_JS
         .replace("__FLAT_PX_PER_S__", repr(ak._FLAT_PX_PER_S))
         .replace("__FLAT_HEIGHT_PX__", repr(ak._FLAT_HEIGHT_PX))
+        .replace("__SCADA_HEIGHT_PX__", repr(_SCADA_TOTAL_HEIGHT_PX))
         .replace("__ASSESSMENT_VALUES_JSON__", ak._json_script_safe(list(ASSESSMENT_VALUES)))
     )
 
@@ -1900,7 +2580,7 @@ def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) ->
         "<title>Candidate Review Kit</title>\n"
         f"<style>{_CANDIDATE_CSS}</style>\n</head>\n<body>\n"
         "<h1>Candidate Review Kit – unverified anomaly candidates</h1>\n"
-        f"{_CANDIDATE_LEGEND_HTML}\n"
+        f"{legend_html}\n"
         f"{_CANDIDATE_INSTRUCTIONS_HTML}\n"
         '<div class="top-toolbar"><button type="button" id="export-all-btn">Export all '
         'sessions</button><span class="session-status" id="export-all-status"></span></div>\n'
