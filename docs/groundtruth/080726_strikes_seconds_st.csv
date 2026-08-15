@@ -1,0 +1,127 @@
+# 080726_strikes_seconds_st.csv -- seconds-level per-strike ground truth for the 08.07.2026 induced-Schonhammer-strike campaign (upgrades docs/groundtruth/080726_events_{st,pu}.csv from minute-level to per-strike UTC timestamps).
+# Provenance: interactive per-strike annotation (scripts/annotation_kit.py build's index.html) by the author.
+# Source: /Users/stefankrummenacher/Downloads/annotation_marks_st.csv
+# Compiled: 2026-08-15 (scripts/annotation_kit.py compile-marks --csv <marks csv>, --date kept explicit for reproducibility).
+# CORRECTION 2026-08-15: cross-event snippet-overlap duplicates removed by the
+# minute-containment rule (mark kept only if event_start <= t <= event_end + 1.0s);
+# 27 marks dropped (the +/-15 s snippet padding shows the neighbouring event's
+# strikes at the snippet edge; the annotator marked them in both snippets).
+session,event_id,kind,strike_no,strike_utc,confidence,notes
+st,01,landmark-C_EG,1,2026-07-08T10:15:02.243000+00:00,,ich weiss nicht ob das wirklich stillstand ist
+st,01,landmark-C_EG,2,2026-07-08T10:15:03.041000+00:00,,ich weiss nicht ob das wirklich stillstand ist
+st,01,landmark-C_EG,3,2026-07-08T10:15:04.018000+00:00,,ich weiss nicht ob das wirklich stillstand ist
+st,02,plate-gen_0,1,2026-07-08T10:17:06.696000+00:00,,
+st,02,plate-gen_0,2,2026-07-08T10:17:07.501000+00:00,,
+st,02,plate-gen_0,3,2026-07-08T10:17:08.377000+00:00,,
+st,03,plate-gen_90,1,2026-07-08T10:18:02.257000+00:00,,
+st,03,plate-gen_90,2,2026-07-08T10:18:02.996000+00:00,,
+st,03,plate-gen_90,3,2026-07-08T10:18:03.646000+00:00,,
+st,04,plate-gen_180,1,2026-07-08T10:19:02.206000+00:00,,
+st,04,plate-gen_180,2,2026-07-08T10:19:02.964000+00:00,,
+st,04,plate-gen_180,3,2026-07-08T10:19:03.725000+00:00,,
+st,05,plate-gen_270,1,2026-07-08T10:20:02.727000+00:00,,
+st,05,plate-gen_270,2,2026-07-08T10:20:03.508000+00:00,,
+st,05,plate-gen_270,3,2026-07-08T10:20:04.295000+00:00,,
+st,06,plate-tur_bottom,1,2026-07-08T10:21:01.839000+00:00,,
+st,06,plate-tur_bottom,2,2026-07-08T10:21:02.533000+00:00,,
+st,06,plate-tur_bottom,3,2026-07-08T10:21:03.226000+00:00,,
+st,07,landmark-B_11TG,1,2026-07-08T10:22:02.530000+00:00,,
+st,07,landmark-B_11TG,2,2026-07-08T10:22:03.249000+00:00,,
+st,07,landmark-B_11TG,3,2026-07-08T10:22:03.927000+00:00,,
+st,08,landmark-A_kugelschieber,1,2026-07-08T10:23:15.915000+00:00,,ist das stillstand?
+st,08,landmark-A_kugelschieber,2,2026-07-08T10:23:16.582000+00:00,,ist das stillstand?
+st,08,landmark-A_kugelschieber,3,2026-07-08T10:23:17.242000+00:00,,ist das stillstand?
+st,09,vane-sweep,1,2026-07-08T10:24:16.860000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,2,2026-07-08T10:24:23.677000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,3,2026-07-08T10:24:25.974000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,4,2026-07-08T10:24:27.151000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,5,2026-07-08T10:24:29.062000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,6,2026-07-08T10:24:31.001000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,7,2026-07-08T10:24:33.477000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,8,2026-07-08T10:24:35.981000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,9,2026-07-08T10:24:36.819000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,10,2026-07-08T10:24:37.532000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,11,2026-07-08T10:24:41.532000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,12,2026-07-08T10:24:42.202000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,13,2026-07-08T10:24:43+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,14,2026-07-08T10:24:46.352000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,15,2026-07-08T10:24:47.147000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,16,2026-07-08T10:24:47.986000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,17,2026-07-08T10:24:51.407000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,18,2026-07-08T10:24:52.218000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,19,2026-07-08T10:24:53.141000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,20,2026-07-08T10:24:56.808000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,21,2026-07-08T10:24:57.659000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,22,2026-07-08T10:24:58.310000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,23,2026-07-08T10:25:01.002000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,24,2026-07-08T10:25:01.767000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,25,2026-07-08T10:25:02.680000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,26,2026-07-08T10:25:05.282000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,27,2026-07-08T10:25:06.109000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,28,2026-07-08T10:25:06.836000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,29,2026-07-08T10:25:09.193000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,30,2026-07-08T10:25:10.025000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,31,2026-07-08T10:25:10.631000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,32,2026-07-08T10:25:13.294000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,33,2026-07-08T10:25:14.027000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,34,2026-07-08T10:25:14.708000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,35,2026-07-08T10:25:16.775000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,36,2026-07-08T10:25:17.587000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,37,2026-07-08T10:25:18.332000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,38,2026-07-08T10:25:20.370000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,39,2026-07-08T10:25:21.226000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,40,2026-07-08T10:25:21.964000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,41,2026-07-08T10:25:24.515000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,42,2026-07-08T10:25:25.185000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,43,2026-07-08T10:25:25.991000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,44,2026-07-08T10:25:30.459000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,45,2026-07-08T10:25:31.077000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,46,2026-07-08T10:25:31.819000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,47,2026-07-08T10:25:33.839000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,48,2026-07-08T10:25:34.734000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,49,2026-07-08T10:25:35.430000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,50,2026-07-08T10:25:37.723000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,51,2026-07-08T10:25:38.500000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,52,2026-07-08T10:25:39.249000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,53,2026-07-08T10:25:53.511000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,54,2026-07-08T10:26:00.415000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,55,2026-07-08T10:26:05.813000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,56,2026-07-08T10:26:10.362000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,57,2026-07-08T10:26:14.640000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,58,2026-07-08T10:26:15.975000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,59,2026-07-08T10:26:18.438000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,60,2026-07-08T10:26:19.199000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,61,2026-07-08T10:26:19.938000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,62,2026-07-08T10:26:23.046000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,63,2026-07-08T10:26:23.906000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,64,2026-07-08T10:26:24.832000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,65,2026-07-08T10:26:27.363000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,66,2026-07-08T10:26:28.148000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,67,2026-07-08T10:26:28.895000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,68,2026-07-08T10:26:32.199000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,69,2026-07-08T10:26:32.874000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,70,2026-07-08T10:26:33.653000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,09,vane-sweep,71,2026-07-08T10:26:41.205000+00:00,,hier könnte es sein dass ich ganz feine geräusche nicht gehört habe
+st,10,plate-tur_0,1,2026-07-08T10:28:02.001000+00:00,,
+st,10,plate-tur_0,2,2026-07-08T10:28:02.713000+00:00,,
+st,10,plate-tur_0,3,2026-07-08T10:28:03.461000+00:00,,
+st,11,plate-tur_90,1,2026-07-08T10:29:01.558000+00:00,,
+st,11,plate-tur_90,2,2026-07-08T10:29:02.244000+00:00,,
+st,11,plate-tur_90,3,2026-07-08T10:29:02.846000+00:00,,
+st,12,plate-tur_180,1,2026-07-08T10:30:10.879000+00:00,,
+st,12,plate-tur_180,2,2026-07-08T10:30:11.670000+00:00,,
+st,12,plate-tur_180,3,2026-07-08T10:30:12.370000+00:00,,
+st,12,plate-tur_180,4,2026-07-08T10:30:15.563000+00:00,,
+st,12,plate-tur_180,5,2026-07-08T10:30:18.908000+00:00,,
+st,12,plate-tur_180,6,2026-07-08T10:30:37.107000+00:00,,
+st,12,plate-tur_180,7,2026-07-08T10:30:39.230000+00:00,,
+st,12,plate-tur_180,8,2026-07-08T10:30:45.689000+00:00,,
+st,12,plate-tur_180,9,2026-07-08T10:30:50.308000+00:00,,
+st,12,plate-tur_180,10,2026-07-08T10:30:53.721000+00:00,,
+st,13,plate-tur_270,1,2026-07-08T10:31:02.498000+00:00,,
+st,13,plate-tur_270,2,2026-07-08T10:31:03.232000+00:00,,
+st,13,plate-tur_270,3,2026-07-08T10:31:04.051000+00:00,,
+st,13,plate-tur_270,4,2026-07-08T10:31:49.672000+00:00,,
+st,13,plate-tur_270,5,2026-07-08T10:31:50.774000+00:00,,
+st,13,plate-tur_270,6,2026-07-08T10:31:58.169000+00:00,,
+st,13,plate-tur_270,7,2026-07-08T10:31:59.027000+00:00,,

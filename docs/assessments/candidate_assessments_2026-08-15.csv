@@ -1,0 +1,6 @@
+# candidate_assessments_2026-08-15.csv -- candidate-review assessments: manual listening review by the author against scripts/candidate_kit.py build's index.html; register explicitly not ground truth.
+# Provenance: this register is explicitly not ground truth (Jinyuan ruling, 2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT induced anomalies; 'assessment' records the author's own qualitative listening judgement, nothing more.
+# Source: /Users/stefankrummenacher/Downloads/candidate_assessments_all (1).csv
+# Compiled: 2026-08-15 (scripts/candidate_kit.py compile, --date kept explicit for reproducibility).
+session,candidate_id,class,start_utc,duration_s,min_p,state_name,near_transition,scada_state,scada_transition,assessment,note
+290626-tu,290626-tu-11,transient,2026-06-29T02:00:22.737000+00:00,1.0,0.0008916629514043691,turbine,False,transition,True,plausible anomaly,right around 10.3 could be something
