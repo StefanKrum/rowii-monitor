@@ -1564,10 +1564,14 @@ def build_extended_readout_series(
         session_scada.window_start_utc, session_scada.window_s, session_scada.flow_net_m3s,
         asset_start_utc, n_seconds,
     )
-    ks_valve = resample_channel_to_seconds(
-        session_scada.window_start_utc, session_scada.window_s, session_scada.ks_valve,
-        asset_start_utc, n_seconds,
-    ) if session_scada.ks_valve else [None] * n_seconds
+    ks_valve: list[float | None]
+    if session_scada.ks_valve:
+        ks_valve = resample_channel_to_seconds(
+            session_scada.window_start_utc, session_scada.window_s, session_scada.ks_valve,
+            asset_start_utc, n_seconds,
+        )
+    else:
+        ks_valve = [None] * n_seconds
     return power, speed, flow, ks_valve
 
 
@@ -2603,6 +2607,19 @@ _CANDIDATE_CSS = """
 html, body { height: 100%; }
 body { font-family: var(--font-ui); margin: 0; padding: 0; line-height: 1.5;
        background: var(--paper); color: var(--ink); }
+header.topbar { display: flex; align-items: center; gap: 24px; padding: 13px 22px;
+  border-bottom: 1px solid var(--hair); background: var(--panel); position: sticky; top: 0;
+  z-index: 40; }
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.brand-mark { font-size: 15px; font-weight: 800; letter-spacing: .06em; color: var(--ink); }
+.brand-sub { font-size: 12.5px; color: var(--dim); font-weight: 600; }
+nav.nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
+nav.nav a { color: var(--dim); text-decoration: none; font-size: 13px; font-weight: 600;
+  padding: 7px 12px; border-radius: 6px; border: 1px solid transparent; }
+nav.nav a:hover { color: var(--ink); background: var(--panel-2); }
+nav.nav a.active { color: var(--ink); background: var(--panel-2); border-color: var(--hair); }
+.site-footer { max-width: 1320px; margin: 0 auto; padding: 24px 22px 46px; color: var(--dim);
+  font-size: 12px; border-top: 1px solid var(--hair); }
 main.review-page { max-width: 1320px; margin: 0 auto; padding: 22px 22px 60px; }
 h1 { font-size: 22px; margin: 4px 0 4px; }
 h2 { font-size: 15px; margin-top: 2.2rem; border-bottom: 1px solid var(--hair);
@@ -2612,10 +2629,12 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .page-lede { color: var(--dim); font-size: 13.5px; max-width: 90ch; margin: 0 0 14px; }
 .date-header { font-family: var(--font-mono); font-size: 12px; color: var(--dim);
                margin: 0 0 12px; }
-.instructions { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.instructions { background: var(--panel); border: 1px solid var(--hair);
+                border-radius: var(--radius-lg);
                 padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .instructions p { margin: 0.4em 0; }
-.legend { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.legend { background: var(--panel); border: 1px solid var(--hair);
+          border-radius: var(--radius-lg);
           padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .legend h2 { margin: 0 0 0.5rem; border: none; padding: 0; font-size: 14px; }
 .legend p { margin: 0.5em 0; }
@@ -2626,7 +2645,8 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .session-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
 .session-status { color: var(--dim); font-size: 0.85rem; }
 
-.candidate-card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.candidate-card { background: var(--panel); border: 1px solid var(--hair);
+                   border-radius: var(--radius-lg);
                    padding: 0.9rem 1.1rem; margin-bottom: 1.2rem; outline-offset: 2px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline;
              gap: 1rem; flex-wrap: wrap; }
@@ -2659,7 +2679,8 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 
 .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.6rem 0; }
 @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
-.lane { border: 1px solid var(--hair); border-radius: var(--radius); padding: 0.5rem; outline-offset: 2px; }
+.lane { border: 1px solid var(--hair); border-radius: var(--radius); padding: 0.5rem;
+        outline-offset: 2px; }
 .lane:focus, .lane:focus-visible { outline: 2px solid var(--live); }
 .lane-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.3rem; }
 .spectro-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; }
@@ -2681,13 +2702,18 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .scada-readout b { color: var(--ink); font-weight: 700; }
 
 /* -- state ribbon (HTML, not raster: in-band labels + native title tooltip) -- */
-.ribbon-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; margin-top: 0.4rem; }
+.ribbon-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px;
+  margin-top: 0.4rem; }
 .state-ribbon { position: relative; }
 .ribbon-row { position: relative; height: 16px; }
-.ribbon-seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-right: 1px solid rgba(255,255,255,.5); }
-.ribbon-seg-label { display: block; font-size: 9px; line-height: 16px; color: #fff; padding-left: 3px;
-                     white-space: nowrap; font-weight: 700; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
-.ribbon-playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--alarm);
+.ribbon-seg { position: absolute; top: 0; bottom: 0; overflow: hidden;
+  border-right: 1px solid rgba(255,255,255,.5); }
+.ribbon-seg-label { display: block; font-size: 9px; line-height: 16px; color: #fff;
+                     padding-left: 3px;
+                     white-space: nowrap; font-weight: 700;
+                     text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.ribbon-playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
+                    background: var(--alarm);
                     pointer-events: none; }
 .ribbon-caption { font-size: 10.5px; color: var(--dim); margin: 3px 0 0; }
 
@@ -2699,7 +2725,8 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .mark-chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono);
              font-size: 0.74rem; background: var(--panel-2); border: 1px solid var(--alarm);
              color: var(--alarm); border-radius: 999px; padding: 2px 4px 2px 9px; }
-.mark-chip button { border: none; background: none; color: inherit; cursor: pointer; font-size: 0.85rem;
+.mark-chip button { border: none; background: none; color: inherit; cursor: pointer;
+                     font-size: 0.85rem;
                      line-height: 1; padding: 0 5px; border-radius: 50%; }
 .mark-chip button:hover { background: var(--alarm); color: white; }
 .marks-empty { color: var(--dim); font-size: 0.76rem; }
@@ -3601,7 +3628,7 @@ def render_index_html(
     )
 
     date_note = (
-        f"{len(metas)} candidate(s) across {len(sessions)} session(s) &middot; generated "
+        f"{len(metas)} candidate(s) across {len(sessions)} session(s) · generated "
         f"{datetime.now(UTC).strftime('%Y-%m-%d')}"
     )
     head = _review_page_head(title="Candidate Review — ROWII Monitor", date_note=date_note)
@@ -3659,14 +3686,17 @@ def render_index_static_html(
 
     cards: list[str] = []
     for session in sessions:
-        session_metas = sorted(by_session[session], key=lambda m: int(m["rank"]))  # type: ignore[arg-type]
+        session_metas = sorted(
+            by_session[session], key=lambda m: int(m["rank"])  # type: ignore[call-overload]
+        )
         cards.append(
             f'<h2>{html.escape(_SESSION_LABEL.get(session, session))} '
             f"({len(session_metas)} candidate(s))</h2>"
         )
         for m in session_metas:
             context_html = (
-                f'<div class="context-note"><b>Context:</b> {html.escape(str(m["context_note"]))}</div>'
+                f'<div class="context-note"><b>Context:</b> '
+                f'{html.escape(str(m["context_note"]))}</div>'
                 if m.get("context_note")
                 else ""
             )
@@ -3675,31 +3705,42 @@ def render_index_static_html(
                 if m["mode_mismatch"]
                 else ""
             )
+            candidate_id = html.escape(str(m["candidate_id"]))
+            start_utc = html.escape(str(m["start_utc"]))
+            klass = html.escape(str(m["class"]))
+            scada_state = html.escape(str(m["scada_state"]))
+            state_name = html.escape(str(m["state_name"]))
+            criterion_text = html.escape(str(m["criterion_text"]))
+            gen_flat_png = html.escape(str(m["gen_flat_png"]))
+            gen_wav = html.escape(str(m["gen_wav"]))
+            tur_flat_png = html.escape(str(m["tur_flat_png"]))
+            tur_wav = html.escape(str(m["tur_wav"]))
+            scada_png = html.escape(str(m["scada_png"]))
             cards.append(
                 f"""<div class="candidate-card">
-  <div class="card-head"><span class="card-title">{html.escape(str(m['candidate_id']))} — {html.escape(str(m['start_utc']))}</span>
-  <span class="class-badge {html.escape(str(m['class']))}">{html.escape(str(m['class']))}</span></div>
-  <div class="mode-row"><span class="mode-scada">Mode (SCADA): {html.escape(str(m['scada_state']))}</span>
-  <span class="mode-detector">Mode (Detector): {html.escape(str(m['state_name']))}</span>{mismatch_html}</div>
-  <div class="criterion-line">{html.escape(str(m['criterion_text']))}</div>
+  <div class="card-head"><span class="card-title">{candidate_id} — {start_utc}</span>
+  <span class="class-badge {klass}">{klass}</span></div>
+  <div class="mode-row"><span class="mode-scada">Mode (SCADA): {scada_state}</span>
+  <span class="mode-detector">Mode (Detector): {state_name}</span>{mismatch_html}</div>
+  <div class="criterion-line">{criterion_text}</div>
   {context_html}
   <div class="lanes">
     <div class="lane"><div class="lane-title">Generator microphone</div>
-      <img class="spectro-img" src="{html.escape(str(m['gen_flat_png']))}" alt="Generator spectrogram">
-      <audio class="lane-audio" controls preload="none" src="{html.escape(str(m['gen_wav']))}"></audio></div>
+      <img class="spectro-img" src="{gen_flat_png}" alt="Generator spectrogram">
+      <audio class="lane-audio" controls preload="none" src="{gen_wav}"></audio></div>
     <div class="lane"><div class="lane-title">Turbine microphone</div>
-      <img class="spectro-img" src="{html.escape(str(m['tur_flat_png']))}" alt="Turbine spectrogram">
-      <audio class="lane-audio" controls preload="none" src="{html.escape(str(m['tur_wav']))}"></audio></div>
+      <img class="spectro-img" src="{tur_flat_png}" alt="Turbine spectrogram">
+      <audio class="lane-audio" controls preload="none" src="{tur_wav}"></audio></div>
   </div>
   <div class="scada-title">Operating data (SCADA context)</div>
-  <img class="scada-img" src="{html.escape(str(m['scada_png']))}" alt="SCADA strip">
+  <img class="scada-img" src="{scada_png}" alt="SCADA strip">
   {m['ribbon_html']}
 </div>"""
             )
 
     date_note = (
-        f"{len(metas)} candidate(s) across {len(sessions)} session(s) &middot; generated "
-        f"{datetime.now(UTC).strftime('%Y-%m-%d')} &middot; read-only, no JavaScript"
+        f"{len(metas)} candidate(s) across {len(sessions)} session(s) · generated "
+        f"{datetime.now(UTC).strftime('%Y-%m-%d')} · read-only, no JavaScript"
     )
     head = _review_page_head(title="Candidate Review (static) — ROWII Monitor", date_note=date_note)
     legend_html = _CANDIDATE_LEGEND_HTML.replace(
