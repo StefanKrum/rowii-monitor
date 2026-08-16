@@ -25,12 +25,15 @@ from rowii.eval.per_strike import (
     deduplicate_marks,
     evaluate_event_latency,
     evaluate_strike_latency,
+    evaluate_strike_latency_binary,
     inter_mark_gaps,
     kind_group,
     mark_detected,
+    mark_detected_binary,
     marks_per_event,
     summarize_latency,
     sweep_strike_detection,
+    sweep_strike_detection_binary,
 )
 
 BASE = pd.Timestamp("2026-07-08T10:00:00+00:00")
@@ -60,6 +63,28 @@ def _alarms(
     if alarming_at:
         p[alarming_at] = 0.001
     frame = pd.DataFrame({"t_utc_ns": t.astype(np.int64), "p_value": p})
+    frame["role"] = role if role is not None else ["scored"] * n
+    return frame
+
+
+def _alarms_binary(
+    n: int,
+    *,
+    alarming_at: list[int] | None = None,
+    role: list[str] | None = None,
+    start_s: float = 0.0,
+    alarm_column: str = "alarm",
+) -> pd.DataFrame:
+    """*n* consecutive 1-s scored windows starting at BASE+start_s, with a
+    pre-thresholded bool *alarm_column*: `True` at the window indices in
+    *alarming_at*, `False` everywhere else. *role* defaults to "scored" for
+    every row -- the binary-alarm-stream counterpart of `_alarms` (no
+    p_value/alpha involved, matching `mark_detected_binary`'s own contract)."""
+    t = BASE.value + int(start_s * _NS_PER_S) + np.arange(n, dtype=np.int64) * _NS_PER_S
+    alarm = np.zeros(n, dtype=bool)
+    if alarming_at:
+        alarm[alarming_at] = True
+    frame = pd.DataFrame({"t_utc_ns": t.astype(np.int64), alarm_column: alarm})
     frame["role"] = role if role is not None else ["scored"] * n
     return frame
 
@@ -441,6 +466,230 @@ def test_strike_latency_missed_beyond_five_second_horizon() -> None:
 
     assert bool(result.loc[0, "missed"]) is True
     assert math.isnan(result.loc[0, "latency_s"])
+
+
+# ---------------------------------------------------------------------------
+# mark_detected_binary / sweep_strike_detection_binary /
+# evaluate_strike_latency_binary: the pre-thresholded (no p_value/alpha)
+# alarm-stream adapter path -- same tolerance-matching and first-alarm-
+# latency semantics as the p_value/alpha path above, sourced from an
+# already-thresholded bool column instead of `p_value < alpha`.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_detected_binary_true_within_tolerance() -> None:
+    alarms = _alarms_binary(10, alarming_at=[5])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 5.5)])  # 0.5s from t=5
+    assert mark_detected_binary(alarms, marks, tolerance_s=1.0).tolist() == [True]
+
+
+def test_mark_detected_binary_false_outside_tolerance() -> None:
+    alarms = _alarms_binary(10, alarming_at=[5])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 7.5)])  # 2.5s away
+    assert mark_detected_binary(alarms, marks, tolerance_s=1.0).tolist() == [False]
+
+
+def test_mark_detected_binary_boundary_at_exactly_tolerance_counts() -> None:
+    alarms = _alarms_binary(10, alarming_at=[5])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 6.0)])  # exactly 1.0s away
+    assert mark_detected_binary(alarms, marks, tolerance_s=1.0).tolist() == [True]
+
+
+def test_mark_detected_binary_matches_alpha_path_given_equivalent_inputs() -> None:
+    # The SAME alarming windows, expressed either as p_value<alpha
+    # (mark_detected) or as a pre-thresholded bool column
+    # (mark_detected_binary), must produce IDENTICAL results -- both share
+    # the same `_match_within_tolerance` core (module docstring's design
+    # claim for the adapter path).
+    p_alarms = _alarms(20, alarming_at=[3, 12])
+    bin_alarms = _alarms_binary(20, alarming_at=[3, 12])
+    marks = _marks(
+        [
+            ("st", "01", "landmark-C_EG", 1, 3.5),
+            ("st", "02", "plate-gen_0", 1, 8.0),
+            ("st", "03", "plate-gen_90", 1, 12.9),
+        ]
+    )
+    p_result = mark_detected(p_alarms, marks, tolerance_s=1.0, alpha=0.05)
+    bin_result = mark_detected_binary(bin_alarms, marks, tolerance_s=1.0)
+    assert bin_result.tolist() == p_result.tolist()
+
+
+def test_mark_detected_binary_ignores_non_scored_rows() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2])
+    alarms.loc[2, "role"] = "consumed_for_calibration"
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])
+    assert mark_detected_binary(alarms, marks, tolerance_s=0.5).tolist() == [False]
+
+
+def test_mark_detected_binary_no_role_column_treats_everything_as_scored() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2]).drop(columns=["role"])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])
+    assert mark_detected_binary(alarms, marks, tolerance_s=0.5).tolist() == [True]
+
+
+def test_mark_detected_binary_no_alarming_windows_all_false() -> None:
+    alarms = _alarms_binary(5)
+    marks = _marks(
+        [("st", "01", "landmark-C_EG", 1, 1.0), ("st", "01", "landmark-C_EG", 2, 3.0)]
+    )
+    assert mark_detected_binary(alarms, marks, tolerance_s=5.0).tolist() == [False, False]
+
+
+def test_mark_detected_binary_empty_marks_returns_empty_array() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2])
+    result = mark_detected_binary(alarms, _marks([]), tolerance_s=1.0)
+    assert result.shape == (0,)
+
+
+def test_mark_detected_binary_invalid_tolerance_raises() -> None:
+    alarms = _alarms_binary(5)
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 1.0)])
+    with pytest.raises(ValueError, match="tolerance_s"):
+        mark_detected_binary(alarms, marks, tolerance_s=-1.0)
+
+
+def test_mark_detected_binary_missing_alarms_columns_raise() -> None:
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 1.0)])
+    with pytest.raises(ValueError, match="alarm"):
+        mark_detected_binary(pd.DataFrame({"t_utc_ns": [0]}), marks, tolerance_s=1.0)
+
+
+def test_mark_detected_binary_non_bool_alarm_column_raises() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2])
+    alarms["alarm"] = alarms["alarm"].astype(int)  # 0/1 int, not bool
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])
+    with pytest.raises(ValueError, match="bool"):
+        mark_detected_binary(alarms, marks, tolerance_s=0.5)
+
+
+def test_mark_detected_binary_custom_alarm_column_name() -> None:
+    # scripts/eval_mad_per_strike.py's own use case: several thresholds'
+    # decisions as sibling columns on one alarms table (e.g. "alarm_k1pct",
+    # "alarm_k5"), evaluated one column at a time.
+    alarms = _alarms_binary(5, alarming_at=[2], alarm_column="alarm_k1pct")
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])
+    result = mark_detected_binary(alarms, marks, tolerance_s=0.5, alarm_column="alarm_k1pct")
+    assert result.tolist() == [True]
+
+
+def test_sweep_strike_detection_binary_grid_shape_and_columns() -> None:
+    alarms = _alarms_binary(20, alarming_at=[5, 15])
+    marks = _marks(
+        [
+            ("st", "01", "landmark-C_EG", 1, 5.0),
+            ("st", "02", "plate-gen_0", 1, 15.0),
+        ]
+    )
+    result = sweep_strike_detection_binary(alarms, marks, tolerances_s=[1.0, 2.0])
+
+    assert list(result.columns) == [
+        "granularity", "tolerance_s", "kind_group", "n_marks", "n_detected", "tpr",
+    ]
+    # 2 granularities x 2 tolerances x 5 kind-group rows -- no alpha axis
+    # (the alarm decision is already fixed upstream).
+    assert len(result) == 2 * 2 * 5
+    assert set(result["granularity"]) == {"impulse", "physical"}
+    assert set(result["kind_group"]) == _KIND_GROUPS_ALL
+
+
+def test_sweep_strike_detection_binary_absent_kind_group_reports_nan_tpr() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])  # only "landmark" present
+    result = sweep_strike_detection_binary(alarms, marks, tolerances_s=[1.0])
+
+    vane = result[(result["kind_group"] == "vane-sweep") & (result["granularity"] == "impulse")]
+    assert len(vane) == 1
+    assert int(vane["n_marks"].iloc[0]) == 0
+    assert math.isnan(vane["tpr"].iloc[0])
+
+    landmark = result[
+        (result["kind_group"] == "landmark") & (result["granularity"] == "impulse")
+    ]
+    assert int(landmark["n_marks"].iloc[0]) == 1
+    assert int(landmark["n_detected"].iloc[0]) == 1
+    assert landmark["tpr"].iloc[0] == pytest.approx(1.0)
+
+
+def test_sweep_strike_detection_binary_impulse_vs_physical_n_marks_differ() -> None:
+    marks = _marks(
+        [
+            ("st", "02", "plate-gen_0", 1, 0.0),
+            ("st", "02", "plate-gen_0", 2, 0.8),
+        ]
+    )
+    alarms = _alarms_binary(5, alarming_at=[0])
+    result = sweep_strike_detection_binary(alarms, marks, tolerances_s=[5.0], gap_s=1.5)
+
+    all_impulse = result[(result["kind_group"] == "ALL") & (result["granularity"] == "impulse")]
+    all_physical = result[(result["kind_group"] == "ALL") & (result["granularity"] == "physical")]
+    assert int(all_impulse["n_marks"].iloc[0]) == 2
+    assert int(all_physical["n_marks"].iloc[0]) == 1
+
+
+def test_sweep_strike_detection_binary_empty_tolerances_yields_zero_rows() -> None:
+    alarms = _alarms_binary(5, alarming_at=[2])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 2.0)])
+    result = sweep_strike_detection_binary(alarms, marks, tolerances_s=[])
+
+    assert len(result) == 0
+    assert list(result.columns) == [
+        "granularity", "tolerance_s", "kind_group", "n_marks", "n_detected", "tpr",
+    ]
+
+
+def test_strike_latency_binary_measures_per_physical_strike_not_per_event() -> None:
+    alarms = _alarms_binary(60, alarming_at=[1, 51])
+    marks = _marks(
+        [
+            ("st", "02", "plate-gen_0", 1, 0.0),
+            ("st", "02", "plate-gen_0", 2, 0.8),  # folds into physical strike @ t=0.0
+            ("st", "02", "plate-gen_0", 3, 50.0),  # separate physical strike @ t=50.0
+        ]
+    )
+    result = evaluate_strike_latency_binary(alarms, marks, search_horizon_s=5.0, gap_s=1.5)
+
+    assert len(result) == 2
+    assert result["latency_s"].tolist() == pytest.approx([1.0, 1.0])
+    assert result["n_impulses"].tolist() == [2, 1]
+
+
+def test_strike_latency_binary_missed_beyond_five_second_horizon() -> None:
+    alarms = _alarms_binary(60, alarming_at=[10])
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 0.0)])
+    result = evaluate_strike_latency_binary(alarms, marks, search_horizon_s=5.0)
+
+    assert bool(result.loc[0, "missed"]) is True
+    assert math.isnan(result.loc[0, "latency_s"])
+
+
+def test_strike_latency_binary_matches_alpha_path_given_equivalent_inputs() -> None:
+    p_alarms = _alarms(60, alarming_at=[1, 51])
+    bin_alarms = _alarms_binary(60, alarming_at=[1, 51])
+    marks = _marks(
+        [
+            ("st", "02", "plate-gen_0", 1, 0.0),
+            ("st", "02", "plate-gen_0", 3, 50.0),
+        ]
+    )
+    p_result = evaluate_strike_latency(p_alarms, marks, alpha=0.05, search_horizon_s=5.0)
+    bin_result = evaluate_strike_latency_binary(bin_alarms, marks, search_horizon_s=5.0)
+
+    assert bin_result["latency_s"].tolist() == pytest.approx(p_result["latency_s"].tolist())
+    assert bin_result["missed"].tolist() == p_result["missed"].tolist()
+
+
+def test_strike_latency_binary_invalid_search_horizon_raises() -> None:
+    alarms = _alarms_binary(5)
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 0.0)])
+    with pytest.raises(ValueError, match="search_horizon_s"):
+        evaluate_strike_latency_binary(alarms, marks, search_horizon_s=0.0)
+
+
+def test_strike_latency_binary_missing_alarms_columns_raise() -> None:
+    marks = _marks([("st", "01", "landmark-C_EG", 1, 0.0)])
+    with pytest.raises(ValueError, match="alarm"):
+        evaluate_strike_latency_binary(pd.DataFrame({"t_utc_ns": [0]}), marks)
 
 
 # ---------------------------------------------------------------------------

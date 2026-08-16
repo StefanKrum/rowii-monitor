@@ -63,6 +63,26 @@ Semantics (every edge pinned by `tests/test_per_strike.py`):
   `n_marks=0`/`tpr=NaN` for a group absent from the given input, so every
   sweep produces the SAME row shape regardless of which representation or
   session is being processed (a stable schema across the full sweep grid).
+- **Binary / pre-thresholded alarm streams** (`mark_detected_binary`,
+  `sweep_strike_detection_binary`, `evaluate_strike_latency_binary`): a
+  companion path for alarms tables that carry an already-thresholded bool
+  column (`t_utc_ns` + a named bool column, e.g. `scripts/run_mad_baseline.
+  py`'s own `_alarms_frame` shape) instead of a continuous `p_value` to
+  re-threshold. The fixed-threshold MAD baseline is the motivating case: its
+  threshold is commissioned ONCE on a disjoint pool and applied once
+  (`score > threshold`), so there is no p-value to sweep and no `alpha`
+  argument to take. These functions mirror `mark_detected`/
+  `sweep_strike_detection`/`evaluate_strike_latency` EXACTLY -- both paths
+  share the same private `_match_within_tolerance`/`_first_alarm_latency`
+  matching/latency arithmetic -- with the p_value/alpha axis replaced by a
+  caller-named boolean `alarm_column`. This is a genuine second code path,
+  not a `p_value` encoding trick: a fake `p_value` of `0.0`/`1.0` for alarm/
+  no-alarm would make the EXISTING alpha-based functions run, but `alpha`
+  would then be purely decorative (identical result for every `alpha` in
+  `(0, 1]`) -- indistinguishable from a real p-value at the call site, and
+  this module refuses that shortcut. There is no `evaluate_event_latency_
+  binary` (no caller needs event-level latency for a pre-thresholded stream
+  yet) -- add one the same way if one does.
 """
 from __future__ import annotations
 
@@ -214,6 +234,25 @@ def _check_alpha(alpha: float) -> None:
         raise ValueError(f"alpha must satisfy 0 < alpha <= 1, got {alpha!r}")
 
 
+def _match_within_tolerance(
+    alarming_t: np.ndarray, mark_ns: np.ndarray, tol_ns: int
+) -> np.ndarray:
+    """Bool array aligned with *mark_ns* (module docstring's "Detection"
+    bullet): `True` where the nearest entry of the SORTED *alarming_t*, on
+    either side, lies within `tol_ns`. The shared tolerance-matching core of
+    `mark_detected` (p_value/alpha path) and `mark_detected_binary`
+    (pre-thresholded path) -- factored out so both run the EXACT same
+    matching arithmetic regardless of how *alarming_t* was sourced."""
+    detected = np.zeros(mark_ns.shape, dtype=bool)
+    if alarming_t.size and mark_ns.size:
+        idx_right = np.clip(np.searchsorted(alarming_t, mark_ns), 0, alarming_t.size - 1)
+        idx_left = np.clip(idx_right - 1, 0, alarming_t.size - 1)
+        dist_right = np.abs(alarming_t[idx_right] - mark_ns)
+        dist_left = np.abs(alarming_t[idx_left] - mark_ns)
+        detected = (dist_right <= tol_ns) | (dist_left <= tol_ns)
+    return detected
+
+
 def mark_detected(
     alarms: pd.DataFrame, marks: pd.DataFrame, *, tolerance_s: float, alpha: float
 ) -> np.ndarray:
@@ -247,15 +286,7 @@ def mark_detected(
     alarming_t = _scored_alarming_times(alarms, alpha)
     mark_ns = _parse_utc_ns(marks["strike_utc"], "strike_utc")
     tol_ns = int(round(tolerance_s * _NS_PER_S))
-
-    detected = np.zeros(len(marks), dtype=bool)
-    if alarming_t.size and mark_ns.size:
-        idx_right = np.clip(np.searchsorted(alarming_t, mark_ns), 0, alarming_t.size - 1)
-        idx_left = np.clip(idx_right - 1, 0, alarming_t.size - 1)
-        dist_right = np.abs(alarming_t[idx_right] - mark_ns)
-        dist_left = np.abs(alarming_t[idx_left] - mark_ns)
-        detected = (dist_right <= tol_ns) | (dist_left <= tol_ns)
-    return detected
+    return _match_within_tolerance(alarming_t, mark_ns, tol_ns)
 
 
 def deduplicate_marks(marks: pd.DataFrame, *, gap_s: float = 1.5) -> pd.DataFrame:
@@ -405,6 +436,51 @@ def _event_onsets(marks: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=list(_EVENT_ONSET_COLUMNS))
 
 
+def _check_search_horizon_s(search_horizon_s: float) -> None:
+    if not (math.isfinite(search_horizon_s) and search_horizon_s > 0):
+        raise ValueError(
+            f"search_horizon_s must be a positive number of seconds, got {search_horizon_s!r}"
+        )
+
+
+def _first_alarm_latency(
+    alarming_t: np.ndarray, ref_ns: np.ndarray, horizon_ns: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """`(latency_s, missed)` for each entry of *ref_ns* against the SORTED
+    *alarming_t* (module docstring's "First-alarm latency" bullet): for each
+    reference instant, the first entry of *alarming_t* AT-OR-AFTER it
+    (`>= ref`); `latency_s` is that entry minus `ref` in seconds (always
+    >= 0, NaN when missed); `missed` is `True` when no such entry falls
+    within `horizon_ns`. The shared core of `_add_first_alarm_latency`
+    (p_value/alpha path) and the binary-alarm-stream latency functions --
+    factored out so both run the EXACT same latency arithmetic regardless of
+    how *alarming_t* was sourced."""
+    latency_s = np.full(ref_ns.shape, np.nan, dtype=np.float64)
+    missed = np.ones(ref_ns.shape, dtype=bool)
+    if alarming_t.size:
+        idx = np.searchsorted(alarming_t, ref_ns, side="left")
+        within = idx < alarming_t.size
+        first_at_or_after = np.where(within, alarming_t[np.clip(idx, 0, alarming_t.size - 1)], 0)
+        delta_ns = first_at_or_after - ref_ns
+        in_horizon = within & (delta_ns <= horizon_ns)
+        latency_s = np.where(in_horizon, delta_ns / _NS_PER_S, np.nan)
+        missed = ~in_horizon
+    return latency_s, missed
+
+
+def _attach_latency(
+    reference: pd.DataFrame, latency_s: np.ndarray, missed: np.ndarray
+) -> pd.DataFrame:
+    """*reference* (a copy) with `latency_s` (float, NaN when missed) and
+    `missed` (bool) columns appended -- the shared tail of
+    `_add_first_alarm_latency` and the binary-alarm-stream latency
+    functions."""
+    out = reference.copy()
+    out["latency_s"] = latency_s
+    out["missed"] = missed
+    return out
+
+
 def _add_first_alarm_latency(
     reference: pd.DataFrame,
     alarms: pd.DataFrame,
@@ -422,30 +498,13 @@ def _add_first_alarm_latency(
     """
     _validate_alarms(alarms)
     _check_alpha(alpha)
-    if not (math.isfinite(search_horizon_s) and search_horizon_s > 0):
-        raise ValueError(
-            f"search_horizon_s must be a positive number of seconds, got {search_horizon_s!r}"
-        )
+    _check_search_horizon_s(search_horizon_s)
 
     alarming_t = _scored_alarming_times(alarms, alpha)
     ref_ns = _parse_utc_ns(reference[ref_col], ref_col)
     horizon_ns = int(round(search_horizon_s * _NS_PER_S))
-
-    latency_s = np.full(len(reference), np.nan, dtype=np.float64)
-    missed = np.ones(len(reference), dtype=bool)
-    if alarming_t.size:
-        idx = np.searchsorted(alarming_t, ref_ns, side="left")
-        within = idx < alarming_t.size
-        first_at_or_after = np.where(within, alarming_t[np.clip(idx, 0, alarming_t.size - 1)], 0)
-        delta_ns = first_at_or_after - ref_ns
-        in_horizon = within & (delta_ns <= horizon_ns)
-        latency_s = np.where(in_horizon, delta_ns / _NS_PER_S, np.nan)
-        missed = ~in_horizon
-
-    out = reference.copy()
-    out["latency_s"] = latency_s
-    out["missed"] = missed
-    return out
+    latency_s, missed = _first_alarm_latency(alarming_t, ref_ns, horizon_ns)
+    return _attach_latency(reference, latency_s, missed)
 
 
 def evaluate_event_latency(
@@ -495,6 +554,168 @@ def evaluate_strike_latency(
     return _add_first_alarm_latency(
         physical, alarms, ref_col="strike_utc", alpha=alpha, search_horizon_s=search_horizon_s
     )
+
+
+# ---------------------------------------------------------------------------
+# Binary / pre-thresholded alarm streams -- the adapter path for alarms
+# tables that carry an already-thresholded bool column instead of a
+# continuous p_value (module docstring's "Binary / pre-thresholded alarm
+# streams" bullet; motivating case: scripts/run_mad_baseline.py's fixed
+# median+k*MAD threshold, commissioned once and applied once, never swept).
+# ---------------------------------------------------------------------------
+
+
+def _validate_alarms_binary(alarms: pd.DataFrame, alarm_column: str) -> None:
+    missing = [c for c in ("t_utc_ns", alarm_column) if c not in alarms.columns]
+    if missing:
+        raise ValueError(
+            f"alarms is missing required column(s) {missing}; expected a "
+            f"pre-thresholded binary alarm stream with 't_utc_ns' (int64 "
+            f"window starts) and {alarm_column!r} (bool) -- got columns "
+            f"{list(alarms.columns)}"
+        )
+    if not pd.api.types.is_integer_dtype(alarms["t_utc_ns"]):
+        raise ValueError(
+            f"alarms['t_utc_ns'] must be int64 UTC nanoseconds (window starts), "
+            f"got dtype {alarms['t_utc_ns'].dtype}"
+        )
+    if not pd.api.types.is_bool_dtype(alarms[alarm_column]):
+        raise ValueError(
+            f"alarms[{alarm_column!r}] must be bool, got dtype "
+            f"{alarms[alarm_column].dtype}"
+        )
+
+
+def _binary_alarming_times(alarms: pd.DataFrame, alarm_column: str) -> np.ndarray:
+    """Sorted int64 UTC-ns window-START timestamps of every SCORED window
+    whose *alarm_column* is `True` -- the binary-alarm-stream analogue of
+    `_scored_alarming_times` (same `role` filter, module docstring)."""
+    scored = alarms[alarms["role"] == ROLE_SCORED] if "role" in alarms.columns else alarms
+    t = scored["t_utc_ns"].to_numpy(dtype=np.int64)
+    flagged = scored[alarm_column].to_numpy(dtype=bool)
+    return np.sort(t[flagged])
+
+
+def mark_detected_binary(
+    alarms: pd.DataFrame,
+    marks: pd.DataFrame,
+    *,
+    tolerance_s: float,
+    alarm_column: str = "alarm",
+) -> np.ndarray:
+    """`mark_detected`'s binary-alarm-stream counterpart (module docstring):
+    a mark counts as detected iff at least one SCORED window with
+    `alarms[alarm_column] == True` has a window-START timestamp within
+    `tolerance_s` seconds of the mark, on either side -- the IDENTICAL
+    tolerance matching `mark_detected` uses (`_match_within_tolerance`); the
+    only difference is how the alarming-window timestamps are sourced (an
+    already-thresholded bool column instead of `p_value < alpha`).
+
+    Args:
+        alarms: One row per window -- `t_utc_ns` (int64 UTC window-start ns),
+            *alarm_column* (bool, already thresholded upstream); rows with a
+            `role` other than `"scored"` are dropped first (if a `role`
+            column exists).
+        marks: One row per strike-impulse mark -- `strike_utc` (tz-aware).
+        tolerance_s: Half-width of the matching window in seconds (>= 0).
+        alarm_column: Name of the pre-thresholded bool column in *alarms*.
+
+    Returns:
+        `np.ndarray[bool]`, `len(marks)` entries, in input order.
+
+    Raises:
+        ValueError: On missing/mistyped alarms or marks columns, naive/
+            unparseable `strike_utc`, or `tolerance_s < 0`.
+    """
+    _validate_alarms_binary(alarms, alarm_column)
+    _validate_marks(marks)
+    _check_tolerance_s(tolerance_s)
+
+    alarming_t = _binary_alarming_times(alarms, alarm_column)
+    mark_ns = _parse_utc_ns(marks["strike_utc"], "strike_utc")
+    tol_ns = int(round(tolerance_s * _NS_PER_S))
+    return _match_within_tolerance(alarming_t, mark_ns, tol_ns)
+
+
+_SWEEP_COLUMNS_BINARY: tuple[str, ...] = (
+    "granularity", "tolerance_s", "kind_group", "n_marks", "n_detected", "tpr",
+)
+
+
+def sweep_strike_detection_binary(
+    alarms: pd.DataFrame,
+    marks: pd.DataFrame,
+    *,
+    tolerances_s: Sequence[float],
+    gap_s: float = 1.5,
+    alarm_column: str = "alarm",
+) -> pd.DataFrame:
+    """`sweep_strike_detection`'s binary-alarm-stream counterpart (module
+    docstring): every combination of `granularity in {"impulse", "physical"}`
+    and `tolerance_s in tolerances_s`, for the ONE pre-thresholded
+    *alarm_column* -- no `alpha` axis (the alarm decision is already fixed
+    upstream, e.g. the MAD baseline's once-commissioned `score > threshold`).
+    A caller comparing several fixed thresholds (e.g. `k1pct` vs `k5`) calls
+    this once per threshold, against its own alarm column, and tags the
+    result itself (this function has no notion of "threshold identity").
+
+    Columns: `granularity, tolerance_s, kind_group, n_marks, n_detected,
+    tpr`; row count is `2 * len(tolerances_s) * 5`.
+
+    Raises:
+        ValueError: Any `mark_detected_binary`/`deduplicate_marks` validation
+            error (empty *tolerances_s* produces zero rows, not an error).
+    """
+    _validate_marks(marks)
+    physical = deduplicate_marks(marks, gap_s=gap_s)
+
+    rows = []
+    for granularity, variant in (
+        (_GRANULARITY_IMPULSE, marks),
+        (_GRANULARITY_PHYSICAL, physical),
+    ):
+        for tolerance_s in tolerances_s:
+            detected = mark_detected_binary(
+                alarms, variant, tolerance_s=tolerance_s, alarm_column=alarm_column
+            )
+            summary = _kind_group_summary(variant["kind"], detected)
+            summary.insert(0, "tolerance_s", tolerance_s)
+            summary.insert(0, "granularity", granularity)
+            rows.append(summary)
+
+    if not rows:
+        return pd.DataFrame(columns=list(_SWEEP_COLUMNS_BINARY))
+    return pd.concat(rows, ignore_index=True).reindex(columns=list(_SWEEP_COLUMNS_BINARY))
+
+
+def evaluate_strike_latency_binary(
+    alarms: pd.DataFrame,
+    marks: pd.DataFrame,
+    *,
+    search_horizon_s: float = 5.0,
+    gap_s: float = 1.5,
+    alarm_column: str = "alarm",
+) -> pd.DataFrame:
+    """`evaluate_strike_latency`'s binary-alarm-stream counterpart (module
+    docstring): per-PHYSICAL-STRIKE first-alarm latency against the ONE
+    pre-thresholded *alarm_column*, no `alpha`. Columns: `session, event_id,
+    kind, strike_no, strike_utc, n_impulses, last_strike_no, latency_s,
+    missed` (default `search_horizon_s=5 s`, matching `evaluate_strike_
+    latency`'s own default).
+
+    Raises:
+        ValueError: Any `deduplicate_marks`/`_validate_alarms_binary`
+            validation error.
+    """
+    _validate_alarms_binary(alarms, alarm_column)
+    _check_search_horizon_s(search_horizon_s)
+
+    physical = deduplicate_marks(marks, gap_s=gap_s)
+    alarming_t = _binary_alarming_times(alarms, alarm_column)
+    ref_ns = _parse_utc_ns(physical["strike_utc"], "strike_utc")
+    horizon_ns = int(round(search_horizon_s * _NS_PER_S))
+    latency_s, missed = _first_alarm_latency(alarming_t, ref_ns, horizon_ns)
+    return _attach_latency(physical, latency_s, missed)
 
 
 @dataclass(frozen=True)
