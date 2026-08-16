@@ -49,8 +49,13 @@ Three subcommands:
                ultimately selects; a peak with no cross-mic match is flagged
                `coincident=False` there and never becomes a candidate. A coincident
                pair's representative timestamp is the two streams' own midpoint
-               (`_pair_midpoint_utc`) and its extremity is `norm.sf(min(gen_z, tur_z))`
-               -- a normal-tail p-value derived from the MORE conservative of the two
+               (`_pair_midpoint_utc`) and its extremity is `norm.sf(min(gen_z, tur_z))`,
+               floored strictly above `0.0` (`_impulse_min_p`/`_MIN_P_FLOOR` -- a
+               deliberate strike's z-score can exceed the point where `norm.sf`
+               underflows to a literal zero; flooring keeps the value both a
+               well-defined ranking key and round-trippable back to a finite,
+               displayable z via `norm.isf`, `criterion_sentence`'s own need) -- a
+               normal-tail p-value derived from the MORE conservative of the two
                mics' own z-scores (both individually already cleared the register
                threshold, by construction), reusing the SAME `1.4826`-scaled
                MAD-to-sigma convention `rowii.anomaly.sentinels`/`rowii.anomaly.
@@ -141,14 +146,18 @@ Three subcommands:
                duplicated) for BOTH mic streams over an asset window (candidate span
                +/-10s, clamped to [20s, 60s] via `asset_window`), plus a self-contained
                interactive `results/candidate-kit/index.html`: a LEGEND box
-               (`_CANDIDATE_LEGEND_HTML`) up front explains the two classes, the
+               (`_CANDIDATE_LEGEND_HTML`) up front explains the three classes, the
                SCADA-vs-detector mode split, and the assessment vocabulary in plain
                reviewer language -- this kit is a HANDOVER artifact read by plant
                experts, not only by the author -- followed by per-session cards
                (sorted by extremity), each showing "Mode (SCADA)" prominently and
                "Mode (Detector)" secondarily (a warning chip when they disagree),
                the exact trigger criterion rendered as a human sentence
-               (`criterion_sentence`), two independent playback lanes (generator/
+               (`criterion_sentence`), an optional highlighted context note
+               (`context_note`, e.g. `290626-tu-10`/`290626-tu-11`'s own cross-
+               reference to the partner team's independent search window) when the
+               curated `CONTEXT_NOTES` mapping has one, two independent playback lanes
+               (generator/
                turbine mic, each its own flat-spectrogram-plus-canvas-playhead --
                click seeks, space plays/pauses, mirrors `annotation_kit._INTERACTIVE_
                JS`'s own click/keyboard/rAF-tick pattern), and an ASSESSMENT control
@@ -199,6 +208,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import dataclasses
+import html
 import json
 import logging
 import math
@@ -223,6 +233,7 @@ for _extra_path in (str(_SCRIPTS_DIR), str(_SRC_DIR)):
 import annotation_kit as ak  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import run_step1 as rs1  # noqa: E402
+import site_common as sc  # noqa: E402
 
 from rowii.anomaly import impulse  # noqa: E402
 from rowii.config import Config, load_config  # noqa: E402
@@ -884,6 +895,30 @@ class ImpulsePeakRecord:
     its own register candidate."""
 
 
+_MIN_P_FLOOR = float(np.finfo(np.float64).tiny)
+"""Floor for `_impulse_min_p`'s `norm.sf(z)` output -- `scipy.stats.norm.sf`
+underflows to a LITERAL `0.0` for `z` beyond about 38 (real, observed on the
+080726 induced-strike sessions: a deliberate hammer strike is a genuinely huge
+energy spike relative to background), and `norm.isf(0.0)` (`criterion_
+sentence`'s own round-trip back to a displayable z, since `Candidate` has no
+dedicated z-score field) returns `inf` -- an honest "p=0" is a defensible
+statistical statement, but "z = inf" on a reviewer-facing card reads as a bug,
+not a genuinely infinite z-score. Flooring at the smallest representable
+positive float64 keeps `min_p` still-correctly the most extreme possible
+ranking value (bit-for-bit indistinguishable from `0.0` for every dedup/
+overlap/cap/sort comparison this module ever makes, all of which only compare
+`min_p` values against EACH OTHER, never against a hardcoded zero literal)
+while keeping `norm.isf` invertible (`norm.isf(_MIN_P_FLOOR) ~ 37.5`, a large
+but finite, honestly-displayable number)."""
+
+
+def _impulse_min_p(z_pair: float) -> float:
+    """`norm.sf(z_pair)`, floored at `_MIN_P_FLOOR` (module docstring above) --
+    the extremity value `build_impulse_pairs` assigns every impulse
+    `Candidate.min_p`."""
+    return max(float(norm.sf(z_pair)), _MIN_P_FLOOR)
+
+
 def build_impulse_pairs(
     session: str,
     gen_peaks: Sequence[tuple[datetime, float]],
@@ -925,7 +960,7 @@ def build_impulse_pairs(
             Candidate(
                 session=session, klass="impulse", start_utc=mid,
                 end_utc=mid + timedelta(seconds=impulse.FRAME_S),
-                duration_s=impulse.FRAME_S, min_p=float(norm.sf(z_pair)),
+                duration_s=impulse.FRAME_S, min_p=_impulse_min_p(z_pair),
                 state_name="n/a", near_transition=False, n_windows=1,
                 modality="impulse", regime=regime, alarms_path="",
             )
@@ -933,21 +968,21 @@ def build_impulse_pairs(
 
     peak_records: list[ImpulsePeakRecord] = []
     for gi, (t, z) in enumerate(gen_peaks):
-        ti = coincident_gen.get(gi)
-        paired_t = tur_peaks[ti][0] if ti is not None else None
+        matched_ti = coincident_gen.get(gi)
+        paired_t = tur_peaks[matched_ti][0] if matched_ti is not None else None
         peak_records.append(
             ImpulsePeakRecord(
                 session=session, stream="gen", t_utc=t, z=z,
-                coincident=ti is not None, paired_t_utc=paired_t,
+                coincident=matched_ti is not None, paired_t_utc=paired_t,
             )
         )
     for ti, (t, z) in enumerate(tur_peaks):
-        gi = coincident_tur.get(ti)
-        paired_t = gen_peaks[gi][0] if gi is not None else None
+        matched_gi = coincident_tur.get(ti)
+        paired_t = gen_peaks[matched_gi][0] if matched_gi is not None else None
         peak_records.append(
             ImpulsePeakRecord(
                 session=session, stream="tur", t_utc=t, z=z,
-                coincident=gi is not None, paired_t_utc=paired_t,
+                coincident=matched_gi is not None, paired_t_utc=paired_t,
             )
         )
     return candidates, peak_records
@@ -1085,6 +1120,15 @@ class SessionScada:
     power_mw: list[float]
     speed_rpm: list[float]
     flow_net_m3s: list[float]
+    ks_valve: list[float] = dataclasses.field(default_factory=list)
+    """Spherical inlet valve position (`rowii.scada.labels.GT_CHANNELS["ks_valve"]`,
+    raw `"1_KS Stellung"` units -- position/percentage-like, no independently
+    verified unit conversion in this codebase) -- the SCADA CONTEXT PANEL's 4th
+    mini-axis (v2 site redesign, review.html), alongside power/speed/flow. Defaults
+    to `[]` (an empty default, not a required constructor arg) so existing callers
+    that build a `SessionScada` without it -- e.g. `tests/test_candidate_kit.py`'s
+    own synthetic fixtures -- keep working unchanged; every REAL `SessionScada`
+    this module itself produces (`load_session_scada`) populates it for real."""
 
 
 def scada_majority_state(
@@ -1223,6 +1267,7 @@ def load_session_scada(index: RecordingIndex, session: str, cfg: Config) -> Sess
         power_mw=scada["power"].tolist(),
         speed_rpm=scada["speed"].tolist(),
         flow_net_m3s=flow_net.tolist(),
+        ks_valve=scada["ks_valve"].tolist(),
     )
 
 
@@ -1501,6 +1546,29 @@ def build_readout_series(
         asset_start_utc, n_seconds,
     )
     return power, speed
+
+
+def build_extended_readout_series(
+    session_scada: SessionScada, asset_start_utc: datetime, n_seconds: int
+) -> tuple[list[float | None], list[float | None], list[float | None], list[float | None]]:
+    """`build_readout_series`'s own `(power, speed)` pair, PLUS the same 1 Hz
+    resampling for `flow_net_m3s`/`ks_valve` (v2 site redesign, review.html's live
+    readout + SCADA mini-axes now cover 4 channels, module docstring build/1) -- a
+    separate function rather than widening `build_readout_series`' own return
+    shape, so every EXISTING caller/test of that 2-tuple function keeps working
+    unchanged."""
+    power, speed = build_readout_series(session_scada, asset_start_utc, n_seconds)
+    if not session_scada.has_scada:
+        return power, speed, [None] * n_seconds, [None] * n_seconds
+    flow = resample_channel_to_seconds(
+        session_scada.window_start_utc, session_scada.window_s, session_scada.flow_net_m3s,
+        asset_start_utc, n_seconds,
+    )
+    ks_valve = resample_channel_to_seconds(
+        session_scada.window_start_utc, session_scada.window_s, session_scada.ks_valve,
+        asset_start_utc, n_seconds,
+    ) if session_scada.ks_valve else [None] * n_seconds
+    return power, speed, flow, ks_valve
 
 
 # ---------------------------------------------------------------------------
@@ -1861,21 +1929,31 @@ class CandidateAssetResult:
     gen_flat_png: str
     tur_flat_png: str
     scada_png: str
-    """SCADA CONTEXT PANEL (Stefan's decision 2026-08-16): the combined strip
-    (power/speed/flow mini-axes, or the neutral no-Betriebsdaten placeholder) plus
-    the two-row state ribbon, one PNG per candidate -- `render_scada_strip_png`.
-    Unlike `gen_wav`/`tur_wav`/the four spectrogram PNGs above, this is NEVER
-    reused across a `build` re-run (`build_all`'s own docstring): it is
-    cheap-to-recompute from already-loaded SCADA/alarms data, never audio-derived,
-    so it is always freshly rendered alongside `candidates_meta.json`/`index.html`
-    themselves."""
+    """SCADA CONTEXT PANEL mini-axes (Stefan's decision 2026-08-16, extended for
+    the v2 site redesign): power/speed/flow/KS-valve, or the neutral
+    no-Betriebsdaten placeholder, plus one shared HH:MM:SS time axis --
+    `render_scada_strip_png`. The state ribbon is a SEPARATE HTML block now
+    (`ribbon_html` below), not part of this PNG. Unlike `gen_wav`/`tur_wav`/the
+    four spectrogram PNGs above, this is NEVER reused across a `build` re-run
+    (`build_all`'s own docstring): it is cheap-to-recompute from already-loaded
+    SCADA/alarms data, never audio-derived, so it is always freshly rendered
+    alongside `candidates_meta.json`/`index.html` themselves."""
     power_mw_1hz: list[float | None]
     speed_rpm_1hz: list[float | None]
-    """The LIVE READOUT's own 1 Hz `(power, speed)` series over the asset window
-    (`build_readout_series`) -- `None` entries (JSON `null`) where SCADA coverage
-    is missing, and BOTH lists empty when `n_seconds == 0` (never happens in
-    practice, `asset_duration_s` is always >= `ASSET_MIN_DURATION_S`) or
-    all-`None` for a `has_scada=False` session (270626-pu_ph_pu_ph_pu_ph-1)."""
+    flow_net_m3s_1hz: list[float | None]
+    ks_valve_1hz: list[float | None]
+    """The LIVE READOUT's own 1 Hz `(power, speed, flow, ks_valve)` series over the
+    asset window (`build_extended_readout_series`) -- `None` entries (JSON `null`)
+    where SCADA coverage is missing, and all four lists empty when `n_seconds ==
+    0` (never happens in practice, `asset_duration_s` is always >=
+    `ASSET_MIN_DURATION_S`) or all-`None` for a `has_scada=False` session
+    (270626-pu_ph_pu_ph_pu_ph-1)."""
+    ribbon_html: str
+    """`render_state_ribbon_html`'s own output for this candidate -- pre-rendered
+    server-side (Python knows each run's real pixel width from `duration_s`/
+    `ak._FLAT_PX_PER_S` at build time; no client-side re-computation needed).
+    Embedded directly into the card by `render_index_html`/`render_index_static_
+    html` alike."""
 
 
 @dataclass(frozen=True)
@@ -2044,31 +2122,35 @@ _SCADA_BG_HEX = "#f8f9fb"
 _SCADA_PLACEHOLDER_BG_HEX = "#eef0f4"
 _SCADA_PLACEHOLDER_TEXT = "No SCADA available for this day"
 
-_SCADA_MINI_AXIS_HEIGHT_PX = 54
-_SCADA_N_MINI_AXES = 3
-_SCADA_RIBBON_ROW_HEIGHT_PX = 16
-_SCADA_RIBBON_N_ROWS = 2
-_SCADA_STRIP_HEIGHT_PX = _SCADA_MINI_AXIS_HEIGHT_PX * _SCADA_N_MINI_AXES
-_SCADA_RIBBON_HEIGHT_PX = _SCADA_RIBBON_ROW_HEIGHT_PX * _SCADA_RIBBON_N_ROWS
-_SCADA_TOTAL_HEIGHT_PX = _SCADA_STRIP_HEIGHT_PX + _SCADA_RIBBON_HEIGHT_PX
+_SCADA_MINI_AXIS_HEIGHT_PX = 60
+_SCADA_N_MINI_AXES = 4
+_SCADA_TIME_AXIS_HEIGHT_PX = 16
+_SCADA_STRIP_HEIGHT_PX = (
+    _SCADA_MINI_AXIS_HEIGHT_PX * _SCADA_N_MINI_AXES + _SCADA_TIME_AXIS_HEIGHT_PX
+)
+_SCADA_TOTAL_HEIGHT_PX = _SCADA_STRIP_HEIGHT_PX
+"""v2 site redesign (review.html): the state ribbon is no longer part of this PNG
+at all (it needed in-band TEXT labels and a hover tooltip for narrow segments,
+neither of which a raster image can offer -- `render_state_ribbon_html` renders it
+as HTML instead, a sibling block in the card, module docstring build/2). This PNG
+is now the four mini-axes (power/speed/flow/KS-valve) PLUS one real HH:MM:SS UTC
+time axis along the bottom (task instruction: "real axes with units and
+gridlines... time axis as HH:MM:SS UTC")."""
 
 _SCADA_CHANNELS_META: tuple[tuple[str, str], ...] = (
     ("P [MW]", "#2563eb"),
     ("n [rpm]", "#059669"),
     ("Q [m3/s]", "#7c3aed"),
+    ("KS [pos]", "#b45309"),
 )
-"""`(small English axis label, line color)` for the three stacked mini-axes, in
-display order -- active power, shaft speed, net flow (`SessionScada.power_mw`/
-`speed_rpm`/`flow_net_m3s`, module docstring build/1). `P`/`n` match the LIVE
-READOUT's own variable names (module docstring build/3)."""
-
-
-def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
-    """`"#rrggbb"` -> `(r, g, b)` floats in `[0, 1]` -- `matplotlib.imshow`'s own
-    expected float-RGB range, for the state-ribbon raster (`_draw_state_ribbon`)."""
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
-    return r, g, b
+"""`(small English axis label, line color)` for the four stacked mini-axes, in
+display order -- active power, shaft speed, net flow, spherical inlet (KS) valve
+position (`SessionScada.power_mw`/`speed_rpm`/`flow_net_m3s`/`ks_valve`, module
+docstring build/1). `P`/`n` match the LIVE READOUT's own variable names (module
+docstring build/3). KS unit is the raw Betriebsdaten channel's own "Stellung"
+(position) reading -- no independently verified physical-percentage conversion
+exists in this codebase, so the axis is labeled by its raw unit, not assumed to
+be "%"."""
 
 
 def _draw_scada_mini_axis(
@@ -2082,20 +2164,22 @@ def _draw_scada_mini_axis(
     span_s: tuple[float, float],
     marker_s: float,
 ) -> None:
-    """One power/speed/flow mini-axis: full horizontal bleed (the caller's
-    `fig.add_axes` rect already spans x=[0,1] of the figure) so the x-axis stays
-    pixel-linear with the flat spectrogram -- no matplotlib x-margin, no x-ticks.
-    "axis labels small" (module docstring build/1) is a small in-plot text label
-    (*label*) rather than a conventional matplotlib y-axis label, which would
-    need left-margin space that breaks the pixel-linear width contract. A zero
-    reference line is drawn when 0 falls within the (padded) value range -- power
-    and speed are both signed (turbine positive / pump negative, `SessionScada`'s
-    own docstring)."""
+    """One power/speed/flow/KS-valve mini-axis: full horizontal bleed (the
+    caller's `fig.add_axes` rect already spans x=[0,1] of the figure) so the
+    x-axis stays pixel-linear with the flat spectrogram -- no matplotlib
+    x-ticks (the SHARED bottom time axis, `_draw_scada_time_axis`, carries the
+    only x-tick labels, once for the whole stack). Each axis DOES now carry
+    real y-tick labels plus light horizontal gridlines at those same values
+    (task instruction: "real axes with units and gridlines") -- 3 ticks
+    (min/mid/max of the padded range), small enough font to fit the compact
+    mini-axis height without crowding the trace itself. A zero reference line
+    is drawn when 0 falls within the (padded) value range -- power and speed
+    are both signed (turbine positive / pump negative, `SessionScada`'s own
+    docstring)."""
     ax.set_facecolor("none")
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.set_xticks([])
-    ax.set_yticks([])
     ax.set_xlim(0.0, duration_s)
     ax.margins(x=0)
 
@@ -2104,10 +2188,15 @@ def _draw_scada_mini_axis(
         lo, hi = float(np.min(finite)), float(np.max(finite))
         pad = max((hi - lo) * 0.15, 1e-6)
         ax.set_ylim(lo - pad, hi + pad)
+        y_ticks = sorted({round(lo, 3), round((lo + hi) / 2, 3), round(hi, 3)})
+        ax.set_yticks(y_ticks)
+        ax.tick_params(axis="y", labelsize=5.5, length=2, pad=1, colors="#6b7280")
+        ax.yaxis.grid(True, color="#d1d5db", linewidth=0.5, zorder=0)
         if lo - pad <= 0.0 <= hi + pad:
             ax.axhline(0.0, color="#9ca3af", linewidth=0.5, zorder=1)
         ax.plot(xs, ys, color=color, linewidth=1.1, zorder=3)
     else:
+        ax.set_yticks([])
         ax.set_ylim(0.0, 1.0)
         ax.text(
             0.5, 0.5, "no data", transform=ax.transAxes, ha="center", va="center",
@@ -2118,60 +2207,109 @@ def _draw_scada_mini_axis(
     ax.axvspan(span_start_s, span_end_s, color=_SCADA_ACCENT_HEX, alpha=0.15, zorder=0, linewidth=0)
     ax.axvline(marker_s, color=_SCADA_MARKER_HEX, linewidth=1.2, linestyle="--", zorder=4)
     ax.text(
-        0.006, 0.9, label, transform=ax.transAxes, fontsize=7, va="top", ha="left",
-        color="#374151", zorder=5,
+        0.006, 0.92, label, transform=ax.transAxes, fontsize=7, va="top", ha="left",
+        color="#374151", zorder=5, fontweight="bold",
     )
 
 
-def _draw_state_ribbon(
-    ax: Any,
-    scada_row: Sequence[str],
-    detected_row: Sequence[str],
-    *,
-    duration_s: float,
-    span_s: tuple[float, float],
-    marker_s: float,
+def _draw_scada_time_axis(
+    ax: Any, *, asset_start_utc: datetime, duration_s: float, span_s: tuple[float, float]
 ) -> None:
-    """The two-row per-second state ribbon (module docstring build/2): row 0 (top)
-    is the SCADA state, row 1 (bottom) the detected state, each per-second cell
-    colored by `state_color` (the ONE shared legend, `STATE_LEGEND`). Rendered as
-    a small RGB raster (`imshow`, `interpolation="nearest"` for crisp per-second
-    cell edges) stretched across `extent=(0, duration_s, 0, 2)` -- full
-    horizontal bleed, the SAME pixel-linear x-mapping as the mini-axes above and
-    the flat spectrogram."""
-    n = max(len(scada_row), len(detected_row), 1)
-    rgb = np.zeros((2, n, 3), dtype=np.float64)
-    for col in range(n):
-        top = scada_row[col] if col < len(scada_row) else "unknown"
-        bottom = detected_row[col] if col < len(detected_row) else "unknown"
-        rgb[0, col] = _hex_to_rgb01(state_color(top))
-        rgb[1, col] = _hex_to_rgb01(state_color(bottom))
-
-    ax.set_xlim(0.0, duration_s)
-    ax.set_ylim(0.0, 2.0)
-    ax.set_xticks([])
-    ax.set_yticks([])
+    """The mini-axis stack's SHARED bottom time axis: real HH:MM:SS UTC tick
+    labels (task instruction) at ~5 evenly spaced points, full horizontal
+    bleed (same pixel-linear x-mapping as every mini-axis and the flat
+    spectrogram above it). The candidate's own span is shaded here too, so the
+    shading reads as one continuous column down the whole panel."""
+    ax.set_facecolor("none")
     for spine in ax.spines.values():
         spine.set_visible(False)
+    ax.set_yticks([])
+    ax.set_xlim(0.0, duration_s)
+    ax.set_ylim(0.0, 1.0)
     ax.margins(x=0)
-    ax.imshow(
-        rgb, extent=(0.0, duration_s, 0.0, 2.0), origin="upper", aspect="auto",
-        interpolation="nearest", zorder=0,
-    )
-    ax.axhline(1.0, color="white", linewidth=0.6, zorder=1)
+
     span_start_s, span_end_s = span_s
-    ax.axvspan(
-        span_start_s, span_end_s, fill=False, edgecolor=_SCADA_ACCENT_HEX,
-        linewidth=1.2, zorder=2,
-    )
-    ax.axvline(marker_s, color=_SCADA_MARKER_HEX, linewidth=1.2, linestyle="--", zorder=3)
-    ax.text(
-        0.006, 0.97, "SCADA", transform=ax.transAxes, fontsize=6.5, va="top", ha="left",
-        color="white", zorder=4,
-    )
-    ax.text(
-        0.006, 0.47, "Detected", transform=ax.transAxes, fontsize=6.5, va="top", ha="left",
-        color="white", zorder=4,
+    ax.axvspan(span_start_s, span_end_s, color=_SCADA_ACCENT_HEX, alpha=0.15, zorder=0, linewidth=0)
+
+    n_ticks = max(2, min(6, int(duration_s // 10) + 1))
+    tick_s = np.linspace(0.0, duration_s, n_ticks)
+    ax.set_xticks(tick_s)
+    labels = [(asset_start_utc + timedelta(seconds=float(t))).strftime("%H:%M:%S") for t in tick_s]
+    ax.set_xticklabels(labels, fontsize=5.5, color="#374151")
+    ax.tick_params(axis="x", length=2, pad=1)
+    for t in tick_s:
+        ax.axvline(float(t), color="#e5e7eb", linewidth=0.5, zorder=0)
+
+
+_RIBBON_LABEL_MIN_PX = 34
+"""Minimum rendered pixel width a contiguous same-state run needs before
+`render_state_ribbon_html` prints its name IN the segment; a narrower run
+still gets the same color and a native `title=` tooltip (task instruction:
+"segment shows its state name when wide enough, else tooltip"), just no
+in-band text (it would overflow/be unreadable)."""
+
+
+def _ribbon_runs(row: Sequence[str]) -> list[tuple[str, int, int]]:
+    """*row* (one per-second state label) collapsed into `(state, start_idx,
+    end_idx)` contiguous runs, `end_idx` exclusive -- the unit `render_state_
+    ribbon_html` draws one `<div>` segment per run from, rather than one per
+    second (a second-by-second ribbon of unlabeled 1px cells cannot carry
+    in-band text at all)."""
+    runs: list[tuple[str, int, int]] = []
+    start = 0
+    for i in range(1, len(row) + 1):
+        if i == len(row) or row[i] != row[start]:
+            runs.append((row[start], start, i))
+            start = i
+    return runs
+
+
+def render_state_ribbon_html(
+    *, scada_row: Sequence[str], detected_row: Sequence[str], duration_s: float, px_per_s: float
+) -> str:
+    """The STATE RIBBON as HTML (v2 site redesign, review.html) -- two rows
+    (SCADA state on top, detector state below) of colored, contiguous-run
+    segments spanning the SAME pixel width as the spectrogram/SCADA-mini-axes
+    image above it (`px_per_s` -- `ak._FLAT_PX_PER_S`), so a shared playhead
+    line lines up across all three. Replaces the old PNG raster
+    (`_draw_state_ribbon`, removed): a raster cannot show in-band text for a
+    wide segment or a native hover tooltip for a narrow one, both required
+    (task instruction). A trailing row caption states the per-cell resolution
+    and which row is which, once, rather than repeating it per segment."""
+    n = max(len(scada_row), len(detected_row), 1)
+    total_px = max(1.0, duration_s * px_per_s)
+
+    def _row_html(row: Sequence[str], row_class: str) -> str:
+        padded = list(row) + ["unknown"] * (n - len(row))
+        parts = [f'<div class="ribbon-row {row_class}">']
+        for state, start, end in _ribbon_runs(padded):
+            width_px = (end - start) * px_per_s
+            left_pct = 100.0 * start / n
+            width_pct = 100.0 * (end - start) / n
+            color = state_color(state)
+            display_name = state if state != "unknown" else "unknown"
+            label_html = (
+                f'<span class="ribbon-seg-label">{html.escape(display_name)}</span>'
+                if width_px >= _RIBBON_LABEL_MIN_PX
+                else ""
+            )
+            parts.append(
+                f'<div class="ribbon-seg" style="left:{left_pct:.3f}%;width:{width_pct:.3f}%;'
+                f'background:{color}" title="{html.escape(display_name)} ({end - start}s)">'
+                f"{label_html}</div>"
+            )
+        parts.append("</div>")
+        return "".join(parts)
+
+    return (
+        f'<div class="state-ribbon" style="width:{total_px:.0f}px">'
+        f"{_row_html(scada_row, 'scada-row')}"
+        f"{_row_html(detected_row, 'detected-row')}"
+        '<div class="ribbon-playhead"></div>'
+        "</div>"
+        '<div class="ribbon-caption">SCADA (rule-based, top) vs. detector '
+        "(unsupervised, bottom) &middot; 1 cell = 1 s &middot; hover a narrow "
+        "segment for its name</div>"
     )
 
 
@@ -2181,27 +2319,25 @@ def render_scada_strip_png(
     candidate: Candidate,
     asset_start_utc: datetime,
     asset_duration_s: float,
-    n_seconds: int,
     session_scada: SessionScada,
-    detected_window_start_utc: Sequence[datetime],
-    detected_window_s: float,
-    detected_states: Sequence[str],
 ) -> None:
-    """The SCADA CONTEXT PANEL's single combined PNG for one candidate (Stefan's
-    decision 2026-08-16, module docstring build/1-2): three stacked mini-axes
-    (active power, shaft speed, net flow) OR the neutral no-Betriebsdaten
-    placeholder (`session_scada.has_scada is False`, e.g.
-    `270626-pu_ph_pu_ph_pu_ph-1`), followed by a two-row per-second state ribbon
-    (SCADA state, detected state) -- ONE image so a single overlay canvas
-    (index.html's own JS) can draw ONE playhead line through both at once.
+    """The SCADA CONTEXT PANEL's mini-axes PNG for one candidate (Stefan's
+    decision 2026-08-16, module docstring build/1, extended for the v2 site
+    redesign): four stacked mini-axes (active power, shaft speed, net flow,
+    KS-valve position) with real y-tick gridlines, OR the neutral
+    no-Betriebsdaten placeholder (`session_scada.has_scada is False`, e.g.
+    `270626-pu_ph_pu_ph_pu_ph-1`), followed by one shared HH:MM:SS UTC time
+    axis. The state ribbon is NO LONGER part of this image -- `render_state_
+    ribbon_html`'s own docstring explains why (in-band text + hover tooltip,
+    neither possible in a raster).
 
     EXACTLY `ak.flat_spectrogram_width_px(asset_duration_s)` pixels wide -- the
     SAME `ak._FLAT_PX_PER_S` linear px-per-second mapping as `gen_flat_png`/
     `tur_flat_png` (both rendered over the SAME *asset_duration_s*), so the
-    playhead stays in sync across the spectrogram lanes and this strip. The
-    candidate's own `[start_utc, end_utc)` span is shaded and its start marked
-    (dashed) on every mini-axis and the ribbon alike, in the same colors
-    `_CANDIDATE_CSS` already uses for `--accent`/`--err`.
+    playhead stays in sync across the spectrogram lanes, this strip, and the
+    (separately rendered) state ribbon. The candidate's own `[start_utc,
+    end_utc)` span is shaded and its start marked (dashed) on every mini-axis,
+    in the same colors `_CANDIDATE_CSS` already uses for `--accent`/`--err`.
     """
     width_px = max(1, ak.flat_spectrogram_width_px(asset_duration_s))
     asset_end_utc = asset_start_utc + timedelta(seconds=asset_duration_s)
@@ -2215,31 +2351,35 @@ def render_scada_strip_png(
     fig = plt.figure(figsize=(width_px / 100, _SCADA_TOTAL_HEIGHT_PX / 100), dpi=100)
     fig.patch.set_facecolor(_SCADA_BG_HEX)
 
-    ribbon_frac = _SCADA_RIBBON_HEIGHT_PX / _SCADA_TOTAL_HEIGHT_PX
-    strip_frac = 1.0 - ribbon_frac
+    time_frac = _SCADA_TIME_AXIS_HEIGHT_PX / _SCADA_TOTAL_HEIGHT_PX
+    strip_frac = 1.0 - time_frac
 
     if session_scada.has_scada:
         mini_frac = strip_frac / _SCADA_N_MINI_AXES
         channel_values = (
             session_scada.power_mw, session_scada.speed_rpm, session_scada.flow_net_m3s,
+            session_scada.ks_valve,
         )
         for i, ((label, color), values) in enumerate(
             zip(_SCADA_CHANNELS_META, channel_values, strict=True)
         ):
-            y0 = ribbon_frac + strip_frac - (i + 1) * mini_frac
+            y0 = time_frac + strip_frac - (i + 1) * mini_frac
             ax = fig.add_axes((0.0, y0, 1.0, mini_frac))
-            starts, vals = slice_window_series(
-                session_scada.window_start_utc, session_scada.window_s, values,
-                asset_start_utc, asset_end_utc,
-            )
-            xs = np.array([(s - asset_start_utc).total_seconds() for s in starts])
-            ys = np.array(vals, dtype=np.float64)
+            if values:
+                starts, vals = slice_window_series(
+                    session_scada.window_start_utc, session_scada.window_s, values,
+                    asset_start_utc, asset_end_utc,
+                )
+                xs = np.array([(s - asset_start_utc).total_seconds() for s in starts])
+                ys = np.array(vals, dtype=np.float64)
+            else:
+                xs, ys = np.array([]), np.array([])
             _draw_scada_mini_axis(
                 ax, xs, ys, duration_s=asset_duration_s, color=color, label=label,
                 span_s=span_s, marker_s=marker_s,
             )
     else:
-        ax = fig.add_axes((0.0, ribbon_frac, 1.0, strip_frac))
+        ax = fig.add_axes((0.0, time_frac, 1.0, strip_frac))
         ax.set_xlim(0.0, asset_duration_s)
         ax.set_ylim(0.0, 1.0)
         ax.axis("off")
@@ -2249,17 +2389,9 @@ def render_scada_strip_png(
             ha="center", va="center", fontsize=9, color="#6b7280",
         )
 
-    ribbon_ax = fig.add_axes((0.0, 0.0, 1.0, ribbon_frac))
-    scada_row = resample_states_to_seconds(
-        session_scada.window_start_utc, session_scada.window_s, session_scada.state,
-        asset_start_utc, n_seconds,
-    )
-    detected_row = resample_states_to_seconds(
-        detected_window_start_utc, detected_window_s, detected_states, asset_start_utc, n_seconds,
-    )
-    _draw_state_ribbon(
-        ribbon_ax, scada_row, detected_row, duration_s=asset_duration_s, span_s=span_s,
-        marker_s=marker_s,
+    time_ax = fig.add_axes((0.0, 0.0, 1.0, time_frac))
+    _draw_scada_time_axis(
+        time_ax, asset_start_utc=asset_start_utc, duration_s=asset_duration_s, span_s=span_s
     )
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2283,6 +2415,8 @@ def _asset_result_to_meta(r: CandidateAssetResult) -> dict[str, object]:
         "gen_flat_png": r.gen_flat_png, "tur_flat_png": r.tur_flat_png,
         "scada_png": r.scada_png,
         "power_mw_1hz": r.power_mw_1hz, "speed_rpm_1hz": r.speed_rpm_1hz,
+        "flow_net_m3s_1hz": r.flow_net_m3s_1hz, "ks_valve_1hz": r.ks_valve_1hz,
+        "ribbon_html": r.ribbon_html,
     }
 
 
@@ -2314,14 +2448,31 @@ def _load_detected_state_series(path: Path) -> tuple[list[datetime], list[str]]:
     return starts, states
 
 
-def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[CandidateAssetResult]:
+def build_all(
+    cfg: Config,
+    candidates_csv: Path,
+    out_dir: Path,
+    *,
+    html_out_path: Path | None = None,
+    static_html_out_path: Path | None = None,
+    asset_prefix: str = "",
+) -> list[CandidateAssetResult]:
     """Render (or reuse, `_reuse_existing_assets`) every candidate's WAV/spectrogram
     assets, ALWAYS (re)render its SCADA strip PNG (`render_scada_strip_png`) and
     1 Hz live-readout series (`build_readout_series`), then (re)write `candidates_
-    meta.json`/`index.html` -- the SCADA context panel is cheap-to-recompute,
-    never audio-derived (`CandidateAssetResult.scada_png`'s own docstring), so it
-    is never gated behind the WAV/spectrogram reuse check, mirroring `scada_state`/
-    `mode_mismatch`/`criterion_text`'s own pre-existing "always fresh" treatment.
+    meta.json`/`index.html`/`index_static.html` -- the SCADA context panel is
+    cheap-to-recompute, never audio-derived (`CandidateAssetResult.scada_png`'s
+    own docstring), so it is never gated behind the WAV/spectrogram reuse check,
+    mirroring `scada_state`/`mode_mismatch`/`criterion_text`'s own pre-existing
+    "always fresh" treatment.
+
+    `html_out_path`/`static_html_out_path`/`asset_prefix` default to `None`/`None`/
+    `""` -- i.e. write `index.html`/`index_static.html` into `out_dir` itself with
+    unprefixed relative asset paths, EXACTLY today's existing `results/
+    candidate-kit/` in-place build. Passing them (`scripts/publish_review_site.py`)
+    renders the SAME assets into `out_dir` as always, but the two HTML files
+    elsewhere (e.g. `docs/site/review.html`) with `asset_prefix`-qualified paths
+    pointing back at a COPY of `out_dir` published alongside them.
 
     `discover(cfg.data_root)` is no longer deferred (unlike before the SCADA
     context panel existed): every session's `SessionScada` (`load_session_scada`,
@@ -2373,11 +2524,23 @@ def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[Candidat
         scada_png_rel = f"{c.session}/{c.candidate_id}_scada.png"
         render_scada_strip_png(
             out_dir / scada_png_rel, candidate=c, asset_start_utc=audio.asset_start_utc,
-            asset_duration_s=audio.asset_duration_s, n_seconds=n_seconds,
-            session_scada=session_scada, detected_window_start_utc=detected_starts,
-            detected_window_s=cfg.window.window_s, detected_states=detected_states,
+            asset_duration_s=audio.asset_duration_s, session_scada=session_scada,
         )
-        power_1hz, speed_1hz = build_readout_series(session_scada, audio.asset_start_utc, n_seconds)
+        power_1hz, speed_1hz, flow_1hz, ks_valve_1hz = build_extended_readout_series(
+            session_scada, audio.asset_start_utc, n_seconds
+        )
+
+        scada_row = resample_states_to_seconds(
+            session_scada.window_start_utc, session_scada.window_s, session_scada.state,
+            audio.asset_start_utc, n_seconds,
+        )
+        detected_row = resample_states_to_seconds(
+            detected_starts, cfg.window.window_s, detected_states, audio.asset_start_utc, n_seconds,
+        )
+        ribbon_html = render_state_ribbon_html(
+            scada_row=scada_row, detected_row=detected_row, duration_s=audio.asset_duration_s,
+            px_per_s=ak._FLAT_PX_PER_S,
+        )
 
         results.append(
             CandidateAssetResult(
@@ -2387,6 +2550,7 @@ def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[Candidat
                 gen_png=audio.gen_png, tur_png=audio.tur_png,
                 gen_flat_png=audio.gen_flat_png, tur_flat_png=audio.tur_flat_png,
                 scada_png=scada_png_rel, power_mw_1hz=power_1hz, speed_rpm_1hz=speed_1hz,
+                flow_net_m3s_1hz=flow_1hz, ks_valve_1hz=ks_valve_1hz, ribbon_html=ribbon_html,
             )
         )
 
@@ -2396,7 +2560,12 @@ def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[Candidat
         n_reused, len(candidates), len(candidates) - n_reused, len(candidates),
     )
     write_candidates_meta_json(results, out_dir)
-    render_index_html(results, out_dir)
+    render_index_html(
+        results, out_dir, html_out_path=html_out_path, asset_prefix=asset_prefix
+    )
+    render_index_static_html(
+        results, out_dir, html_out_path=static_html_out_path, asset_prefix=asset_prefix
+    )
     return results
 
 
@@ -2420,100 +2589,125 @@ _SESSION_LABEL: dict[str, str] = {
 
 _CANDIDATE_CSS = """
 :root {
-  color-scheme: light dark;
-  --border: #8888;
-  --muted: #808080;
-  --accent: #3b82f6;
-  --playhead: #ef4444;
-  --bg-soft: #80808014;
-  --bg-soft-2: #80808022;
-  --ok: #16a34a;
-  --err: #dc2626;
-  --sustained: #f59e0b;
-  --transient: #a855f7;
-  --impulse: #0891b2;
-  --note-bg: #0891b21a;
-  --note-border: #0891b266;
+  color-scheme: light;
+  --paper: #eceef0; --panel: #ffffff; --panel-2: #f7f8f9;
+  --ink: #1f2a37; --dim: #5b6b7c; --hair: #c7cdd4; --hair-2: #dde1e6;
+  --live: #0f766e; --alarm: #b93815; --warn: #a16207;
+  --sustained: #a16207; --transient: #b93815; --impulse: #0f766e;
+  --note-bg: #f7f8f9; --note-border: #0f766e;
+  --font-ui: "Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif;
+  --font-mono: "SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --radius: 8px; --radius-lg: 12px;
 }
 * { box-sizing: border-box; }
-body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-       margin: 2rem auto; max-width: 1400px; padding: 0 1rem; line-height: 1.5; }
-h1 { font-size: 1.5rem; }
-h2 { font-size: 1.2rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border);
+html, body { height: 100%; }
+body { font-family: var(--font-ui); margin: 0; padding: 0; line-height: 1.5;
+       background: var(--paper); color: var(--ink); }
+main.review-page { max-width: 1320px; margin: 0 auto; padding: 22px 22px 60px; }
+h1 { font-size: 22px; margin: 4px 0 4px; }
+h2 { font-size: 15px; margin-top: 2.2rem; border-bottom: 1px solid var(--hair);
      padding-bottom: 0.3rem; }
-code { background: var(--bg-soft-2); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.92em; }
-.instructions { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px;
-                padding: 0.8rem 1.2rem; margin-bottom: 1.5rem; font-size: 0.93rem; }
+code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em 0.3em;
+       border-radius: 3px; font-size: 0.92em; border: 1px solid var(--hair-2); }
+.page-lede { color: var(--dim); font-size: 13.5px; max-width: 90ch; margin: 0 0 14px; }
+.date-header { font-family: var(--font-mono); font-size: 12px; color: var(--dim);
+               margin: 0 0 12px; }
+.instructions { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+                padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .instructions p { margin: 0.4em 0; }
-.legend { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px;
-          padding: 0.8rem 1.2rem; margin-bottom: 1.5rem; font-size: 0.93rem; }
-.legend h2 { margin: 0 0 0.5rem; border: none; padding: 0; font-size: 1.05rem; }
+.legend { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+          padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
+.legend h2 { margin: 0 0 0.5rem; border: none; padding: 0; font-size: 14px; }
 .legend p { margin: 0.5em 0; }
-.legend .class-term { font-weight: 600; }
-.hint { color: var(--muted); font-size: 0.85rem; margin: 0.3em 0; }
+.legend .class-term { font-weight: 700; }
+.hint { color: var(--dim); font-size: 0.85rem; margin: 0.3em 0; }
 .top-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
 .session-section { margin-top: 2rem; }
 .session-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
-.session-status { color: var(--muted); font-size: 0.85rem; }
+.session-status { color: var(--dim); font-size: 0.85rem; }
 
-.candidate-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1.1rem;
-                   margin-bottom: 1.2rem; outline-offset: 2px; }
+.candidate-card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+                   padding: 0.9rem 1.1rem; margin-bottom: 1.2rem; outline-offset: 2px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline;
              gap: 1rem; flex-wrap: wrap; }
-.card-title { font-weight: 600; }
-.class-badge { border-radius: 10px; padding: 0.05rem 0.55rem; font-size: 0.78rem; color: white; }
-.class-badge.sustained { background: var(--sustained); }
-.class-badge.transient { background: var(--transient); }
-.class-badge.impulse { background: var(--impulse); }
-.near-transition-badge { border: 1px solid var(--err); color: var(--err); border-radius: 10px;
-                          padding: 0.05rem 0.55rem; font-size: 0.78rem; }
-.meta-line { color: var(--muted); font-size: 0.85rem; margin: 0.3em 0; }
-.meta-line b { color: inherit; font-weight: 600; }
+.card-title { font-weight: 700; font-family: var(--font-mono); font-size: 0.9rem; }
+.class-badge { border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.72rem; font-weight: 700;
+                border: 1px solid; background: var(--panel-2); }
+.class-badge.sustained { color: var(--sustained); border-color: var(--sustained); }
+.class-badge.transient { color: var(--transient); border-color: var(--transient); }
+.class-badge.impulse { color: var(--impulse); border-color: var(--impulse); }
+.near-transition-badge { border: 1px solid var(--warn); color: var(--warn); border-radius: 999px;
+                          padding: 0.05rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
+.meta-line { color: var(--dim); font-size: 0.85rem; margin: 0.3em 0; }
+.meta-line b { color: var(--ink); font-weight: 700; }
 
 .mode-row { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap;
             margin: 0.6rem 0 0.15rem; }
-.mode-scada { font-size: 1rem; font-weight: 700; }
-.mode-detector { font-size: 0.85rem; color: var(--muted); }
-.mismatch-badge { background: var(--err); color: white; border-radius: 10px;
-                   padding: 0.05rem 0.55rem; font-size: 0.78rem; }
-.scada-transition-badge { border: 1px solid var(--muted); color: var(--muted); border-radius: 10px;
-                           padding: 0.05rem 0.55rem; font-size: 0.78rem; }
-.in-sample-badge { border: 1px solid var(--muted); color: var(--muted); border-radius: 10px;
-                    padding: 0.05rem 0.55rem; font-size: 0.78rem; }
-.criterion-line { color: var(--muted); font-size: 0.85rem; margin: 0.2em 0 0.6em;
-                   font-style: italic; }
-.context-note { background: var(--note-bg); border: 1px solid var(--note-border);
+.mode-scada { font-size: 0.95rem; font-weight: 700; }
+.mode-detector { font-size: 0.85rem; color: var(--dim); }
+.mismatch-badge { background: var(--warn); color: white; border-radius: 999px;
+                   padding: 0.05rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
+.scada-transition-badge { border: 1px solid var(--hair); color: var(--dim); border-radius: 999px;
+                           padding: 0.05rem 0.55rem; font-size: 0.72rem; }
+.in-sample-badge { border: 1px solid var(--hair); color: var(--dim); border-radius: 999px;
+                    padding: 0.05rem 0.55rem; font-size: 0.72rem; }
+.criterion-line { color: var(--dim); font-size: 0.85rem; margin: 0.2em 0 0.6em; }
+.context-note { background: var(--note-bg); border-left: 3px solid var(--note-border);
                   border-radius: 6px; padding: 0.4rem 0.7rem; font-size: 0.83rem;
                   margin: 0.2em 0 0.6em; }
-.context-note b { color: var(--impulse); }
+.context-note b { color: var(--live); }
 
 .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.6rem 0; }
 @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
-.lane { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem; outline-offset: 2px; }
-.lane:focus, .lane:focus-visible { outline: 2px solid var(--accent); }
-.lane-title { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
-.spectro-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; }
+.lane { border: 1px solid var(--hair); border-radius: var(--radius); padding: 0.5rem; outline-offset: 2px; }
+.lane:focus, .lane:focus-visible { outline: 2px solid var(--live); }
+.lane-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.3rem; }
+.spectro-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; }
 .spectro-wrapper { position: relative; display: block; }
 .spectro-img { display: block; width: 100%; height: 100%; }
 .overlay-canvas { position: absolute; top: 0; left: 0; cursor: crosshair; display: block; }
 audio.lane-audio { width: 100%; margin: 0.4rem 0; }
-.lane-time { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
-             font-size: 0.82rem; color: var(--muted); }
+.lane-time { font-variant-numeric: tabular-nums; font-family: var(--font-mono);
+             font-size: 0.82rem; color: var(--dim); }
 
 .scada-block { margin: 0.7rem 0 0.3rem; }
-.scada-title { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
-.scada-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 4px; }
+.scada-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.3rem; }
+.scada-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; }
 .scada-wrapper { position: relative; display: block; }
 .scada-img { display: block; width: 100%; height: 100%; }
 .scada-overlay-canvas { position: absolute; top: 0; left: 0; display: block; pointer-events: none; }
-.scada-readout { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace;
-                  font-size: 0.82rem; color: var(--muted); margin-top: 0.3rem; }
-.scada-readout b { color: inherit; font-weight: 600; }
+.scada-readout { font-variant-numeric: tabular-nums; font-family: var(--font-mono);
+                  font-size: 0.82rem; color: var(--dim); margin-top: 0.3rem; }
+.scada-readout b { color: var(--ink); font-weight: 700; }
+
+/* -- state ribbon (HTML, not raster: in-band labels + native title tooltip) -- */
+.ribbon-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; margin-top: 0.4rem; }
+.state-ribbon { position: relative; }
+.ribbon-row { position: relative; height: 16px; }
+.ribbon-seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-right: 1px solid rgba(255,255,255,.5); }
+.ribbon-seg-label { display: block; font-size: 9px; line-height: 16px; color: #fff; padding-left: 3px;
+                     white-space: nowrap; font-weight: 700; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.ribbon-playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--alarm);
+                    pointer-events: none; }
+.ribbon-caption { font-size: 10.5px; color: var(--dim); margin: 3px 0 0; }
+
+/* -- reviewer time marks -- */
+.marks-panel { margin-top: 0.5rem; }
+.marks-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.3rem; }
+.marks-hint { font-size: 0.76rem; color: var(--dim); margin: 0 0 0.35rem; }
+.marks-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mark-chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono);
+             font-size: 0.74rem; background: var(--panel-2); border: 1px solid var(--alarm);
+             color: var(--alarm); border-radius: 999px; padding: 2px 4px 2px 9px; }
+.mark-chip button { border: none; background: none; color: inherit; cursor: pointer; font-size: 0.85rem;
+                     line-height: 1; padding: 0 5px; border-radius: 50%; }
+.mark-chip button:hover { background: var(--alarm); color: white; }
+.marks-empty { color: var(--dim); font-size: 0.76rem; }
 
 .state-legend { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-top: 0.5rem;
                  font-size: 0.82rem; }
 .state-legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
-.state-swatch { width: 0.85em; height: 0.85em; border-radius: 3px; border: 1px solid var(--border);
+.state-swatch { width: 0.85em; height: 0.85em; border-radius: 3px; border: 1px solid var(--hair);
                  display: inline-block; flex: none; }
 
 .assessment-row { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;
@@ -2522,15 +2716,18 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .assessment-options label { display: inline-flex; align-items: center; gap: 0.3rem;
                              cursor: pointer; }
 .note-label { flex: 1 1 260px; display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;
-              color: var(--muted); }
-.note-input { flex: 1; padding: 0.25rem 0.5rem; border: 1px solid var(--border);
-              border-radius: 4px; background: transparent; color: inherit; font-size: 0.85rem; }
+              color: var(--dim); }
+.note-input { flex: 1; padding: 0.25rem 0.5rem; border: 1px solid var(--hair);
+              border-radius: 4px; background: var(--panel); color: var(--ink); font-size: 0.85rem; }
 
 .card-footer { display: flex; justify-content: flex-end; }
-.save-indicator { color: var(--muted); font-size: 0.78rem; }
-.save-indicator.save-error { color: var(--err); }
+.save-indicator { color: var(--dim); font-size: 0.78rem; }
+.save-indicator.save-error { color: var(--alarm); }
 
 button, input, select { font: inherit; }
+.btn { font-weight: 700; cursor: pointer; border: 1px solid var(--hair); background: var(--panel);
+       color: var(--ink); border-radius: 6px; padding: 7px 12px; }
+.btn:hover { background: var(--panel-2); }
 """
 
 _CANDIDATE_LEGEND_HTML = """<section class="legend">
@@ -2602,6 +2799,11 @@ _CANDIDATE_INSTRUCTIONS_HTML = """<section class="instructions">
 position and continues playback from there; the space bar plays/pauses the
 respective lane (the lane must be focused, e.g. after a click). Two independent
 lanes per candidate (generator/turbine microphone).</p>
+<p><strong>Flag a moment:</strong> <kbd>Shift</kbd>-click a spectrogram to drop a
+red time mark at that exact position (in addition to seeking there) &ndash;
+useful for pointing at the specific instant worth a second listen. Marks appear
+as removable chips under the lanes, persist locally, and are included in the CSV
+export as a dedicated column.</p>
 <p><strong>Assess:</strong> choose one assessment per candidate (plausible
 anomaly / operational-explained / artifact-sensor / unclear) and optionally enter a note
 &ndash; saved locally as you go (shown as &ldquo;saved&rdquo;),
@@ -2639,7 +2841,7 @@ var ARROW_STEP_S = 0.5;
 var ARROW_STEP_FINE_S = 0.05;
 var EXPORT_CSV_HEADER = [
   "session", "candidate_id", "class", "start_utc", "duration_s", "min_p", "state_name",
-  "near_transition", "scada_state", "scada_transition", "assessment", "note"
+  "near_transition", "scada_state", "scada_transition", "assessment", "note", "marks_offsets_s"
 ];
 
 var metaEl = document.getElementById("candidates-meta-data");
@@ -2656,7 +2858,7 @@ function storageKey(candidateId) {
 }
 
 function defaultState() {
-  return { assessment: "", note: "" };
+  return { assessment: "", note: "", marks: [] };
 }
 
 function loadState(candidateId) {
@@ -2669,10 +2871,14 @@ function loadState(candidateId) {
   if (!raw) return defaultState();
   try {
     var parsed = JSON.parse(raw);
+    var marks = Array.isArray(parsed.marks)
+      ? parsed.marks.filter(function (v) { return typeof v === "number" && isFinite(v); })
+      : [];
     return {
       assessment: typeof parsed.assessment === "string" ? parsed.assessment : "",
       note: typeof parsed.notes === "string" ? parsed.notes
           : (typeof parsed.note === "string" ? parsed.note : ""),
+      marks: marks,
     };
   } catch (e) {
     return defaultState();
@@ -2788,7 +2994,9 @@ function buildLane(card, key, wavPath, flatPngPath, label) {
     var rect = canvas.getBoundingClientRect();
     var xPx = e.clientX - rect.left;
     var frac = clamp(rect.width > 0 ? xPx / rect.width : 0, 0, 1);
-    seekLane(lane, frac * card.meta.asset_duration_s);
+    var t = frac * card.meta.asset_duration_s;
+    seekLane(lane, t);
+    if (e.shiftKey) addMark(card, t);
   });
 
   wrap.addEventListener("keydown", function (e) {
@@ -2865,6 +3073,26 @@ function drawLaneOverlay(lane) {
     ctx.fillText(Math.round(t) + "s", x + 3, 12);
   }
 
+  (lane.card.state.marks || []).forEach(function (markT) {
+    if (markT < 0 || markT > dur) return;
+    var xm = (markT / dur) * w;
+    ctx.strokeStyle = "#b93815";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(xm, 0);
+    ctx.lineTo(xm, h);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#b93815";
+    ctx.beginPath();
+    ctx.moveTo(xm - 4, 0);
+    ctx.lineTo(xm + 4, 0);
+    ctx.lineTo(xm, 7);
+    ctx.closePath();
+    ctx.fill();
+  });
+
   var t2 = lane.audioEl.currentTime || 0;
   if (t2 >= 0 && t2 <= dur) {
     var xph = (t2 / dur) * w;
@@ -2875,6 +3103,42 @@ function drawLaneOverlay(lane) {
     ctx.lineTo(xph, h);
     ctx.stroke();
   }
+}
+
+function addMark(card, t) {
+  var marks = card.state.marks || [];
+  marks.push(Math.round(t * 1000) / 1000);
+  marks.sort(function (a, b) { return a - b; });
+  card.state.marks = marks;
+  saveState(card);
+  renderMarksChips(card);
+  card.lanes.forEach(drawLaneOverlay);
+}
+
+function removeMark(card, index) {
+  card.state.marks = (card.state.marks || []).filter(function (_, i) { return i !== index; });
+  saveState(card);
+  renderMarksChips(card);
+  card.lanes.forEach(drawLaneOverlay);
+}
+
+function renderMarksChips(card) {
+  var container = card.marksChipsEl;
+  if (!container) return;
+  container.innerHTML = "";
+  var marks = card.state.marks || [];
+  if (!marks.length) {
+    container.appendChild(el("span", { class: "marks-empty", text: "no marks yet" }));
+    return;
+  }
+  marks.forEach(function (t, i) {
+    var chip = el("span", { class: "mark-chip" });
+    chip.appendChild(document.createTextNode(formatClock(t)));
+    var removeBtn = el("button", { type: "button", title: "remove this mark", text: "×" });
+    removeBtn.addEventListener("click", function () { removeMark(card, i); });
+    chip.appendChild(removeBtn);
+    container.appendChild(chip);
+  });
 }
 
 function updateLaneTimeDisplay(lane) {
@@ -2959,12 +3223,18 @@ function updateScadaReadout(scada, meta, t) {
   var secIdx = Math.floor(clamp(t, 0, Math.max(total - 1e-6, 0)));
   var powerSeries = meta.power_mw_1hz || [];
   var speedSeries = meta.speed_rpm_1hz || [];
+  var flowSeries = meta.flow_net_m3s_1hz || [];
+  var ksSeries = meta.ks_valve_1hz || [];
   var power = secIdx < powerSeries.length ? powerSeries[secIdx] : null;
   var speed = secIdx < speedSeries.length ? speedSeries[secIdx] : null;
+  var flow = secIdx < flowSeries.length ? flowSeries[secIdx] : null;
+  var ksValve = secIdx < ksSeries.length ? ksSeries[secIdx] : null;
   scada.readoutEl.textContent =
     formatClock(t) + " / " + formatClock(total) +
     "  ·  P: " + formatReading(power, "MW", 1) +
-    "  ·  n: " + formatReading(speed, "rpm", 0);
+    "  ·  n: " + formatReading(speed, "rpm", 0) +
+    "  ·  Q: " + formatReading(flow, "m3/s", 1) +
+    "  ·  KS: " + formatReading(ksValve, "pos", 1);
 }
 
 function renderScadaBlock(card) {
@@ -2975,6 +3245,10 @@ function renderScadaBlock(card) {
   var t = lane ? (lane.audioEl.currentTime || 0) : 0;
   drawScadaOverlay(scada, t);
   updateScadaReadout(scada, card.meta, t);
+  if (card.ribbonPlayheadEl && card.meta.asset_duration_s > 0) {
+    var pct = clamp(t / card.meta.asset_duration_s, 0, 1) * 100;
+    card.ribbonPlayheadEl.style.left = pct + "%";
+  }
 }
 
 function tick() {
@@ -3056,6 +3330,22 @@ function buildCard(meta) {
   card.scada = buildScadaBlock(card, meta);
   card.el.appendChild(card.scada.el);
 
+  var ribbonContainer = el("div", { class: "ribbon-scroll" });
+  ribbonContainer.innerHTML = meta.ribbon_html || "";
+  card.el.appendChild(ribbonContainer);
+  card.ribbonPlayheadEl = ribbonContainer.querySelector(".ribbon-playhead");
+
+  var marksPanel = el("div", { class: "marks-panel" });
+  marksPanel.appendChild(el("div", { class: "marks-title", text: "Review marks" }));
+  marksPanel.appendChild(
+    el("div", { class: "marks-hint", text: "Shift-click a spectrogram above to flag a moment." })
+  );
+  var marksChips = el("div", { class: "marks-chips" });
+  marksPanel.appendChild(marksChips);
+  card.el.appendChild(marksPanel);
+  card.marksChipsEl = marksChips;
+  renderMarksChips(card);
+
   var assessmentRow = el("div", { class: "assessment-row" });
   var options = el("div", { class: "assessment-options" });
   var radioName = "assessment-" + meta.candidate_id;
@@ -3115,10 +3405,11 @@ function cardsToCsv(cards) {
   var lines = [EXPORT_CSV_HEADER.join(",")];
   cards.forEach(function (card) {
     var m = card.meta;
+    var marksStr = (card.state.marks || []).map(function (t) { return t.toFixed(3); }).join(";");
     var row = [
       m.session, m.candidate_id, m.class, m.start_utc, m.duration_s, m.min_p, m.state_name,
       m.near_transition, m.scada_state, m.scada_transition,
-      card.state.assessment || "", card.state.note || "",
+      card.state.assessment || "", card.state.note || "", marksStr,
     ];
     lines.push(row.map(csvField).join(","));
   });
@@ -3235,14 +3526,59 @@ window.CandidateKit = {
 """
 
 
-def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) -> Path:
-    """(Re)generate the interactive `<out_dir>/index.html`. Fully self-contained
-    (inline CSS/JS, no external resources, no `fetch()`): the candidate metadata is
-    embedded as a `<script type="application/json">` block and read via
-    `JSON.parse` at load time -- same `file://` CORS rationale as `annotation_kit.
-    render_interactive_index_html`'s own docstring. Every card's spectrogram image/
-    audio element references the real PNG/WAV by a RELATIVE path (never base64)."""
+_ASSET_PATH_META_KEYS = ("gen_wav", "tur_wav", "gen_flat_png", "tur_flat_png", "scada_png")
+
+
+def _prefixed_metas(
+    results: Sequence[CandidateAssetResult], asset_prefix: str
+) -> list[dict[str, object]]:
+    """`_asset_result_to_meta` for every *results* entry, with *asset_prefix*
+    prepended to every real on-disk asset path field (`_ASSET_PATH_META_KEYS`) --
+    empty by default (the `results/candidate-kit/` in-place build, unchanged
+    behavior), non-empty when `render_index_html`/`render_index_static_html`
+    target a DIFFERENT directory than *out_dir* (`scripts/publish_review_site.py`,
+    which copies the rendered PNG/WAV tree under `docs/site/assets/review/` while
+    writing the HTML itself to `docs/site/review.html`, a sibling of `assets/`,
+    not inside it)."""
     metas = [_asset_result_to_meta(r) for r in results]
+    if not asset_prefix:
+        return metas
+    for m in metas:
+        for key in _ASSET_PATH_META_KEYS:
+            m[key] = asset_prefix + str(m[key])
+    return metas
+
+
+def _review_page_head(*, title: str, date_note: str) -> str:
+    """Shared page chrome for `index.html`/`index_static.html`: the site topbar
+    nav (SAME markup as every other `docs/site/*.html` page -- `site_common.
+    topbar_html`) plus the page title and a one-line date/session-count note.
+    `review.html`'s own nav link is marked active."""
+    return (
+        f"{sc.topbar_html('review.html')}\n"
+        '<main class="review-page">\n'
+        f"<h1>{html.escape(title)}</h1>\n"
+        f'<p class="date-header">{html.escape(date_note)}</p>\n'
+    )
+
+
+def render_index_html(
+    results: Sequence[CandidateAssetResult],
+    out_dir: Path,
+    *,
+    html_out_path: Path | None = None,
+    asset_prefix: str = "",
+) -> Path:
+    """(Re)generate the interactive index.html (default: `<out_dir>/index.html`,
+    matching every existing caller unchanged; `html_out_path` overrides the
+    destination for the site-published copy, `asset_prefix` see `_prefixed_
+    metas`). Fully self-contained (inline CSS/JS, no external resources, no
+    `fetch()`): the candidate metadata is embedded as a `<script
+    type="application/json">` block and read via `JSON.parse` at load time --
+    same `file://` CORS rationale as `annotation_kit.render_interactive_index_
+    html`'s own docstring. Every card's spectrogram image/audio element
+    references the real PNG/WAV by a RELATIVE path (never base64)."""
+    metas = _prefixed_metas(results, asset_prefix)
     sessions = sorted({str(m["session"]) for m in metas})
     labels = {s: _SESSION_LABEL.get(s, s) for s in sessions}
     metas_json = ak._json_script_safe(metas)
@@ -3264,25 +3600,131 @@ def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) ->
         .replace("__ASSESSMENT_VALUES_JSON__", ak._json_script_safe(list(ASSESSMENT_VALUES)))
     )
 
+    date_note = (
+        f"{len(metas)} candidate(s) across {len(sessions)} session(s) &middot; generated "
+        f"{datetime.now(UTC).strftime('%Y-%m-%d')}"
+    )
+    head = _review_page_head(title="Candidate Review — ROWII Monitor", date_note=date_note)
+
     doc = (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
-        "<title>Candidate Review Kit</title>\n"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "<title>Candidate Review — ROWII Monitor</title>\n"
         f"<style>{_CANDIDATE_CSS}</style>\n</head>\n<body>\n"
-        "<h1>Candidate Review Kit – unverified anomaly candidates</h1>\n"
+        f"{head}"
         f"{legend_html}\n"
         f"{_CANDIDATE_INSTRUCTIONS_HTML}\n"
+        '<p class="hint">A read-only, JavaScript-free listing is also available: '
+        '<a href="index_static.html">index_static.html</a>.</p>\n'
         '<div class="top-toolbar"><button type="button" id="export-all-btn">Export all '
         'sessions</button><span class="session-status" id="export-all-status"></span></div>\n'
         '<div id="app">Loading candidates&hellip;</div>\n'
         f'<script id="candidates-meta-data" type="application/json">{metas_json}</script>\n'
         f'<script id="session-labels-data" type="application/json">{labels_json}</script>\n'
         f"<script>{js}</script>\n"
+        "</main>\n"
+        f"{sc.FOOTER_HTML}\n"
         "</body>\n</html>\n"
     )
-    out_path = out_dir / "index.html"
+    out_path = html_out_path if html_out_path is not None else out_dir / "index.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc, encoding="utf-8")
     logger.info("candidate_kit: wrote %s (%d candidate(s), interactive)", out_path, len(metas))
+    return out_path
+
+
+def render_index_static_html(
+    results: Sequence[CandidateAssetResult],
+    out_dir: Path,
+    *,
+    html_out_path: Path | None = None,
+    asset_prefix: str = "",
+) -> Path:
+    """A read-only, JavaScript-FREE listing of every candidate (default:
+    `<out_dir>/index_static.html`) -- mirrors `annotation_kit.py`'s own
+    `index_static.html` fallback pattern (that module's docstring: "the
+    ORIGINAL read-only... overview"), applied to this kit too so a reviewer
+    without JS (or just wanting a quick skim/print view) still gets every
+    candidate's full context: mode/criterion/context-note, the SCADA mini-axes
+    PNG, the state ribbon, and native `<audio controls>`/`<img>` elements
+    (playable and viewable with no script at all) -- everything except
+    click-to-seek, marks, and the assessment form, which are all inherently
+    interactive."""
+    metas = _prefixed_metas(results, asset_prefix)
+    sessions = sorted({str(m["session"]) for m in metas})
+    by_session: dict[str, list[dict[str, object]]] = {s: [] for s in sessions}
+    for m in metas:
+        by_session[str(m["session"])].append(m)
+
+    cards: list[str] = []
+    for session in sessions:
+        session_metas = sorted(by_session[session], key=lambda m: int(m["rank"]))  # type: ignore[arg-type]
+        cards.append(
+            f'<h2>{html.escape(_SESSION_LABEL.get(session, session))} '
+            f"({len(session_metas)} candidate(s))</h2>"
+        )
+        for m in session_metas:
+            context_html = (
+                f'<div class="context-note"><b>Context:</b> {html.escape(str(m["context_note"]))}</div>'
+                if m.get("context_note")
+                else ""
+            )
+            mismatch_html = (
+                '<span class="mismatch-badge">SCADA/detector disagree</span>'
+                if m["mode_mismatch"]
+                else ""
+            )
+            cards.append(
+                f"""<div class="candidate-card">
+  <div class="card-head"><span class="card-title">{html.escape(str(m['candidate_id']))} — {html.escape(str(m['start_utc']))}</span>
+  <span class="class-badge {html.escape(str(m['class']))}">{html.escape(str(m['class']))}</span></div>
+  <div class="mode-row"><span class="mode-scada">Mode (SCADA): {html.escape(str(m['scada_state']))}</span>
+  <span class="mode-detector">Mode (Detector): {html.escape(str(m['state_name']))}</span>{mismatch_html}</div>
+  <div class="criterion-line">{html.escape(str(m['criterion_text']))}</div>
+  {context_html}
+  <div class="lanes">
+    <div class="lane"><div class="lane-title">Generator microphone</div>
+      <img class="spectro-img" src="{html.escape(str(m['gen_flat_png']))}" alt="Generator spectrogram">
+      <audio class="lane-audio" controls preload="none" src="{html.escape(str(m['gen_wav']))}"></audio></div>
+    <div class="lane"><div class="lane-title">Turbine microphone</div>
+      <img class="spectro-img" src="{html.escape(str(m['tur_flat_png']))}" alt="Turbine spectrogram">
+      <audio class="lane-audio" controls preload="none" src="{html.escape(str(m['tur_wav']))}"></audio></div>
+  </div>
+  <div class="scada-title">Operating data (SCADA context)</div>
+  <img class="scada-img" src="{html.escape(str(m['scada_png']))}" alt="SCADA strip">
+  {m['ribbon_html']}
+</div>"""
+            )
+
+    date_note = (
+        f"{len(metas)} candidate(s) across {len(sessions)} session(s) &middot; generated "
+        f"{datetime.now(UTC).strftime('%Y-%m-%d')} &middot; read-only, no JavaScript"
+    )
+    head = _review_page_head(title="Candidate Review (static) — ROWII Monitor", date_note=date_note)
+    legend_html = _CANDIDATE_LEGEND_HTML.replace(
+        "__STATE_LEGEND_HTML__", _render_state_legend_html()
+    )
+
+    doc = (
+        "<!doctype html>\n"
+        '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "<title>Candidate Review (static) — ROWII Monitor</title>\n"
+        f"<style>{_CANDIDATE_CSS}</style>\n</head>\n<body>\n"
+        f"{head}"
+        f"{legend_html}\n"
+        '<p class="hint">Read-only listing -- no click-to-seek, marks, or assessment form. '
+        'The interactive tool is <a href="index.html">index.html</a>.</p>\n'
+        + "\n".join(cards)
+        + "\n</main>\n"
+        f"{sc.FOOTER_HTML}\n"
+        "</body>\n</html>\n"
+    )
+    out_path = html_out_path if html_out_path is not None else out_dir / "index_static.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(doc, encoding="utf-8")
+    logger.info("candidate_kit: wrote %s (%d candidate(s), static)", out_path, len(metas))
     return out_path
 
 
@@ -3293,6 +3735,7 @@ def render_index_html(results: Sequence[CandidateAssetResult], out_dir: Path) ->
 _ASSESSMENTS_CSV_COLUMNS = (
     "session", "candidate_id", "class", "start_utc", "duration_s", "min_p",
     "state_name", "near_transition", "scada_state", "scada_transition", "assessment", "note",
+    "marks_offsets_s",
 )
 
 
@@ -3320,7 +3763,12 @@ def validate_and_merge_assessments(
     alongside `state_name`/`near_transition` -- module docstring's `compile`
     section) so the tracked, provenance-stamped review file carries the same
     SCADA-vs-detector context a reviewer saw in `index.html`, not just the
-    detector's own (possibly wrong) `state_name`.
+    detector's own (possibly wrong) `state_name`. `marks_offsets_s` is a THIRD
+    genuinely export-only field (with `assessment`/`note`, v2 site redesign): the
+    reviewer's own `;`-separated time-mark offsets, never re-derivable from
+    *candidates_by_id* -- missing from an older export (pre-marks-feature) reads
+    as `""`, never an error, so an existing exported CSV keeps compiling
+    unchanged.
 
     Raises:
         ValueError: if a required column is missing, a row's `candidate_id` has no
@@ -3359,6 +3807,7 @@ def validate_and_merge_assessments(
                 "min_p": c.min_p, "state_name": c.state_name, "near_transition": c.near_transition,
                 "scada_state": c.scada_state, "scada_transition": c.scada_transition,
                 "assessment": assessment, "note": row["note"],
+                "marks_offsets_s": row.get("marks_offsets_s", ""),
             }
         )
     return out

@@ -4,14 +4,18 @@ extremity-ordered dedup/overlap suppression (one shared greedy primitive backs b
 the 080726 strike-exclusion mask (padded-interval overlap against BOTH the seconds-level
 `docs/groundtruth/080726_strikes_seconds_*.csv` and the coarser minute-level
 `080726_events_*.csv` -- the latter covers events with no per-strike rows yet, e.g. the
-real PU event_id 07/13 gap), the build-side asset-window sizing rule, and `compile`'s
-validation (known candidate ids, fixed assessment vocabulary, provenance header).
+real PU event_id 07/13 gap), the build-side asset-window sizing rule, `compile`'s
+validation (known candidate ids, fixed assessment vocabulary, provenance header), and the
+impulse register path (criterion #3): session-chunk scheduling, cross-mic coincidence
+matching, pair -> Candidate construction, transient cross-dedup, context notes.
 
 Import convention mirrors `tests/test_annotation_kit.py`: `scripts/` is not a package,
 so the module under test is imported directly by inserting `scripts/` onto `sys.path`.
 Real parquet reads against `results/step2/once-calibrated/`, real WAV/PNG rendering and
 `index.html` assembly are exercised by actually running the CLI against real data
-instead, not by a test here (same split `test_annotation_kit.py` documents).
+instead, not by a test here (same split `test_annotation_kit.py` documents) -- EXCEPT
+the impulse path's z-threshold, which real data alone can validate: see the final
+`@pytest.mark.data` section below.
 """
 from __future__ import annotations
 
@@ -26,7 +30,13 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import annotation_kit as ak  # noqa: E402
 import candidate_kit as ck  # noqa: E402
+import make_demo_assets as mda  # noqa: E402
+
+from rowii.anomaly import impulse as impulse_mod  # noqa: E402
+from rowii.config import load_config  # noqa: E402
+from rowii.io.dataset import discover, run_utc_offset_ns  # noqa: E402
 
 
 def _utc(
@@ -230,8 +240,6 @@ def _transient(start: datetime, min_p: float, session: str = "s") -> ck.Candidat
 
 
 def _impulse(start: datetime, min_p: float, session: str = "s") -> ck.Candidate:
-    from rowii.anomaly import impulse as impulse_mod
-
     return ck.Candidate(
         session=session, klass="impulse", start_utc=start,
         end_utc=start + timedelta(seconds=impulse_mod.FRAME_S),
@@ -758,6 +766,17 @@ def test_criterion_sentence_impulse_cites_band_search_and_zscore() -> None:
     assert "z" in text.lower()
 
 
+def test_criterion_sentence_impulse_at_the_min_p_floor_shows_a_finite_z() -> None:
+    # A candidate built from an extreme (real, observed) z-pair has min_p floored
+    # at ck._MIN_P_FLOOR (not exactly 0.0) -- the sentence must show a finite z,
+    # never "inf" (norm.isf(0.0) would be infinite).
+    cand = _impulse(_utc(2026, 6, 29, 2, 0, 15), min_p=ck._MIN_P_FLOOR)
+
+    text = ck.criterion_sentence(cand)
+
+    assert "inf" not in text.lower()
+
+
 # ---------------------------------------------------------------------------
 # 12. load_prior_candidate_ids / pin_stable_ids -- cross-run id stability
 # ---------------------------------------------------------------------------
@@ -1166,6 +1185,19 @@ def test_build_impulse_pairs_more_extreme_pair_gets_smaller_min_p() -> None:
     assert strong[0].min_p < weak[0].min_p  # min_p = norm.sf(min(gz, tz)) -- decreasing in z
 
 
+def test_build_impulse_pairs_extreme_z_min_p_is_floored_not_exactly_zero() -> None:
+    # norm.sf underflows to a literal 0.0 well before z=100 (real, observed on the
+    # induced-strike sessions) -- min_p must stay strictly positive so criterion_
+    # sentence's norm.isf round-trip stays finite instead of displaying "z = inf".
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    candidates, _ = ck.build_impulse_pairs(
+        "s", [(t0, 100.0)], [(t0, 90.0)], tolerance_s=0.15, regime="recalibrate"
+    )
+
+    assert candidates[0].min_p > 0.0
+    assert candidates[0].min_p == pytest.approx(ck._MIN_P_FLOOR)
+
+
 def test_build_impulse_pairs_non_coincident_peaks_produce_no_candidate() -> None:
     t0 = _utc(2026, 6, 29, 2, 0, 15)
     gen = [(t0, 8.8)]
@@ -1306,3 +1338,95 @@ def test_apply_context_notes_no_match_resolves_to_empty_string() -> None:
 def test_candidate_context_note_defaults_to_empty_string() -> None:
     cand = _transient(_utc(2026, 6, 29, 2, 0, 15), min_p=0.0001)
     assert cand.context_note == ""
+
+
+# ---------------------------------------------------------------------------
+# 15. Real-data validation: `rowii.anomaly.impulse.Z_REGISTER_THRESHOLD` against
+# the ST-landmark strikes (module docstrings of both `rowii.anomaly.impulse` and
+# `scripts/candidate_kit.py`'s own `select` section restate this claim -- this
+# test re-derives it directly from real data on every run).
+# ---------------------------------------------------------------------------
+
+_DATA_ROOT = load_config().data_root
+_HAS_DATA_ROOT = _DATA_ROOT.is_dir()
+_DATA_SKIP_REASON = "ROWII_DATA_ROOT is unset or does not point at an existing directory"
+
+
+def _st_event_window(event_id: str) -> tuple[datetime, datetime, str]:
+    """`(snippet_start_utc, snippet_end_utc, kind)` for ST landmark *event_id*
+    ("01"/"08"), derived from the COMMITTED minute-level ground truth
+    (`docs/groundtruth/080726_events_st.csv`, read via `make_demo_assets.
+    _load_events_csv` -- the SAME parser `annotation_kit.build_session` uses)
+    plus `annotation_kit.snippet_window`'s own +/-15s pad -- deliberately NOT the
+    generated (gitignored) `results/annotation-kit/080726/events_meta.json`, so
+    this test only depends on files that are actually tracked in the repo.
+    `event_id` is the event's 1-indexed row position, zero-padded
+    (`annotation_kit.build_session`'s own `f"{i:02d}"` convention)."""
+    events = mda._load_events_csv(ak._SESSION_CONFIG["st"].events_csv)
+    for i, row in enumerate(events.itertuples(index=False), start=1):
+        if f"{i:02d}" == event_id:
+            start, end = ak.snippet_window(
+                row.start_utc.to_pydatetime(), row.end_utc.to_pydatetime()
+            )
+            return start, end, str(row.kind)
+    raise KeyError(f"no ST event {event_id!r}")
+
+
+def _st_landmark_marks(event_id: str, snippet_start_utc: datetime) -> list[float]:
+    """Offsets (seconds since *snippet_start_utc*) of every annotator mark for
+    ST landmark *event_id*, from the real seconds-level ground truth
+    (`docs/groundtruth/080726_strikes_seconds_st.csv`) -- `format="ISO8601"`
+    for the SAME mixed-fractional-second-precision reason `load_strike_
+    exclusion_intervals` already documents for this exact file family."""
+    strikes_csv = (
+        Path(__file__).resolve().parent.parent / "docs" / "groundtruth"
+        / "080726_strikes_seconds_st.csv"
+    )
+    df = pd.read_csv(strikes_csv, comment="#", dtype={"event_id": str})
+    rows = df[df["event_id"] == event_id]
+    marks = pd.to_datetime(rows["strike_utc"], utc=True, format="ISO8601")
+    return sorted((m.to_pydatetime() - snippet_start_utc).total_seconds() for m in marks)
+
+
+@pytest.mark.data
+def test_impulse_search_recovers_st_landmark_strikes() -> None:
+    if not _HAS_DATA_ROOT:
+        pytest.skip(_DATA_SKIP_REASON)
+
+    index = discover(_DATA_ROOT)
+    run = mda._get_run(index, ak._SESSION_CONFIG["st"].run_name)
+    offset_ns = run_utc_offset_ns(run)
+
+    for event_id in ("01", "08"):
+        snippet_start, snippet_end, kind = _st_event_window(event_id)
+        marks = _st_landmark_marks(event_id, snippet_start)
+        assert marks, f"no ground-truth marks found for ST event {event_id} ({kind})"
+
+        recovered_by_stream: dict[str, int] = {}
+        for stream_key, stream_name in ak._STREAM_NAME_BY_KEY.items():
+            files = run.files[stream_name]
+            clip = ak.extract_stream_clip(
+                files, offset_ns, mda.MONO_CHANNEL_INDEX, snippet_start, snippet_end
+            )
+            peaks = impulse_mod.detect_impulses(clip.samples, clip.rate_hz)
+            recovered = sum(
+                1 for m in marks if any(abs(m - p.time_offset_s) <= 0.3 for p in peaks)
+            )
+            recovered_by_stream[stream_key] = recovered
+            # Every genuinely recovered mark must land inside the validated z range
+            # this module's own docstring claims (z=7-17) -- not merely above z_min.
+            matched_zs = [
+                p.z for p in peaks if any(abs(m - p.time_offset_s) <= 0.3 for m in marks)
+            ]
+            assert all(z >= impulse_mod.Z_REGISTER_THRESHOLD for z in matched_zs)
+
+        # At least one stream must recover every mark at the register threshold --
+        # both-mic coincidence (candidate_kit.py's own +/-0.15s tolerance) is a
+        # SEPARATE, later check; this test only validates the single-stream search
+        # `rowii.anomaly.impulse` itself is responsible for.
+        best = max(recovered_by_stream.values())
+        assert best == len(marks), (
+            f"ST event {event_id} ({kind}): only {best}/{len(marks)} marks recovered "
+            f"at z >= {impulse_mod.Z_REGISTER_THRESHOLD:g} on the better stream "
+            f"({recovered_by_stream})"
+        )
