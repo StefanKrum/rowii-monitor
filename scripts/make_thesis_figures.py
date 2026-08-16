@@ -783,7 +783,8 @@ def make_f5_transfer(results_dir: Path, out_dir: Path) -> Path:
     cbar.ax.tick_params(labelsize=7.0)
     cbar.ax.axhline(alpha_pct, color="#b3282d", linewidth=1.2)
     cbar.ax.get_yticklabels()[1].set_color("#b3282d")
-    cbar.outline.set_visible(False)
+    for spine in cbar.ax.spines.values():
+        spine.set_visible(False)
 
     fig.tight_layout()
     out_path = out_dir / "f5_transfer.pdf"
