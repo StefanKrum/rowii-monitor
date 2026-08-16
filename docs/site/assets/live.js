@@ -1,8 +1,10 @@
 // ROWII Monitor -- live.html replay engine. Reads the embedded #live-data JSON
-// (written by scripts/build_live_replay.py) and drives everything: the state
-// ribbon/scrubber, the log-mel pan, the p-value chart, the sensor-ring pulsing,
-// the KPI strip, the alarm feed, and the Operator/Engineering view toggle. No
-// network requests -- every byte the page needs is already inline.
+// (written by scripts/build_live_replay.py) and drives everything on the ONE
+// integrated dashboard: the two-row state/SCADA ribbon (also the scrubber), the
+// log-mel pan, the p-value chart, the sensor-ring pulsing, the KPI strip, the
+// alarm feed, and the pipeline-diagnostics band. No network requests -- every
+// byte the page needs is already inline (the two mic .m4a files excepted, and
+// only once an operator actually selects one in the "Listen" control).
 (function () {
   "use strict";
 
@@ -21,6 +23,7 @@
   function stateLabel(name) {
     if (!name) return "Unknown";
     if (name === "invalid") return "No usable data";
+    if (name === "n/a") return "n/a"; // impulse-path candidates carry no detector state
     return name.charAt(0).toUpperCase() + name.slice(1).replace("-", "-");
   }
 
@@ -58,6 +61,14 @@
     var t0 = new Date(DATA.t0_utc);
     var d = new Date(t0.getTime() + playheadS * 1000);
     return d.toISOString().slice(11, 19) + " UTC";
+  }
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function simDateAt(playheadS) {
+    // The replay's own simulated DATE, from the same t0_utc + playhead the clock
+    // uses -- UTC getters only (never locale-dependent Date formatting), so the
+    // date reads identically wherever the page is opened.
+    var d = new Date(new Date(DATA.t0_utc).getTime() + playheadS * 1000);
+    return pad2(d.getUTCDate()) + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
   }
   function fmtNum(v, digits, suffix) {
     if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "—";
@@ -112,33 +123,100 @@
     '<div class="ring-cell">' + DATA.rings.generator + "</div>" +
     '<div class="ring-cell">' + DATA.rings.turbine + "</div>";
 
-  // -------------------------------------------------------------- static: ribbon
+  // -------------------------------------------------------------- static: ribbon rows
+  // Two rows inside ONE `.ribbon-wrap`: the detector's own segments (Step 1) on
+  // top, the rule-based SCADA mode underneath, sharing one playhead and one
+  // scrub target -- the same detector-vs-SCADA pairing review.html already shows
+  // per candidate (candidate_kit.render_state_ribbon_html), here over the whole
+  // session. Same fixed state-colour vocabulary for BOTH rows (site_common.py's
+  // STATE_COLORS): a SCADA "turbine" block and a detected "turbine" block are
+  // the same colour precisely so a disagreement is visible as a colour break.
+  var RIBBON_LABEL_MIN_PX = 34;
+  /* Mirrors candidate_kit._RIBBON_LABEL_MIN_PX -- below this a block is too
+     narrow for in-band text and keeps only its hover title. */
+  var RIBBON_RUN_BREAK_PX = 6;
+  /* A block of a DIFFERENT state at least this wide is visible as its own colour
+     band, so the next same-state block after it starts a new visual run and earns
+     its label back (`updateRibbonLabels`). The sub-pixel 1-second invalid blocks
+     that punctuate the detector row all day do not. */
   var ribbonWrap = $("ribbonWrap");
-  DATA.segments.forEach(function (seg) {
+  var detectedTrack = $("ribbonTrackDetected");
+  var scadaTrack = $("ribbonTrackScada");
+
+  function addRibbonSeg(track, startS, endS, stateName) {
     var el = document.createElement("div");
     el.className = "ribbon-seg";
-    el.style.left = (100 * seg.start_s / duration) + "%";
-    el.style.width = Math.max(0.05, 100 * (seg.end_s - seg.start_s) / duration) + "%";
-    el.style.background = stateColor(seg.state_name);
-    el.title = stateLabel(seg.state_name) + "  " + fmtHMS(seg.start_s) + "–" + fmtHMS(seg.end_s);
-    ribbonWrap.insertBefore(el, $("ribbonPlayhead"));
+    el.style.left = (100 * startS / duration) + "%";
+    el.style.width = Math.max(0.02, 100 * (endS - startS) / duration) + "%";
+    el.style.background = stateColor(stateName);
+    el.title = stateLabel(stateName) + "  " + fmtHMS(startS) + "–" + fmtHMS(endS) +
+      "  (" + fmtDuration(endS - startS) + ")";
+    var label = document.createElement("span");
+    label.className = "ribbon-seg-label";
+    label.textContent = stateLabel(stateName);
+    el.appendChild(label);
+    track.appendChild(el);
+  }
+
+  DATA.segments.forEach(function (seg) {
+    addRibbonSeg(detectedTrack, seg.start_s, seg.end_s, seg.state_name);
   });
+
+  (function buildScadaRow() {
+    // The 1 Hz SCADA state series, run-length encoded into contiguous blocks --
+    // one div per RUN, not one per second (a full day is ~15.6k seconds and only
+    // ~100 runs).
+    var s = DATA.scada.scada_state, n = s.length;
+    if (!DATA.scada.has_scada || n === 0) {
+      var empty = document.createElement("div");
+      empty.className = "ribbon-empty";
+      empty.textContent = "no SCADA recorded for this session";
+      scadaTrack.appendChild(empty);
+      return;
+    }
+    var runStart = 0;
+    for (var i = 1; i <= n; i++) {
+      if (i === n || s[i] !== s[runStart]) {
+        addRibbonSeg(scadaTrack, runStart * duration / n, i * duration / n, s[runStart]);
+        runStart = i;
+      }
+    }
+  })();
+
   DATA.alerts.forEach(function (a) {
     var t = document.createElement("div");
     t.className = "ribbon-tick";
     t.style.left = (100 * a.start_s / duration) + "%";
     t.title = a.candidate_id + " (" + a.klass + ") @ " + fmtHMS(a.start_s);
-    ribbonWrap.insertBefore(t, $("ribbonPlayhead"));
+    detectedTrack.appendChild(t);
   });
+
+  function updateRibbonLabels() {
+    // In-band text only where the block is actually wide enough to hold it --
+    // measured, so it stays right across a window resize (the ribbon is fluid).
+    // A block is also left unlabelled when it would only repeat the label of the
+    // block before it (the detector row alternates turbine/1-second-invalid all
+    // day, which would otherwise print "Turbine" 29 times): one label per visual
+    // run, every block keeping its own hover title either way.
+    [detectedTrack, scadaTrack].forEach(function (track) {
+      var lastShown = null;
+      Array.prototype.forEach.call(track.querySelectorAll(".ribbon-seg"), function (el) {
+        var label = el.firstElementChild;
+        if (!label) return;
+        var name = label.textContent, width = el.offsetWidth;
+        var show = width >= RIBBON_LABEL_MIN_PX && name !== lastShown;
+        label.style.display = show ? "block" : "none";
+        if (show) lastShown = name;
+        else if (name !== lastShown && width >= RIBBON_RUN_BREAK_PX) lastShown = null;
+      });
+    });
+  }
   $("ribbonStart").textContent = fmtHMS(0);
   $("ribbonEnd").textContent = fmtHMS(duration);
 
   // -------------------------------------------------------------- static: log-mel strip
-  var logmelSrc = "data:image/png;base64," + DATA.logmel.png_b64;
-  $("logmelStrip").src = logmelSrc;
-  $("logmelStripEng").src = logmelSrc;
+  $("logmelStrip").src = "data:image/png;base64," + DATA.logmel.png_b64;
   $("logmelStrip").style.width = DATA.logmel.width_px + "px";
-  $("logmelStripEng").style.width = DATA.logmel.width_px + "px";
 
   // -------------------------------------------------------------- static: p-value chart(s)
   var P_FLOOR = 1e-4;
@@ -185,9 +263,68 @@
       '<line id="__playhead__" x1="0" y1="0" x2="0" y2="' + h + '" stroke="var(--ink)" stroke-width="1.4"/>' +
       "</svg>";
   }
-  var pvalueW = 560, pvalueH = 96;
+  var pvalueW = 560, pvalueH = 150;
   $("pvalueChartWrap").innerHTML = buildPvalueSvg(pvalueW, pvalueH);
-  $("pvalueChartWrapEng").innerHTML = buildPvalueSvg(pvalueW, 150);
+
+  // -------------------------------------------------------------- static: SCADA trend
+  // Active power and shaft speed for the WHOLE session on the ribbon's own x-axis,
+  // so the operating-mode blocks above and the process values below are read at the
+  // same instant. Each channel is scaled to its own full-day range (the caption
+  // states both ranges, since two channels in different units share one box) and
+  // drawn in the palette's own ink/dim -- solid = P, dashed = n. Gaps in SCADA
+  // coverage break the line rather than being bridged with an invented value.
+  var trendW = 560, trendH = 62, TREND_PAD = 6;
+  function trendExtent(arr) {
+    var lo = Infinity, hi = -Infinity;
+    for (var i = 0; i < arr.length; i++) {
+      var v = arr[i];
+      if (v === null || v === undefined) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!isFinite(lo)) return null;
+    return [lo, hi - lo < 1e-9 ? lo + 1 : hi];
+  }
+  function trendPolylines(arr, ext, step, n, dash) {
+    var runs = [], cur = [];
+    for (var i = 0; i < n; i += step) {
+      var v = arr[i];
+      if (v === null || v === undefined) {
+        if (cur.length > 1) runs.push(cur.join(" "));
+        cur = [];
+        continue;
+      }
+      var x = (i / n) * trendW;
+      var y = trendH - TREND_PAD - ((v - ext[0]) / (ext[1] - ext[0])) * (trendH - 2 * TREND_PAD);
+      cur.push(x.toFixed(1) + "," + y.toFixed(1));
+    }
+    if (cur.length > 1) runs.push(cur.join(" "));
+    return runs.map(function (pts) {
+      return '<polyline points="' + pts + '" fill="none" stroke="' + (dash ? "var(--dim)" : "var(--ink)") +
+        '" stroke-width="1"' + (dash ? ' stroke-dasharray="3 2"' : "") + "/>";
+    }).join("");
+  }
+  (function buildScadaTrend() {
+    var n = DATA.scada.n;
+    var pExt = DATA.scada.has_scada ? trendExtent(DATA.scada.power_mw) : null;
+    var nExt = DATA.scada.has_scada ? trendExtent(DATA.scada.speed_rpm) : null;
+    if (!pExt || !nExt) {
+      $("scadaTrend").innerHTML = '<div class="ribbon-empty">no SCADA recorded for this session</div>';
+      $("scadaTrendCaption").textContent = "";
+      return;
+    }
+    var step = Math.max(1, Math.floor(n / 1400));
+    $("scadaTrend").innerHTML =
+      '<svg viewBox="0 0 ' + trendW + " " + trendH + '" preserveAspectRatio="none">' +
+      trendPolylines(DATA.scada.speed_rpm, nExt, step, n, true) +
+      trendPolylines(DATA.scada.power_mw, pExt, step, n, false) +
+      '<line id="__scadaPlayhead__" x1="0" y1="0" x2="0" y2="' + trendH +
+      '" stroke="var(--ink)" stroke-width="1.4"/>' +
+      "</svg>";
+    $("scadaTrendCaption").innerHTML =
+      "<span>P " + pExt[0].toFixed(1) + " … " + pExt[1].toFixed(1) + " MW (solid)</span>" +
+      "<span>n " + nExt[0].toFixed(1) + " … " + nExt[1].toFixed(1) + " rpm (dashed)</span>";
+  })();
 
   // -------------------------------------------------------------- static: alarm list + ack
   var ACK_PREFIX = "rowii-live-ack:";
@@ -205,6 +342,7 @@
     row.className = "alarm-row" + (isAcked(a.candidate_id) ? " acked" : "");
     row.dataset.id = a.candidate_id;
     row.dataset.start = a.start_s;
+    row.title = "jump the replay to " + fmtHMS(a.start_s);
     var mismatch = a.mode_mismatch ? '<span class="mismatch">detector/SCADA mode differ</span> · ' : "";
     row.innerHTML =
       '<span class="alarm-time mono">' + fmtHMS(a.start_s) + "</span>" +
@@ -218,8 +356,33 @@
       row.classList.toggle("acked", e.target.checked);
       renderKpis(state.playheadS);
     });
+    // Clicking a row seeks the whole page (ribbon, log-mel, p-value, features,
+    // and the selected audio stream) to that episode -- the same render() funnel
+    // a ribbon scrub goes through, so audio stays locked to the playhead here too.
+    row.addEventListener("click", function (e) {
+      if (e.target.tagName === "INPUT") return;
+      render(a.start_s);
+    });
     alarmListEl.appendChild(row);
   });
+
+  (function initFeedLegend() {
+    // The register's own path mix for this session, counted from the real rows
+    // above -- each row's `criterion_text` remains the authoritative rule.
+    var counts = {}, order = [];
+    DATA.alerts.forEach(function (a) {
+      if (counts[a.klass] === undefined) { counts[a.klass] = 0; order.push(a.klass); }
+      counts[a.klass] += 1;
+    });
+    order.sort();
+    if (order.length === 0) {
+      $("feedLegend").textContent = "No candidate-register episodes for this session.";
+      return;
+    }
+    $("feedLegend").innerHTML = "Register paths this session: " + order.map(function (k) {
+      return '<span class="path-badge ' + k + '">' + k + "</span> " + counts[k];
+    }).join(" &middot; ") + " &mdash; hover a row to read its full criterion sentence.";
+  })();
 
   // -------------------------------------------------------------- static: feature dim labels
   $("audioDim").textContent = DATA.features.n_audio + "-d";
@@ -285,6 +448,31 @@
   // -------------------------------------------------------------- master render
   var state = { playheadS: 0, playing: false, speed: 1, lastTick: null };
 
+  function confidenceFor(seg) {
+    // The named state's OWN conformal standing, straight from the monitor's
+    // per-state table (`low_confidence`, monitor_notes.md): a state below the
+    // conformal floor carries a +inf threshold and can therefore never alarm,
+    // which an operator must be able to see AT the state, not only in a report.
+    if (seg.state === -1) {
+      return { text: "no usable data", cls: "warn",
+        title: "This window has no usable sensor data -- it is never scored." };
+    }
+    var st = DATA.states[String(seg.state)];
+    if (!st) {
+      return { text: "no snapshot reference", cls: "warn",
+        title: "The detected mode has no reference in the calibrated snapshot, so it is never scored " +
+          "and can never alarm." };
+    }
+    if (st.low_confidence) {
+      return { text: "low confidence", cls: "warn",
+        title: "Too few calibration windows to certify alpha for this state -- its threshold is +inf, " +
+          "so it can never alarm." };
+    }
+    return { text: "threshold certified", cls: "ok",
+      title: "This state has enough calibration windows to certify its conformal threshold at the " +
+        "nominal alpha." };
+  }
+
   function renderKpis(playheadS) {
     var acknowledgedButOccurred = 0, occurred = 0;
     DATA.alerts.forEach(function (a) {
@@ -302,6 +490,7 @@
     state.playheadS = playheadS;
 
     // -- clock / transport
+    $("simDate").textContent = simDateAt(playheadS);
     $("simClock").textContent = simUtcAt(playheadS);
     $("transportReadout").textContent = fmtHMS(playheadS) + " / " + fmtHMS(duration);
     var pct = (100 * playheadS / duration);
@@ -310,11 +499,24 @@
     // -- state / segment
     var seg = segmentAt(playheadS);
     var since = playheadS - seg.start_s;
-    $("stateNameKpi").textContent = stateLabel(seg.state_name);
+    var segState = DATA.states[String(seg.state)];
+    var stateName = segState ? segState.name_label : stateLabel(seg.state_name);
+    var conf = confidenceFor(seg);
+    $("stateNameKpi").textContent = stateName;
     $("stateDotKpi").style.background = stateColor(seg.state_name);
     $("stateSinceKpi").textContent = "since " + fmtDuration(since);
-    $("s1State").textContent = stateLabel(seg.state_name);
+    var confKpi = $("stateConfKpi");
+    confKpi.textContent = conf.text;
+    confKpi.className = "conf-chip " + conf.cls;
+    confKpi.title = conf.title;
+    $("s1State").textContent = stateName;
+    $("s1Cluster").textContent = seg.state === -1
+      ? "— (invalid window)"
+      : seg.state + " (" + (segState ? segState.name : "no reference") + ")";
     $("s1Since").textContent = fmtDuration(since);
+    var s1Conf = $("s1Confidence");
+    s1Conf.textContent = conf.text;
+    s1Conf.title = conf.title;
 
     // -- ring pulsing (per-stream RMS levels, dense 1 Hz)
     var li = denseIndexAt(playheadS, DATA.levels.n);
@@ -331,8 +533,6 @@
     var p = DATA.scada.power_mw[si], n = DATA.scada.speed_rpm[si];
     $("powerKpi").textContent = fmtNum(p, 2, " MW");
     $("speedKpi").textContent = fmtNum(n, 1, " rpm");
-    $("scadaPowerMini").textContent = fmtNum(p, 2, " MW");
-    $("scadaSpeedMini").textContent = fmtNum(n, 1, " rpm");
     var scadaState = DATA.scada.scada_state[si];
     $("s1ScadaState").textContent = stateLabel(scadaState);
     var agreeStrict = scadaState === seg.state_name;
@@ -353,17 +553,19 @@
     $("s2NearTransition").textContent = nt ? "yes" : "no";
     $("s2Alarm").innerHTML = al ? '<span style="color:var(--alarm)">ALARM</span>' : "clear";
     var phLine1 = document.querySelector("#pvalueChartWrap #__playhead__");
-    var phLine2 = document.querySelector("#pvalueChartWrapEng #__playhead__");
     var px = (playheadS / duration) * pvalueW;
     if (phLine1) { phLine1.setAttribute("x1", px); phLine1.setAttribute("x2", px); }
-    if (phLine2) { phLine2.setAttribute("x1", px); phLine2.setAttribute("x2", px); }
+    var trendPh = document.querySelector("#scadaTrend #__scadaPlayhead__");
+    if (trendPh) {
+      var tx = (playheadS / duration) * trendW;
+      trendPh.setAttribute("x1", tx);
+      trendPh.setAttribute("x2", tx);
+    }
 
     // -- log-mel pan (px-per-second is fixed: one strip column per stride_s seconds)
     var pxPerS = 1.0 / DATA.logmel.stride_s;
     var offset = playheadS * pxPerS - ($("logmelViewport").clientWidth / 2);
     $("logmelStrip").style.transform = "translateX(" + (-offset) + "px)";
-    var offsetEng = playheadS * pxPerS - ($("logmelViewportEng").clientWidth / 2);
-    $("logmelStripEng").style.transform = "translateX(" + (-offsetEng) + "px)";
 
     // -- feature snapshot canvas
     var fi = featureSnapshotIndexAt(playheadS);
@@ -632,25 +834,16 @@
   window.addEventListener("pointermove", function (e) { if (dragging) seekFromRibbonEvent(e); });
   window.addEventListener("pointerup", function () { dragging = false; });
 
-  Array.prototype.forEach.call(document.querySelectorAll("[data-view-btn]"), function (btn) {
-    btn.addEventListener("click", function () {
-      document.body.dataset.view = btn.dataset.viewBtn;
-      Array.prototype.forEach.call(document.querySelectorAll("[data-view-btn]"), function (b) {
-        b.classList.toggle("active", b === btn);
-      });
-      resizeCanvas();
-      drawFeatureCanvas(featureSnapshotIndexAt(state.playheadS));
-    });
-  });
-
   window.addEventListener("resize", function () {
     resizeCanvas();
     drawFeatureCanvas(featureSnapshotIndexAt(state.playheadS));
+    updateRibbonLabels();
     render(state.playheadS);
   });
 
   // -------------------------------------------------------------- init
   resizeCanvas();
+  updateRibbonLabels();
   render(0);
   updatePlayButton();
 
