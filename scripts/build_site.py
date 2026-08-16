@@ -581,12 +581,14 @@ _SENSORS_CSS = """
 .sensor-section-head { margin-top: 30px; }
 .sensor-section-head h2 { font-size: 16px; margin-bottom: 2px; }
 .sensor-section-head p { color: var(--dim); font-size: 13px; max-width: 68ch; }
-.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; margin-top: 10px; }
+.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap;
+  margin-top: 10px; }
 .sensor-diagram { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--hair);
   border-radius: var(--radius-lg); padding: 14px; }
 .sensor-diagram svg { width: 300px; height: auto; display: block; }
 .sensor rect, .sensor circle, .sensor line { transition: fill .15s ease, stroke .15s ease; }
-.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1; cursor: pointer; }
+.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1;
+  cursor: pointer; }
 .sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--live); fill-opacity: .85; }
 .sensor.vib rect { fill: var(--panel); stroke: var(--warn); stroke-width: 1.1; cursor: pointer; }
 .sensor.vib line { stroke: var(--warn); stroke-width: 1; }
@@ -605,12 +607,14 @@ table.sensor-table th, table.sensor-table td { text-align: left; padding: 7px 10
   border-bottom: 1px solid var(--hair-2); }
 table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: uppercase;
   font-size: 10.5px; letter-spacing: .05em; }
-.callout { background: var(--panel); border: 1px solid var(--hair); border-left: 3px solid var(--warn);
+.callout { background: var(--panel); border: 1px solid var(--hair);
+  border-left: 3px solid var(--warn);
   border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px; color: var(--dim);
   line-height: 1.55; }
 .callout strong { color: var(--ink); }
 .plan-rings { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
-.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg);
   padding: 12px; }
 .plan-ring-cell svg { display: block; }
 """
@@ -623,22 +627,26 @@ _SNIPPETS_CSS = """
   text-transform: uppercase; letter-spacing: .05em; }
 .clip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 14px; margin-top: 12px; }
-.clip-card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.clip-card { background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg);
   padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; }
 .clip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   flex-wrap: wrap; }
 .clip-title { font-weight: 700; font-size: 13.5px; }
 .clip-tag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim); white-space: nowrap; }
+  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim);
+  white-space: nowrap; }
 .clip-tag.sustained { color: var(--warn); border-color: var(--warn); }
 .clip-tag.transient { color: var(--alarm); border-color: var(--alarm); }
-.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn); background: var(--panel-2);
+.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn);
+  background: var(--panel-2);
   border: 1px solid var(--warn); border-radius: 5px; padding: 3px 7px; white-space: nowrap; }
 .badge.in-sample { font-size: 9px; font-weight: 700; color: var(--dim); background: var(--panel-2);
   border: 1px solid var(--hair); border-radius: 5px; padding: 2px 6px; }
 .clip-card audio { width: 100%; height: 32px; }
 .clip-audios { display: flex; flex-direction: column; gap: 6px; }
-.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: .04em; }
 .clip-note { font-size: 12px; color: var(--dim); line-height: 1.45; margin: 0; }
 .clip-meta { font-size: 11px; color: var(--dim); margin: 0; font-variant-numeric: tabular-nums; }
 .clip-context { font-size: 12px; color: var(--ink); line-height: 1.5; margin: 2px 0 0;
@@ -870,7 +878,10 @@ def render_sensors() -> str:
 </div>
 {_sensor_readout_script()}
 """
-    return _page_shell(title="Sensors — ROWII Monitor", active_file="sensors.html", body_html=body, extra_css=_SENSORS_CSS)
+    return _page_shell(
+        title="Sensors — ROWII Monitor", active_file="sensors.html", body_html=body,
+        extra_css=_SENSORS_CSS,
+    )
 
 
 _CANDIDATE_CONTEXT_NOTES: dict[str, str] = {
@@ -948,7 +959,8 @@ def _candidate_clip_card(clip: Mapping[str, Any]) -> str:
   </div>
   <p class="clip-note">{html.escape(clip['criterion_text'])}</p>
   <p class="clip-meta">{html.escape(clip['start_utc'])} · detected state:
-  {html.escape(clip['state_name'])} · SCADA: {html.escape(clip['scada_state'])}{in_sample_badge}</p>{context_html}
+  {html.escape(clip['state_name'])} · SCADA: {html.escape(clip['scada_state'])}{in_sample_badge}</p>
+  {context_html}
 </div>"""
 
 

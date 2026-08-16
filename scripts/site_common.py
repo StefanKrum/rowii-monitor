@@ -129,9 +129,15 @@ class RingMarker:
 GENERATOR_MARKERS: tuple[RingMarker, ...] = (
     RingMarker("GenMic0", 0, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 0 deg."),
     RingMarker("GenMic90", 90, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 90 deg."),
-    RingMarker("GenMic180", 180, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 180 deg."),
-    RingMarker("GenMic270", 270, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 270 deg."),
-    RingMarker("GenVib0", 0, "vib", "RAWGeneratorVib__2", "Generator tri-axial accelerometer, 0 deg."),
+    RingMarker(
+        "GenMic180", 180, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 180 deg."
+    ),
+    RingMarker(
+        "GenMic270", 270, "mic", "RAWGeneratorMic__0", "Generator microphone ring, 270 deg."
+    ),
+    RingMarker(
+        "GenVib0", 0, "vib", "RAWGeneratorVib__2", "Generator tri-axial accelerometer, 0 deg."
+    ),
     RingMarker(
         "GenVib180", 180, "vib", "RAWGeneratorVib__2", "Generator tri-axial accelerometer, 180 deg."
     ),

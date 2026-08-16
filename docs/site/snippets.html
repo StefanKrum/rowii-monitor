@@ -13,22 +13,26 @@
   text-transform: uppercase; letter-spacing: .05em; }
 .clip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 14px; margin-top: 12px; }
-.clip-card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.clip-card { background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg);
   padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; }
 .clip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   flex-wrap: wrap; }
 .clip-title { font-weight: 700; font-size: 13.5px; }
 .clip-tag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim); white-space: nowrap; }
+  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim);
+  white-space: nowrap; }
 .clip-tag.sustained { color: var(--warn); border-color: var(--warn); }
 .clip-tag.transient { color: var(--alarm); border-color: var(--alarm); }
-.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn); background: var(--panel-2);
+.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn);
+  background: var(--panel-2);
   border: 1px solid var(--warn); border-radius: 5px; padding: 3px 7px; white-space: nowrap; }
 .badge.in-sample { font-size: 9px; font-weight: 700; color: var(--dim); background: var(--panel-2);
   border: 1px solid var(--hair); border-radius: 5px; padding: 2px 6px; }
 .clip-card audio { width: 100%; height: 32px; }
 .clip-audios { display: flex; flex-direction: column; gap: 6px; }
-.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: .04em; }
 .clip-note { font-size: 12px; color: var(--dim); line-height: 1.45; margin: 0; }
 .clip-meta { font-size: 11px; color: var(--dim); margin: 0; font-variant-numeric: tabular-nums; }
 .clip-context { font-size: 12px; color: var(--ink); line-height: 1.5; margin: 2px 0 0;
@@ -227,6 +231,7 @@
   <p class="clip-note">Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 2.024e-04.</p>
   <p class="clip-meta">2026-07-01T04:07:49.732000+00:00 · detected state:
   turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Sustained · 080726-pu_strikes
@@ -243,6 +248,7 @@
   <p class="clip-note">Triggered by a sustained anomaly (fusion path): 4 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 4.0 s total (minimum duration 3 s) -- lowest value p = 4.032e-04.</p>
   <p class="clip-meta">2026-07-08T15:16:24.411000+00:00 · detected state:
   turbine · SCADA: transition</p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Sustained · 290626-tu
@@ -259,6 +265,7 @@
   <p class="clip-note">Triggered by a sustained anomaly (fusion path): 12 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 12.0 s total (minimum duration 3 s) -- lowest value p = 4.037e-04.</p>
   <p class="clip-meta">2026-06-29T04:47:21.834000+00:00 · detected state:
   standstill · SCADA: transition</p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Sustained · 010726-tu1-morning
@@ -275,6 +282,7 @@
   <p class="clip-note">Triggered by a sustained anomaly (fusion path): 3 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 3.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.</p>
   <p class="clip-meta">2026-07-01T04:02:57.732000+00:00 · detected state:
   turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Sustained · 010726-tu1-morning
@@ -291,6 +299,7 @@
   <p class="clip-note">Triggered by a sustained anomaly (fusion path): 8 consecutive windows with p &lt; 0.01 against the operating mode&#x27;s normal model, 8.0 s total (minimum duration 3 s) -- lowest value p = 4.048e-04.</p>
   <p class="clip-meta">2026-07-01T04:08:26.732000+00:00 · detected state:
   turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+  
 </div></div>
   <h3 class="clip-subhead">Transient</h3>
   <div class="clip-grid"><div class="clip-card candidate">
@@ -309,6 +318,7 @@
   <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 1.461e-04).</p>
   <p class="clip-meta">2026-06-27T05:49:18.337000+00:00 · detected state:
   turbine · SCADA: unknown</p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Transient · 290626-tu
@@ -325,6 +335,7 @@
   <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 2.497e-04).</p>
   <p class="clip-meta">2026-06-29T04:31:35.737000+00:00 · detected state:
   turbine · SCADA: transition</p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Transient · 270626-pu_ph_pu_ph_pu_ph-1
@@ -341,6 +352,7 @@
   <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 2.922e-04).</p>
   <p class="clip-meta">2026-06-27T05:46:40.337000+00:00 · detected state:
   turbine · SCADA: unknown</p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Transient · 010726-tu1-morning
@@ -357,6 +369,7 @@
   <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 3.610e-04).</p>
   <p class="clip-meta">2026-07-01T03:07:51.731000+00:00 · detected state:
   turbine · SCADA: turbine <span class="badge in-sample">fit-pool day</span></p>
+  
 </div><div class="clip-card candidate">
   <div class="clip-head">
     <span class="clip-title">Transient · 290626-tu
@@ -373,6 +386,7 @@
   <p class="clip-note">Triggered by a single short impulse (BEATs path): one window with p &lt; 0.001 against the normal model (p = 8.917e-04).</p>
   <p class="clip-meta">2026-06-29T02:00:22.737000+00:00 · detected state:
   turbine · SCADA: transition</p>
+  
   <p class="clip-context"><strong>Context.</strong> Independently assessed by the author as “plausible anomaly.” A window-level cross-match against the partner's own (undocumented, never per-event-timestamped) Knack search on this same day places this candidate 16–23 s inside his search window under the evidence-backed timebase correction — the two independent methods point at the same few seconds, though the partner's own detection was never itself confirmed.</p>
 </div></div>
 </section>

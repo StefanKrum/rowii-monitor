@@ -9,12 +9,14 @@
 .sensor-section-head { margin-top: 30px; }
 .sensor-section-head h2 { font-size: 16px; margin-bottom: 2px; }
 .sensor-section-head p { color: var(--dim); font-size: 13px; max-width: 68ch; }
-.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; margin-top: 10px; }
+.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap;
+  margin-top: 10px; }
 .sensor-diagram { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--hair);
   border-radius: var(--radius-lg); padding: 14px; }
 .sensor-diagram svg { width: 300px; height: auto; display: block; }
 .sensor rect, .sensor circle, .sensor line { transition: fill .15s ease, stroke .15s ease; }
-.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1; cursor: pointer; }
+.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1;
+  cursor: pointer; }
 .sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--live); fill-opacity: .85; }
 .sensor.vib rect { fill: var(--panel); stroke: var(--warn); stroke-width: 1.1; cursor: pointer; }
 .sensor.vib line { stroke: var(--warn); stroke-width: 1; }
@@ -33,12 +35,14 @@ table.sensor-table th, table.sensor-table td { text-align: left; padding: 7px 10
   border-bottom: 1px solid var(--hair-2); }
 table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: uppercase;
   font-size: 10.5px; letter-spacing: .05em; }
-.callout { background: var(--panel); border: 1px solid var(--hair); border-left: 3px solid var(--warn);
+.callout { background: var(--panel); border: 1px solid var(--hair);
+  border-left: 3px solid var(--warn);
   border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px; color: var(--dim);
   line-height: 1.55; }
 .callout strong { color: var(--ink); }
 .plan-rings { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
-.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg);
   padding: 12px; }
 .plan-ring-cell svg { display: block; }
 </style>

@@ -63,10 +63,13 @@ for _extra_path in (str(_SCRIPTS_DIR), str(_SRC_DIR)):
 import annotation_kit as ak  # noqa: E402
 import candidate_kit as ck  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
+import run_step1 as rs1  # noqa: E402
 import site_common as sc  # noqa: E402
 
 from rowii.config import load_config  # noqa: E402
-from rowii.io.dataset import discover  # noqa: E402
+from rowii.io.dataset import discover, run_utc_offset_ns  # noqa: E402
+from rowii.pipeline import build_run_grid  # noqa: E402
+from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +91,10 @@ by construction (`run_once_calibrated.py`)."""
 UNIT_NAME = "ROWII Machine 1 — Rodundwerk II"
 
 MONITOR_DIR = RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / "monitor" / RUN / REGIME
-SENTINEL_JSON = RESULTS_ROOT / "step2" / "once-calibrated" / SENTINEL_REPRESENTATION / f"{SENTINEL_REPRESENTATION}.json"
+SENTINEL_JSON = (
+    RESULTS_ROOT / "step2" / "once-calibrated" / SENTINEL_REPRESENTATION
+    / f"{SENTINEL_REPRESENTATION}.json"
+)
 CANDIDATES_CSV = RESULTS_ROOT / "candidate-kit" / "candidates.csv"
 CANDIDATES_META = RESULTS_ROOT / "candidate-kit" / "candidates_meta.json"
 
@@ -140,12 +146,16 @@ def load_primary_timeline() -> dict[str, Any]:
     t0_ns = int(t0.value)
     duration_s = (int(segments_df["end_utc"].max().value) - t0_ns) / 1e9
 
-    state_table = mda.parse_state_table((MONITOR_DIR / "monitor_notes.md").read_text(encoding="utf-8"))
+    notes_text = (MONITOR_DIR / "monitor_notes.md").read_text(encoding="utf-8")
+    state_table = mda.parse_state_table(notes_text)
     states = {
         str(sid): {
             "name": info["name"],
             "name_label": mda.state_display_name(info["name"]),
-            "threshold": None if info["threshold"] is None or math.isinf(info["threshold"]) else round(info["threshold"], 6),
+            "threshold": (
+                None if info["threshold"] is None or math.isinf(info["threshold"])
+                else round(info["threshold"], 6)
+            ),
             "low_confidence": info["low_confidence"],
         }
         for sid, info in state_table.items()
@@ -205,8 +215,11 @@ def load_primary_timeline() -> dict[str, Any]:
 def load_sentinel() -> dict[str, Any]:
     payload = json.loads(SENTINEL_JSON.read_text(encoding="utf-8"))
     trig = next(t for t in payload["trigger_log"] if t["run"] == RUN)
+    fusion_json_path = (
+        RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / f"{REPRESENTATION}.json"
+    )
     fusion_json = json.loads(
-        (RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / f"{REPRESENTATION}.json").read_text(
+        fusion_json_path.read_text(
             encoding="utf-8"
         )
     )
@@ -290,23 +303,27 @@ def load_scada(index: Any, cfg: Any) -> dict[str, Any]:
     # gt_labels`'s own `load_bin` column (quantile-binned power, turbine/pump windows
     # only, n_load_bins=3 by default) -- `load_session_scada` itself only keeps
     # `state`, not `load_bin`, so this mirrors that function's own internals
-    # (`ck.rs1`/`ck.build_run_grid`/`ck.load_scada_window_means`/`ck.gt_labels`, all
-    # re-exported by `candidate_kit`'s own module-level imports) rather than
-    # duplicating a second real-data read.
-    run = ck.mda._get_run(index, RUN)
+    # (`rs1`/`build_run_grid`/`load_scada_window_means`/`gt_labels`, imported
+    # directly here -- not via `candidate_kit`'s own namespace, which mypy's
+    # `no_implicit_reexport` correctly refuses to treat as a public API) rather
+    # than duplicating a second real-data read.
+    run = mda._get_run(index, RUN)
     betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
-    offset_ns = ck.run_utc_offset_ns(run)
-    grid = ck.build_run_grid(run, ck.rs1._AUDIO_STREAMS, cfg.window.window_s, offset_ns=offset_ns)
-    matched_files = ck.rs1._betriebsdaten_for_grid(betriebsdaten, grid)
-    scada_means = ck.load_scada_window_means(matched_files, grid, audio_run_offset_ns=offset_ns)
-    gt = ck.gt_labels(scada_means, cfg.gt, window_s=cfg.window.window_s)
+    offset_ns = run_utc_offset_ns(run)
+    grid = build_run_grid(run, rs1._AUDIO_STREAMS, cfg.window.window_s, offset_ns=offset_ns)
+    matched_files = rs1._betriebsdaten_for_grid(betriebsdaten, grid)
+    scada_means = load_scada_window_means(matched_files, grid, audio_run_offset_ns=offset_ns)
+    gt = gt_labels(scada_means, cfg.gt, window_s=cfg.window.window_s)
     load_bin = gt["load_bin"].to_numpy()
+
+    def _round_or_none(v: float | None, digits: int) -> float | None:
+        return None if v is None or math.isnan(v) else round(float(v), digits)
 
     return {
         "has_scada": session_scada.has_scada,
         "n": len(session_scada.power_mw),
-        "power_mw": [None if v is None or math.isnan(v) else round(float(v), 3) for v in session_scada.power_mw],
-        "speed_rpm": [None if v is None or math.isnan(v) else round(float(v), 2) for v in session_scada.speed_rpm],
+        "power_mw": [_round_or_none(v, 3) for v in session_scada.power_mw],
+        "speed_rpm": [_round_or_none(v, 2) for v in session_scada.speed_rpm],
         "scada_state": session_scada.state,
         "load_bin": [int(v) for v in load_bin],
         "n_load_bins": int(cfg.gt.n_load_bins),
@@ -472,8 +489,12 @@ def build_payload() -> dict[str, Any]:
         "features": load_feature_snapshot(),
         "alerts": load_alerts(t0_ns),
         "rings": {
-            "generator": sc.render_ring_svg("GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False),
-            "turbine": sc.render_ring_svg("TURBINE", sc.TURBINE_MARKERS, size=196, interactive=False),
+            "generator": sc.render_ring_svg(
+                "GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False
+            ),
+            "turbine": sc.render_ring_svg(
+                "TURBINE", sc.TURBINE_MARKERS, size=196, interactive=False
+            ),
         },
     }
     return payload
