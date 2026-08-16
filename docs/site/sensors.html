@@ -4,216 +4,86 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sensors — ROWII Monitor</title>
+<link rel="stylesheet" href="assets/design.css">
 <style>
-:root {
-  --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
-  --muted2: #5b6a8c; --grid: #26304a; --step: #0f1420; --accent: #4c8dff;
-  --alarm: #ff5c5c; --gt: #ffd166; --good: #37c992;
-  --s-standstill: #7c8aab; --s-turbine: #37c992; --s-pump: #4c8dff;
-  --s-phaseshifter: #b48cff;
-  --radius: 10px;
-}
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  background: radial-gradient(ellipse at 20% -10%, #131b2e 0%, var(--bg) 55%);
-  color: var(--ink);
-  font: 15px/1.55 "SF Pro Text", -apple-system, "Segoe UI", system-ui, sans-serif;
-}
-h1, h2, h3, p { margin: 0 0 .6em; }
-a { color: #9fc0ff; }
-code { font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: #9fc0ff; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
-
-header.topbar {
-  display: flex; align-items: center; gap: 22px; padding: 14px 22px;
-  border-bottom: 1px solid var(--grid);
-  background: linear-gradient(180deg, #0d1220, #0a0e17);
-  position: sticky; top: 0; z-index: 10;
-}
-.brand { display: flex; align-items: baseline; gap: 6px; font-weight: 800; }
-.brand-mark { font-size: 16px; letter-spacing: .04em; }
-.brand-sub { font-size: 13px; color: var(--muted); font-weight: 600; }
-nav.nav { display: flex; gap: 4px; flex-wrap: wrap; }
-nav.nav a {
-  color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
-  padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
-}
-nav.nav a:hover { color: var(--ink); border-color: var(--grid); }
-nav.nav a.active {
-  color: var(--ink); background: var(--panel); border-color: var(--grid);
-}
-
-main.page { max-width: 980px; margin: 0 auto; padding: 34px 22px 60px; }
-.page-head h1 { font-size: 26px; font-weight: 800; }
-.page-head p { color: var(--muted); max-width: 68ch; }
-
-.notice {
-  background: #1c1608; border: 1px solid #4a3d16; color: #ffd166;
-  border-radius: var(--radius);
-  padding: 12px 16px; font-size: 13.5px; line-height: 1.5; margin: 18px 0 28px;
-}
-.notice strong { color: #ffe6a3; }
-
-.hero { padding: 10px 0 6px; }
-.hero h1 { font-size: 32px; font-weight: 800; letter-spacing: -.01em; }
-.hero .lede { color: var(--muted); font-size: 16px; max-width: 74ch; }
-
-.cards {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px;
-}
-@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
-a.card {
-  display: block; background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius);
-  padding: 18px 18px 20px; text-decoration: none; color: var(--ink);
-  transition: border-color .15s ease, transform .15s ease;
-}
-a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
-a.card h2 { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
-a.card p { color: var(--muted); font-size: 13.5px; margin: 0; }
-a.card .go {
-  display: block; margin-top: 12px; font-size: 12px; font-weight: 700;
-  color: var(--accent);
-}
-
-.site-footer {
-  max-width: 980px; margin: 0 auto; padding: 24px 22px 46px;
-  color: var(--muted2); font-size: 12px;
-  border-top: 1px solid var(--grid);
-}
-
-/* ---------- sensors page ---------- */
-.sensor-layout {
-  display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap;
-  margin-top: 10px;
-}
-.sensor-diagram {
-  flex: 0 0 auto; background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius); padding: 14px;
-}
-.sensor-diagram svg { width: 320px; height: auto; display: block; }
-.sensor rect, .sensor circle, .sensor line {
-  transition: fill .15s ease, stroke .15s ease;
-}
-.sensor.mic circle {
-  fill: var(--accent); stroke: #06101f; stroke-width: 1; cursor: pointer;
-}
-.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--gt); }
-.sensor.vib rect {
-  fill: #3a2a10; stroke: #ffb84c; stroke-width: 1.1; cursor: pointer;
-}
-.sensor.vib line { stroke: #ffb84c; stroke-width: 1; }
-.sensor.vib:hover rect, .sensor.vib:focus rect { fill: #ffb84c; }
-.m-block { fill: #16203a; stroke: var(--grid); stroke-width: 1.4; }
-.m-shaft { fill: #202c48; }
-.m-label {
-  fill: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
-}
-.sensor-readout {
-  flex: 1 1 260px; background: var(--panel2); border: 1px solid var(--grid);
-  border-radius: var(--radius);
-  padding: 16px 18px; min-height: 84px; font-size: 13.5px; color: var(--muted);
-}
-.sensor-readout .rlabel {
-  display: block; color: var(--ink); font-weight: 800; font-size: 15px;
-  margin-bottom: 4px;
-}
+.sensor-section-head { margin-top: 30px; }
+.sensor-section-head h2 { font-size: 16px; margin-bottom: 2px; }
+.sensor-section-head p { color: var(--dim); font-size: 13px; max-width: 68ch; }
+.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; margin-top: 10px; }
+.sensor-diagram { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg); padding: 14px; }
+.sensor-diagram svg { width: 300px; height: auto; display: block; }
+.sensor rect, .sensor circle, .sensor line { transition: fill .15s ease, stroke .15s ease; }
+.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1; cursor: pointer; }
+.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--live); fill-opacity: .85; }
+.sensor.vib rect { fill: var(--panel); stroke: var(--warn); stroke-width: 1.1; cursor: pointer; }
+.sensor.vib line { stroke: var(--warn); stroke-width: 1; }
+.sensor.vib:hover rect, .sensor.vib:focus rect { fill: var(--warn); fill-opacity: .28; }
+.m-block { fill: var(--panel-2); stroke: var(--hair); stroke-width: 1.4; }
+.m-shaft { fill: var(--hair-2); }
+.m-label { fill: var(--dim); font-size: 10.5px; font-weight: 700; letter-spacing: .03em; }
+.sensor-readout { flex: 1 1 260px; background: var(--panel-2); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg); padding: 16px 18px; min-height: 84px; font-size: 13.5px;
+  color: var(--dim); }
+.sensor-readout .rlabel { display: block; color: var(--ink); font-weight: 800; font-size: 15px;
+  margin-bottom: 4px; }
 .sensor-readout code { display: block; margin-top: 6px; }
-table.sensor-table {
-  width: 100%; border-collapse: collapse; margin-top: 26px; font-size: 13px;
-}
-table.sensor-table th, table.sensor-table td {
-  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid);
-}
-table.sensor-table th {
-  color: var(--muted); font-weight: 700; text-transform: uppercase;
-  font-size: 10.5px; letter-spacing: .05em;
-}
-.callout {
-  background: var(--panel); border: 1px solid var(--grid);
-  border-left: 3px solid var(--accent);
-  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px;
-  color: var(--muted); line-height: 1.55;
-}
+table.sensor-table { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: 13px; }
+table.sensor-table th, table.sensor-table td { text-align: left; padding: 7px 10px;
+  border-bottom: 1px solid var(--hair-2); }
+table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: uppercase;
+  font-size: 10.5px; letter-spacing: .05em; }
+.callout { background: var(--panel); border: 1px solid var(--hair); border-left: 3px solid var(--warn);
+  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px; color: var(--dim);
+  line-height: 1.55; }
 .callout strong { color: var(--ink); }
-
-/* ---------- live page ---------- */
-.iframe-wrap {
-  border: 1px solid var(--grid); border-radius: var(--radius); overflow: hidden;
-  margin-top: 14px;
-  background: #05070c; height: min(78vh, 860px);
-}
-.iframe-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
-.hint { color: var(--muted); font-size: 13px; margin-top: 12px; }
-
-/* ---------- snippets page ---------- */
-.clip-section { margin-top: 34px; }
-.clip-section h2 { font-size: 19px; font-weight: 800; }
-.clip-section > p { color: var(--muted); max-width: 74ch; font-size: 13.5px; }
-.clip-subhead {
-  font-size: 13px; color: var(--muted); margin: 16px 0 4px;
-  text-transform: uppercase; letter-spacing: .04em;
-}
-.clip-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 14px; margin-top: 14px;
-}
-.clip-card {
-  background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius); padding: 14px 15px;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.clip-head {
-  display: flex; justify-content: space-between; align-items: baseline;
-  gap: 8px; flex-wrap: wrap;
-}
-.clip-title { font-weight: 700; font-size: 13.5px; }
-.clip-tag {
-  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
-  background: #1c2740; color: var(--muted); white-space: nowrap;
-}
-.clip-tag.sustained { color: #ffb84c; }
-.clip-tag.transient { color: #ff9fd6; }
-.badge.unverified {
-  font-size: 9.5px; font-weight: 800; color: #ffd166; background: #2c2410;
-  border: 1px solid #4a3d16; border-radius: 5px; padding: 3px 7px;
-  white-space: nowrap;
-}
-.badge.in-sample {
-  font-size: 9px; font-weight: 700; color: var(--muted); background: #1c2740;
-  border-radius: 5px; padding: 2px 6px;
-}
-.clip-card audio { width: 100%; height: 32px; }
-.clip-audios { display: flex; flex-direction: column; gap: 6px; }
-.clip-audios label {
-  font-size: 10.5px; color: var(--muted2); text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.clip-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
-.clip-meta {
-  font-size: 11px; color: var(--muted2); margin: 0;
-  font-variant-numeric: tabular-nums;
-}
+.plan-rings { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
+.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+  padding: 12px; }
+.plan-ring-cell svg { display: block; }
 </style>
 </head>
 <body>
-<header class="topbar"><div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div><nav class="nav"><a href="index.html">Overview</a><a href="sensors.html" class="active">Sensors</a><a href="live.html">Live Replay</a><a href="snippets.html">Listening Library</a></nav></header>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="sensors.html" class="active">Sensors</a>
+    <a href="live.html">Live Replay</a>
+    <a href="snippets.html">Listening Library</a>
+    <a href="review.html">Candidate Review</a>
+  </nav>
+</header>
 <main class="page">
 
 <section class="page-head">
   <h1>Sensor layout</h1>
-  <p>The as-built acoustic and vibration sensor geometry on the machine set. Hover or
-  keyboard-focus a marker for its stream/channel name; the full table is below for
-  reference.</p>
+  <p>The as-built acoustic and vibration sensor geometry on the machine set, in two
+  views: a vertical section (how the sensors sit on the machine) and a plan view
+  (looking straight down each ring). Hover or keyboard-focus any marker for its
+  stream/channel name; the full table is below for reference.</p>
 </section>
+
+<div class="sensor-section-head">
+  <h2>Vertical section</h2>
+</div>
 <div class="sensor-layout">
   <div class="sensor-diagram"><svg viewBox="0 0 320 560" role="img" aria-label="As-built sensor geometry"><rect class="m-shaft" x="151" y="174" width="18" height="200"/><rect class="m-block" x="78" y="82" width="164" height="92" rx="10"/><text class="m-label" x="160" y="132" text-anchor="middle">GENERATOR</text><rect class="m-block" x="86" y="378" width="148" height="84" rx="10"/><text class="m-label" x="160" y="424" text-anchor="middle">TURBINE / PUMP</text><g class="sensor mic" tabindex="0" data-label="GenMic0" data-desc="Generator-level microphone ring, 0° position." data-stream="RAWGeneratorMic__0"><title>GenMic0 — Generator-level microphone ring, 0° position. (RAWGeneratorMic__0)</title><circle cx="160.0" cy="94.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="GenMic90" data-desc="Generator-level microphone ring, 90° position." data-stream="RAWGeneratorMic__0"><title>GenMic90 — Generator-level microphone ring, 90° position. (RAWGeneratorMic__0)</title><circle cx="242.0" cy="128.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="GenMic180" data-desc="Generator-level microphone ring, 180° position." data-stream="RAWGeneratorMic__0"><title>GenMic180 — Generator-level microphone ring, 180° position. (RAWGeneratorMic__0)</title><circle cx="160.0" cy="162.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="GenMic270" data-desc="Generator-level microphone ring, 270° position." data-stream="RAWGeneratorMic__0"><title>GenMic270 — Generator-level microphone ring, 270° position. (RAWGeneratorMic__0)</title><circle cx="78.0" cy="128.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="TurMic0" data-desc="Turbine-level microphone ring, 0° position." data-stream="RAWTurbineMic__1"><title>TurMic0 — Turbine-level microphone ring, 0° position. (RAWTurbineMic__1)</title><circle cx="160.0" cy="386.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="TurMic90" data-desc="Turbine-level microphone ring, 90° position." data-stream="RAWTurbineMic__1"><title>TurMic90 — Turbine-level microphone ring, 90° position. (RAWTurbineMic__1)</title><circle cx="242.0" cy="420.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="TurMic180" data-desc="Turbine-level microphone ring, 180° position." data-stream="RAWTurbineMic__1"><title>TurMic180 — Turbine-level microphone ring, 180° position. (RAWTurbineMic__1)</title><circle cx="160.0" cy="454.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="TurMic270" data-desc="Turbine-level microphone ring, 270° position." data-stream="RAWTurbineMic__1"><title>TurMic270 — Turbine-level microphone ring, 270° position. (RAWTurbineMic__1)</title><circle cx="78.0" cy="420.0" r="7"/></g><g class="sensor mic" tabindex="0" data-label="TurMicBottom" data-desc="Turbine-level microphone, bottom position (off-ring, below the casing)." data-stream="RAWTurbineMic__1"><title>TurMicBottom — Turbine-level microphone, bottom position (off-ring, below the casing). (RAWTurbineMic__1)</title><circle cx="160.0" cy="490.0" r="7"/></g><g class="sensor vib" tabindex="0" data-label="GenVib0" data-desc="Generator-level tri-axial accelerometer, 0° position. Channels: GenVib0X, GenVib0Y, GenVib0Z." data-stream="RAWGeneratorVib__2"><title>GenVib0 — Generator-level tri-axial accelerometer, 0° position. Channels: GenVib0X, GenVib0Y, GenVib0Z. (RAWGeneratorVib__2)</title><rect x="260.0" y="100.0" width="16" height="16" rx="3"/><line x1="268.0" y1="108.0" x2="279.0" y2="103.0"/><line x1="268.0" y1="108.0" x2="264.0" y2="97.0"/><line x1="268.0" y1="108.0" x2="268.0" y2="119.0"/></g><g class="sensor vib" tabindex="0" data-label="GenVib180" data-desc="Generator-level tri-axial accelerometer, 180° position. Channels: GenVib180X, GenVib180Y, GenVib180Z." data-stream="RAWGeneratorVib__2"><title>GenVib180 — Generator-level tri-axial accelerometer, 180° position. Channels: GenVib180X, GenVib180Y, GenVib180Z. (RAWGeneratorVib__2)</title><rect x="44.0" y="100.0" width="16" height="16" rx="3"/><line x1="52.0" y1="108.0" x2="63.0" y2="103.0"/><line x1="52.0" y1="108.0" x2="48.0" y2="97.0"/><line x1="52.0" y1="108.0" x2="52.0" y2="119.0"/></g><g class="sensor vib" tabindex="0" data-label="TurVib0" data-desc="Turbine-level tri-axial accelerometer, 0° position. Channels: TurVib0X, TurVib0Y, TurVib0Z." data-stream="RAWTurbineVib__3"><title>TurVib0 — Turbine-level tri-axial accelerometer, 0° position. Channels: TurVib0X, TurVib0Y, TurVib0Z. (RAWTurbineVib__3)</title><rect x="252.0" y="394.0" width="16" height="16" rx="3"/><line x1="260.0" y1="402.0" x2="271.0" y2="397.0"/><line x1="260.0" y1="402.0" x2="256.0" y2="391.0"/><line x1="260.0" y1="402.0" x2="260.0" y2="413.0"/></g><g class="sensor vib" tabindex="0" data-label="TurVib180" data-desc="Turbine-level tri-axial accelerometer, 180° position. Channels: TurVib180X, TurVib180Y, TurVib180Z." data-stream="RAWTurbineVib__3"><title>TurVib180 — Turbine-level tri-axial accelerometer, 180° position. Channels: TurVib180X, TurVib180Y, TurVib180Z. (RAWTurbineVib__3)</title><rect x="52.0" y="394.0" width="16" height="16" rx="3"/><line x1="60.0" y1="402.0" x2="71.0" y2="397.0"/><line x1="60.0" y1="402.0" x2="56.0" y2="391.0"/><line x1="60.0" y1="402.0" x2="60.0" y2="413.0"/></g></svg></div>
   <div class="sensor-readout" id="sensorReadout">Hover or focus a sensor marker to see
   its name here.</div>
 </div>
+
+<div class="sensor-section-head">
+  <h2>Plan view (top-down)</h2>
+  <p>Each ring drawn from above: the same 4&times;90&deg; microphone spacing (plus the
+  turbine ring's off-ring bottom microphone) and the two tri-axial accelerometers per
+  level. Markers share the same hover readout as the section view above.</p>
+</div>
+<div class="plan-rings">
+  <div class="plan-ring-cell"><svg viewBox="0 0 210 210" width="210" height="210" role="img" aria-label="GENERATOR plan view"><circle cx="105.0" cy="105.0" r="63.0" fill="#f7f8f9" stroke="#c7cdd4" stroke-width="1.3"/><circle cx="105.0" cy="105.0" r="26.5" fill="none" stroke="#c7cdd4" stroke-width="1" stroke-dasharray="2 3"/><text x="105.0" y="108.5" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5b6b7c" font-family=""Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif">GENERATOR</text><g class="ring-group" data-stream="RAWGeneratorMic__0"><g class="sensor mic ring-marker" tabindex="0" data-label="GenMic0" data-desc="Generator microphone ring, 0 deg." data-stream="RAWGeneratorMic__0"><title>GenMic0 — Generator microphone ring, 0 deg. (RAWGeneratorMic__0)</title><circle class="mic-dot" cx="105.0" cy="42.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="GenMic90" data-desc="Generator microphone ring, 90 deg." data-stream="RAWGeneratorMic__0"><title>GenMic90 — Generator microphone ring, 90 deg. (RAWGeneratorMic__0)</title><circle class="mic-dot" cx="168.0" cy="105.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="GenMic180" data-desc="Generator microphone ring, 180 deg." data-stream="RAWGeneratorMic__0"><title>GenMic180 — Generator microphone ring, 180 deg. (RAWGeneratorMic__0)</title><circle class="mic-dot" cx="105.0" cy="168.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="GenMic270" data-desc="Generator microphone ring, 270 deg." data-stream="RAWGeneratorMic__0"><title>GenMic270 — Generator microphone ring, 270 deg. (RAWGeneratorMic__0)</title><circle class="mic-dot" cx="42.0" cy="105.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g></g><g class="ring-group" data-stream="RAWGeneratorVib__2"><g class="sensor vib ring-marker" tabindex="0" data-label="GenVib0" data-desc="Generator tri-axial accelerometer, 0 deg." data-stream="RAWGeneratorVib__2"><title>GenVib0 — Generator tri-axial accelerometer, 0 deg. (RAWGeneratorVib__2)</title><rect class="vib-dot" x="100.5" y="19.9" width="9" height="9" rx="2" fill="#ffffff" fill-opacity="0.9" stroke="#a16207" stroke-width="1.2"/></g><g class="sensor vib ring-marker" tabindex="0" data-label="GenVib180" data-desc="Generator tri-axial accelerometer, 180 deg." data-stream="RAWGeneratorVib__2"><title>GenVib180 — Generator tri-axial accelerometer, 180 deg. (RAWGeneratorVib__2)</title><rect class="vib-dot" x="100.5" y="181.1" width="9" height="9" rx="2" fill="#ffffff" fill-opacity="0.9" stroke="#a16207" stroke-width="1.2"/></g></g></svg></div>
+  <div class="plan-ring-cell"><svg viewBox="0 0 210 210" width="210" height="210" role="img" aria-label="TURBINE plan view"><circle cx="105.0" cy="105.0" r="63.0" fill="#f7f8f9" stroke="#c7cdd4" stroke-width="1.3"/><circle cx="105.0" cy="105.0" r="26.5" fill="none" stroke="#c7cdd4" stroke-width="1" stroke-dasharray="2 3"/><text x="105.0" y="108.5" text-anchor="middle" font-size="9.5" font-weight="700" fill="#5b6b7c" font-family=""Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif">TURBINE</text><g class="ring-group" data-stream="RAWTurbineMic__1"><g class="sensor mic ring-marker" tabindex="0" data-label="TurMic0" data-desc="Turbine microphone ring, 0 deg." data-stream="RAWTurbineMic__1"><title>TurMic0 — Turbine microphone ring, 0 deg. (RAWTurbineMic__1)</title><circle class="mic-dot" cx="105.0" cy="42.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="TurMic90" data-desc="Turbine microphone ring, 90 deg." data-stream="RAWTurbineMic__1"><title>TurMic90 — Turbine microphone ring, 90 deg. (RAWTurbineMic__1)</title><circle class="mic-dot" cx="168.0" cy="105.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="TurMic180" data-desc="Turbine microphone ring, 180 deg." data-stream="RAWTurbineMic__1"><title>TurMic180 — Turbine microphone ring, 180 deg. (RAWTurbineMic__1)</title><circle class="mic-dot" cx="105.0" cy="168.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="TurMic270" data-desc="Turbine microphone ring, 270 deg." data-stream="RAWTurbineMic__1"><title>TurMic270 — Turbine microphone ring, 270 deg. (RAWTurbineMic__1)</title><circle class="mic-dot" cx="42.0" cy="105.0" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g><g class="sensor mic ring-marker" tabindex="0" data-label="TurMicBottom" data-desc="Turbine microphone, bottom position (off-ring, below the casing)." data-stream="RAWTurbineMic__1"><title>TurMicBottom — Turbine microphone, bottom position (off-ring, below the casing). (RAWTurbineMic__1)</title><circle class="mic-dot" cx="105.0" cy="199.5" r="5.6" fill="#0f766e" fill-opacity="0.34" stroke="#1f2a37" stroke-width="1"/></g></g><g class="ring-group" data-stream="RAWTurbineVib__3"><g class="sensor vib ring-marker" tabindex="0" data-label="TurVib0" data-desc="Turbine tri-axial accelerometer, 0 deg." data-stream="RAWTurbineVib__3"><title>TurVib0 — Turbine tri-axial accelerometer, 0 deg. (RAWTurbineVib__3)</title><rect class="vib-dot" x="100.5" y="19.9" width="9" height="9" rx="2" fill="#ffffff" fill-opacity="0.9" stroke="#a16207" stroke-width="1.2"/></g><g class="sensor vib ring-marker" tabindex="0" data-label="TurVib180" data-desc="Turbine tri-axial accelerometer, 180 deg." data-stream="RAWTurbineVib__3"><title>TurVib180 — Turbine tri-axial accelerometer, 180 deg. (RAWTurbineVib__3)</title><rect class="vib-dot" x="100.5" y="181.1" width="9" height="9" rx="2" fill="#ffffff" fill-opacity="0.9" stroke="#a16207" stroke-width="1.2"/></g></g></svg></div>
+</div>
+
 <table class="sensor-table">
   <thead><tr><th>Label</th><th>Stream</th><th>Ring position</th>
   <th>Channel(s)</th><th>Description</th></tr></thead>
@@ -230,11 +100,15 @@ table.sensor-table th {
   pipeline consumes one mono channel per audio stream (channel 0 of
   <code>RAWGeneratorMic__0</code> / <code>RAWTurbineMic__1</code>); the full
   multi-microphone geometry shown here is the physical installation, not (yet) a
-  per-channel model input.
+  per-channel model input &mdash; each ring's own markers in the plan view above
+  therefore share ONE live level (<code>live.html</code>'s sensor panel), not an
+  individually verified per-position reading (the exact channel-index &harr; azimuth
+  correspondence for the multi-channel ring recordings has never been independently
+  confirmed).
 </div>
 <script>document.querySelectorAll(".sensor").forEach(function(el){function show(){var r=document.getElementById("sensorReadout");r.innerHTML="<span class=\"rlabel\">"+el.dataset.label+"</span>"+el.dataset.desc+"<code>"+el.dataset.stream+"</code>";}el.addEventListener("pointerenter", show);el.addEventListener("focus", show);});</script>
 
 </main>
-<footer class="site-footer">Krummenacher, 2026, University of St. Gallen — see README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>
+<footer class="site-footer">Krummenacher, 2026, University of St. Gallen &mdash; see README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>
 </body>
 </html>

@@ -62,6 +62,7 @@ from scipy.io import wavfile
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 import make_demo_assets as mda  # noqa: E402
+import site_common as sc  # noqa: E402
 
 REPO_ROOT = SCRIPTS_DIR.parent
 DEFAULT_ANNOTATION_KIT_DIR = REPO_ROOT / "results" / "annotation-kit" / "080726"
@@ -521,13 +522,6 @@ def build_site_manifest(
 # manifest.json, writes docs/site/*.html; touches no results/ data)
 # ---------------------------------------------------------------------------
 
-_NAV_PAGES = (
-    ("index.html", "Overview"),
-    ("sensors.html", "Sensors"),
-    ("live.html", "Live Replay"),
-    ("snippets.html", "Listening Library"),
-)
-
 _KIND_LABELS = {
     "plate-gen_0": "Reference plate — generator ring, 0°",
     "plate-gen_90": "Reference plate — generator ring, 90°",
@@ -545,245 +539,112 @@ _KIND_LABELS = {
 }
 
 
-def _nav_html(active_file: str) -> str:
-    links = []
-    for href, label in _NAV_PAGES:
-        cls = ' class="active"' if href == active_file else ""
-        links.append(f'<a href="{href}"{cls}>{label}</a>')
-    return (
-        '<header class="topbar"><div class="brand">'
-        '<span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div>'
-        f'<nav class="nav">{"".join(links)}</nav></header>'
-    )
-
-
 _NOTICE_HTML = (
-    '<div class="notice"><strong>Research prototype.</strong> Data courtesy of the '
-    "plant operator, used under a research data-sharing agreement for an HSG master "
-    "thesis. This site is a build artifact prepared for review, not yet public "
-    "— publication is pending data-release approval.</div>"
-)
-
-_FOOTER_HTML = (
-    '<footer class="site-footer">Krummenacher, 2026, University of St. Gallen '
-    "— see README.md and CITATION.cff for the full citation. Sensor recordings "
-    "are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>"
+    '<div class="notice"><strong>Research prototype, not a certified product.</strong> '
+    "Data courtesy of the plant operator, used under a research data-sharing agreement "
+    "for an HSG master thesis. Audio publication is pending Illwerke's data-release "
+    "approval &mdash; this repository stays private and is not served from GitHub "
+    "Pages.</div>"
 )
 
 
-def _page_shell(*, title: str, active_file: str, body_html: str) -> str:
+def _page_shell(
+    *, title: str, active_file: str, body_html: str, extra_css: str = "", wide: bool = False
+) -> str:
+    """Every `docs/site/*.html` page shares ONE stylesheet link
+    (`assets/design.css`, the v2 light HMI design system) plus `site_common`'s
+    topbar/footer markup -- `extra_css` is a small, page-scoped `<style>` block
+    for layout that genuinely differs per page (the sensor rings, the clip
+    grid, ...), never a re-declaration of a shared token."""
+    page_cls = "page wide" if wide else "page"
+    style_tag = f"<style>{extra_css}</style>\n" if extra_css else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
-<style>{_SITE_CSS}</style>
-</head>
+<link rel="stylesheet" href="assets/design.css">
+{style_tag}</head>
 <body>
-{_nav_html(active_file)}
-<main class="page">
+{sc.topbar_html(active_file)}
+<main class="{page_cls}">
 {body_html}
 </main>
-{_FOOTER_HTML}
+{sc.FOOTER_HTML}
 </body>
 </html>
 """
 
 
-_SITE_CSS = """
-:root {
-  --bg: #0a0e17; --panel: #131a29; --panel2: #171f30; --ink: #e8ecf4; --muted: #8b96ad;
-  --muted2: #5b6a8c; --grid: #26304a; --step: #0f1420; --accent: #4c8dff;
-  --alarm: #ff5c5c; --gt: #ffd166; --good: #37c992;
-  --s-standstill: #7c8aab; --s-turbine: #37c992; --s-pump: #4c8dff;
-  --s-phaseshifter: #b48cff;
-  --radius: 10px;
-}
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  background: radial-gradient(ellipse at 20% -10%, #131b2e 0%, var(--bg) 55%);
-  color: var(--ink);
-  font: 15px/1.55 "SF Pro Text", -apple-system, "Segoe UI", system-ui, sans-serif;
-}
-h1, h2, h3, p { margin: 0 0 .6em; }
-a { color: #9fc0ff; }
-code { font-family: ui-monospace, Menlo, monospace; font-size: .92em; color: #9fc0ff; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
-
-header.topbar {
-  display: flex; align-items: center; gap: 22px; padding: 14px 22px;
-  border-bottom: 1px solid var(--grid);
-  background: linear-gradient(180deg, #0d1220, #0a0e17);
-  position: sticky; top: 0; z-index: 10;
-}
-.brand { display: flex; align-items: baseline; gap: 6px; font-weight: 800; }
-.brand-mark { font-size: 16px; letter-spacing: .04em; }
-.brand-sub { font-size: 13px; color: var(--muted); font-weight: 600; }
-nav.nav { display: flex; gap: 4px; flex-wrap: wrap; }
-nav.nav a {
-  color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
-  padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
-}
-nav.nav a:hover { color: var(--ink); border-color: var(--grid); }
-nav.nav a.active {
-  color: var(--ink); background: var(--panel); border-color: var(--grid);
-}
-
-main.page { max-width: 980px; margin: 0 auto; padding: 34px 22px 60px; }
-.page-head h1 { font-size: 26px; font-weight: 800; }
-.page-head p { color: var(--muted); max-width: 68ch; }
-
-.notice {
-  background: #1c1608; border: 1px solid #4a3d16; color: #ffd166;
-  border-radius: var(--radius);
-  padding: 12px 16px; font-size: 13.5px; line-height: 1.5; margin: 18px 0 28px;
-}
-.notice strong { color: #ffe6a3; }
-
-.hero { padding: 10px 0 6px; }
-.hero h1 { font-size: 32px; font-weight: 800; letter-spacing: -.01em; }
-.hero .lede { color: var(--muted); font-size: 16px; max-width: 74ch; }
-
-.cards {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px;
-}
-@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
-a.card {
-  display: block; background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius);
-  padding: 18px 18px 20px; text-decoration: none; color: var(--ink);
-  transition: border-color .15s ease, transform .15s ease;
-}
-a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
-a.card h2 { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
-a.card p { color: var(--muted); font-size: 13.5px; margin: 0; }
-a.card .go {
-  display: block; margin-top: 12px; font-size: 12px; font-weight: 700;
-  color: var(--accent);
-}
-
-.site-footer {
-  max-width: 980px; margin: 0 auto; padding: 24px 22px 46px;
-  color: var(--muted2); font-size: 12px;
-  border-top: 1px solid var(--grid);
-}
-
-/* ---------- sensors page ---------- */
-.sensor-layout {
-  display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap;
-  margin-top: 10px;
-}
-.sensor-diagram {
-  flex: 0 0 auto; background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius); padding: 14px;
-}
-.sensor-diagram svg { width: 320px; height: auto; display: block; }
-.sensor rect, .sensor circle, .sensor line {
-  transition: fill .15s ease, stroke .15s ease;
-}
-.sensor.mic circle {
-  fill: var(--accent); stroke: #06101f; stroke-width: 1; cursor: pointer;
-}
-.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--gt); }
-.sensor.vib rect {
-  fill: #3a2a10; stroke: #ffb84c; stroke-width: 1.1; cursor: pointer;
-}
-.sensor.vib line { stroke: #ffb84c; stroke-width: 1; }
-.sensor.vib:hover rect, .sensor.vib:focus rect { fill: #ffb84c; }
-.m-block { fill: #16203a; stroke: var(--grid); stroke-width: 1.4; }
-.m-shaft { fill: #202c48; }
-.m-label {
-  fill: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
-}
-.sensor-readout {
-  flex: 1 1 260px; background: var(--panel2); border: 1px solid var(--grid);
-  border-radius: var(--radius);
-  padding: 16px 18px; min-height: 84px; font-size: 13.5px; color: var(--muted);
-}
-.sensor-readout .rlabel {
-  display: block; color: var(--ink); font-weight: 800; font-size: 15px;
-  margin-bottom: 4px;
-}
+_SENSORS_CSS = """
+.sensor-section-head { margin-top: 30px; }
+.sensor-section-head h2 { font-size: 16px; margin-bottom: 2px; }
+.sensor-section-head p { color: var(--dim); font-size: 13px; max-width: 68ch; }
+.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; margin-top: 10px; }
+.sensor-diagram { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg); padding: 14px; }
+.sensor-diagram svg { width: 300px; height: auto; display: block; }
+.sensor rect, .sensor circle, .sensor line { transition: fill .15s ease, stroke .15s ease; }
+.sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1; cursor: pointer; }
+.sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--live); fill-opacity: .85; }
+.sensor.vib rect { fill: var(--panel); stroke: var(--warn); stroke-width: 1.1; cursor: pointer; }
+.sensor.vib line { stroke: var(--warn); stroke-width: 1; }
+.sensor.vib:hover rect, .sensor.vib:focus rect { fill: var(--warn); fill-opacity: .28; }
+.m-block { fill: var(--panel-2); stroke: var(--hair); stroke-width: 1.4; }
+.m-shaft { fill: var(--hair-2); }
+.m-label { fill: var(--dim); font-size: 10.5px; font-weight: 700; letter-spacing: .03em; }
+.sensor-readout { flex: 1 1 260px; background: var(--panel-2); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg); padding: 16px 18px; min-height: 84px; font-size: 13.5px;
+  color: var(--dim); }
+.sensor-readout .rlabel { display: block; color: var(--ink); font-weight: 800; font-size: 15px;
+  margin-bottom: 4px; }
 .sensor-readout code { display: block; margin-top: 6px; }
-table.sensor-table {
-  width: 100%; border-collapse: collapse; margin-top: 26px; font-size: 13px;
-}
-table.sensor-table th, table.sensor-table td {
-  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid);
-}
-table.sensor-table th {
-  color: var(--muted); font-weight: 700; text-transform: uppercase;
-  font-size: 10.5px; letter-spacing: .05em;
-}
-.callout {
-  background: var(--panel); border: 1px solid var(--grid);
-  border-left: 3px solid var(--accent);
-  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px;
-  color: var(--muted); line-height: 1.55;
-}
+table.sensor-table { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: 13px; }
+table.sensor-table th, table.sensor-table td { text-align: left; padding: 7px 10px;
+  border-bottom: 1px solid var(--hair-2); }
+table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: uppercase;
+  font-size: 10.5px; letter-spacing: .05em; }
+.callout { background: var(--panel); border: 1px solid var(--hair); border-left: 3px solid var(--warn);
+  border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px; color: var(--dim);
+  line-height: 1.55; }
 .callout strong { color: var(--ink); }
+.plan-rings { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
+.plan-ring-cell { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+  padding: 12px; }
+.plan-ring-cell svg { display: block; }
+"""
 
-/* ---------- live page ---------- */
-.iframe-wrap {
-  border: 1px solid var(--grid); border-radius: var(--radius); overflow: hidden;
-  margin-top: 14px;
-  background: #05070c; height: min(78vh, 860px);
-}
-.iframe-wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
-.hint { color: var(--muted); font-size: 13px; margin-top: 12px; }
-
-/* ---------- snippets page ---------- */
-.clip-section { margin-top: 34px; }
-.clip-section h2 { font-size: 19px; font-weight: 800; }
-.clip-section > p { color: var(--muted); max-width: 74ch; font-size: 13.5px; }
-.clip-subhead {
-  font-size: 13px; color: var(--muted); margin: 16px 0 4px;
-  text-transform: uppercase; letter-spacing: .04em;
-}
-.clip-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 14px; margin-top: 14px;
-}
-.clip-card {
-  background: var(--panel); border: 1px solid var(--grid);
-  border-radius: var(--radius); padding: 14px 15px;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.clip-head {
-  display: flex; justify-content: space-between; align-items: baseline;
-  gap: 8px; flex-wrap: wrap;
-}
+_SNIPPETS_CSS = """
+.clip-section { margin-top: 32px; }
+.clip-section h2 { font-size: 18px; }
+.clip-section > p { color: var(--dim); max-width: 76ch; font-size: 13.5px; }
+.clip-subhead { font-size: 12.5px; color: var(--dim); margin: 16px 0 4px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; }
+.clip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 14px; margin-top: 12px; }
+.clip-card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+  padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; }
+.clip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; }
 .clip-title { font-weight: 700; font-size: 13.5px; }
-.clip-tag {
-  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
-  background: #1c2740; color: var(--muted); white-space: nowrap;
-}
-.clip-tag.sustained { color: #ffb84c; }
-.clip-tag.transient { color: #ff9fd6; }
-.badge.unverified {
-  font-size: 9.5px; font-weight: 800; color: #ffd166; background: #2c2410;
-  border: 1px solid #4a3d16; border-radius: 5px; padding: 3px 7px;
-  white-space: nowrap;
-}
-.badge.in-sample {
-  font-size: 9px; font-weight: 700; color: var(--muted); background: #1c2740;
-  border-radius: 5px; padding: 2px 6px;
-}
+.clip-tag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim); white-space: nowrap; }
+.clip-tag.sustained { color: var(--warn); border-color: var(--warn); }
+.clip-tag.transient { color: var(--alarm); border-color: var(--alarm); }
+.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn); background: var(--panel-2);
+  border: 1px solid var(--warn); border-radius: 5px; padding: 3px 7px; white-space: nowrap; }
+.badge.in-sample { font-size: 9px; font-weight: 700; color: var(--dim); background: var(--panel-2);
+  border: 1px solid var(--hair); border-radius: 5px; padding: 2px 6px; }
 .clip-card audio { width: 100%; height: 32px; }
 .clip-audios { display: flex; flex-direction: column; gap: 6px; }
-.clip-audios label {
-  font-size: 10.5px; color: var(--muted2); text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.clip-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
-.clip-meta {
-  font-size: 11px; color: var(--muted2); margin: 0;
-  font-variant-numeric: tabular-nums;
-}
+.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.clip-note { font-size: 12px; color: var(--dim); line-height: 1.45; margin: 0; }
+.clip-meta { font-size: 11px; color: var(--dim); margin: 0; font-variant-numeric: tabular-nums; }
+.clip-context { font-size: 12px; color: var(--ink); line-height: 1.5; margin: 2px 0 0;
+  background: var(--panel-2); border-left: 3px solid var(--live); border-radius: 4px;
+  padding: 7px 9px; }
+.clip-context strong { color: var(--live); }
 """
 
 
@@ -905,27 +766,28 @@ def render_index() -> str:
 <section class="hero">
   <h1>ROWII Monitor</h1>
   <p class="lede">ROWII Monitor is a research-prototype condition-monitoring pipeline for
-  the Rodundwerk II pump-turbine, built as part of an HSG master thesis. From nine
+  the Rodundwerk&nbsp;II pump-turbine, built as part of an HSG master thesis. From nine
   microphones and two tri-axial accelerometers it detects the machine's operating state
   second by second &mdash; unsupervised, validated against SCADA-derived ground truth
-  &mdash; and flags one-second windows that look unusual for the current mode. This
-  site replays real recordings from the measurement campaign: where the sensors sit on
-  the machine, how one window moves through the pipeline to a state and an alarm
-  decision, and a library of audio clips spanning induced test strikes, ordinary
-  per-mode operation, and windows the model has flagged as worth a closer listen.</p>
+  &mdash; and flags one-second windows that look unusual for the current mode, using a
+  calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
+  site replays a real recorded session end to end: where the sensors sit on the machine,
+  a control-room replay of state, score and alarms, a library of real audio clips, and
+  the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
 </section>
 {_NOTICE_HTML}
 <section class="cards">
   <a class="card" href="sensors.html">
     <h2>Sensors</h2>
-    <p>The as-built microphone and accelerometer layout on the machine, with every
-    stream/channel name on hover.</p>
+    <p>The as-built microphone and accelerometer layout on the machine &mdash; vertical
+    section and plan-view rings &mdash; with every stream/channel name on hover.</p>
     <span class="go">Open the sensor map &rarr;</span>
   </a>
   <a class="card" href="live.html">
     <h2>Live Replay</h2>
-    <p>Watch the detection pipeline replay real recorded sessions: operating state,
-    anomaly score, and alarms with their reasoning, at accelerated speed.</p>
+    <p>A real replay of one recorded session: operating state, features, sentinel and
+    p-value stream, and the alarm feed with its reasoning, in an operator control-room
+    view.</p>
     <span class="go">Open the control room &rarr;</span>
   </a>
   <a class="card" href="snippets.html">
@@ -933,6 +795,15 @@ def render_index() -> str:
     <p>Induced test strikes, ordinary per-mode audio, and a handful of model-flagged,
     unverified candidates &mdash; browse and listen.</p>
     <span class="go">Open the listening library &rarr;</span>
+  </a>
+</section>
+<section class="cards" style="grid-template-columns: 1fr; margin-top: 16px;">
+  <a class="card" href="review.html">
+    <h2>Candidate Review</h2>
+    <p>The handover tool: every model-flagged candidate on days without induced
+    anomalies, with SCADA context, the exact trigger criterion, and an assessment form
+    for a plant expert to fill in.</p>
+    <span class="go">Open the candidate review kit &rarr;</span>
   </a>
 </section>
 """
@@ -952,15 +823,29 @@ def render_sensors() -> str:
     body = f"""
 <section class="page-head">
   <h1>Sensor layout</h1>
-  <p>The as-built acoustic and vibration sensor geometry on the machine set. Hover or
-  keyboard-focus a marker for its stream/channel name; the full table is below for
-  reference.</p>
+  <p>The as-built acoustic and vibration sensor geometry on the machine set, in two
+  views: a vertical section (how the sensors sit on the machine) and a plan view
+  (looking straight down each ring). Hover or keyboard-focus any marker for its
+  stream/channel name; the full table is below for reference.</p>
 </section>
+
+<div class="sensor-section-head">
+  <h2>Vertical section</h2>
+</div>
 <div class="sensor-layout">
   <div class="sensor-diagram">{_sensor_svg(points)}</div>
   <div class="sensor-readout" id="sensorReadout">Hover or focus a sensor marker to see
   its name here.</div>
 </div>
+
+<div class="sensor-section-head">
+  <h2>Plan view (top-down)</h2>
+  <p>Each ring drawn from above: the same 4&times;90&deg; microphone spacing (plus the
+  turbine ring's off-ring bottom microphone) and the two tri-axial accelerometers per
+  level. Markers share the same hover readout as the section view above.</p>
+</div>
+{sc.render_plan_rings_block(size=210, interactive=True)}
+
 <table class="sensor-table">
   <thead><tr><th>Label</th><th>Stream</th><th>Ring position</th>
   <th>Channel(s)</th><th>Description</th></tr></thead>
@@ -977,36 +862,32 @@ def render_sensors() -> str:
   pipeline consumes one mono channel per audio stream (channel 0 of
   <code>RAWGeneratorMic__0</code> / <code>RAWTurbineMic__1</code>); the full
   multi-microphone geometry shown here is the physical installation, not (yet) a
-  per-channel model input.
+  per-channel model input &mdash; each ring's own markers in the plan view above
+  therefore share ONE live level (<code>live.html</code>'s sensor panel), not an
+  individually verified per-position reading (the exact channel-index &harr; azimuth
+  correspondence for the multi-channel ring recordings has never been independently
+  confirmed).
 </div>
 {_sensor_readout_script()}
 """
-    return _page_shell(title="Sensors — ROWII Monitor", active_file="sensors.html", body_html=body)
+    return _page_shell(title="Sensors — ROWII Monitor", active_file="sensors.html", body_html=body, extra_css=_SENSORS_CSS)
 
 
-def render_live() -> str:
-    body = """
-<section class="page-head">
-  <h1>Live replay</h1>
-  <p>A replay of the control room as it would have looked while a recorded session
-  played: the plant schematic, the detection pipeline from raw signal to alarm, the
-  current operating state, and the alarm feed with its reasoning. Alarms fire on two
-  independent paths &mdash; a sustained anomaly (several consecutive seconds
-  scored anomalous against the current mode's normal model) or a single strong
-  transient impulse (one second, much more extreme) &mdash; both are visible in the
-  feed as they occur, alongside the logged induced strikes they are being checked
-  against.</p>
-</section>
-<div class="iframe-wrap">
-  <iframe src="../demo/demo_dashboard.html"
-    title="ROWII Monitor control room replay" loading="lazy"></iframe>
-</div>
-<p class="hint">Prefer a full page? <a href="../demo/demo_dashboard.html">Open the
-control room by itself</a>. There is also a single-clip
-<a href="../demo/demo_live.html">pipeline walkthrough</a> (raw signal &rarr;
-features &rarr; state &rarr; score &rarr; alarm) covering one recording in detail.</p>
-"""
-    return _page_shell(title="Live Replay — ROWII Monitor", active_file="live.html", body_html=body)
+_CANDIDATE_CONTEXT_NOTES: dict[str, str] = {
+    "290626-tu-11": (
+        "<strong>Context.</strong> Independently assessed by the author as “plausible "
+        "anomaly.” A window-level cross-match against the partner's own (undocumented, "
+        "never per-event-timestamped) Knack search on this same day places this candidate "
+        "16–23 s inside his search window under the evidence-backed timebase "
+        "correction — the two independent methods point at the same few seconds, "
+        "though the partner's own detection was never itself confirmed."
+    ),
+}
+"""Hand-picked follow-up notes shown under specific curated candidate cards --
+`_candidate_clip_card`'s only per-candidate special case, deliberately not a generic
+mechanism (there is exactly one candidate with an external cross-reference worth
+surfacing on the public listening library; see `research/notes/analysis_2026-08-15_
+knack_crossmatch.md` in the parent thesis workspace for the full derivation)."""
 
 
 def _strike_clip_card(clip: Mapping[str, Any]) -> str:
@@ -1050,9 +931,12 @@ def _candidate_clip_card(clip: Mapping[str, Any]) -> str:
     in_sample_badge = (
         ' <span class="badge in-sample">fit-pool day</span>' if clip["in_sample"] else ""
     )
+    context_note = _CANDIDATE_CONTEXT_NOTES.get(str(clip["candidate_id"]))
+    context_html = f'\n  <p class="clip-context">{context_note}</p>' if context_note else ""
     return f"""<div class="clip-card candidate">
   <div class="clip-head">
-    <span class="clip-title">{clip['class'].capitalize()} · {html.escape(clip['session'])}</span>
+    <span class="clip-title">{clip['class'].capitalize()} · {html.escape(clip['session'])}
+    · <span class="mono">{html.escape(clip['candidate_id'])}</span></span>
     <span class="clip-tag {html.escape(clip['class'])}">{html.escape(clip['class'])}</span>
   </div>
   <span class="badge unverified">model-flagged, unverified — expert review pending</span>
@@ -1064,7 +948,7 @@ def _candidate_clip_card(clip: Mapping[str, Any]) -> str:
   </div>
   <p class="clip-note">{html.escape(clip['criterion_text'])}</p>
   <p class="clip-meta">{html.escape(clip['start_utc'])} · detected state:
-  {html.escape(clip['state_name'])} · SCADA: {html.escape(clip['scada_state'])}{in_sample_badge}</p>
+  {html.escape(clip['state_name'])} · SCADA: {html.escape(clip['scada_state'])}{in_sample_badge}</p>{context_html}
 </div>"""
 
 
@@ -1129,7 +1013,8 @@ def render_snippets(manifest: Mapping[str, Any], demo_manifest: Mapping[str, Any
 </section>
 """
     return _page_shell(
-        title="Listening Library — ROWII Monitor", active_file="snippets.html", body_html=body
+        title="Listening Library — ROWII Monitor", active_file="snippets.html", body_html=body,
+        extra_css=_SNIPPETS_CSS,
     )
 
 
@@ -1139,12 +1024,19 @@ def build_pages(
     demo_manifest_path: Path = DEFAULT_DEMO_MANIFEST_PATH,
     site_dir: Path = DEFAULT_SITE_DIR,
 ) -> list[Path]:
+    """Renders `index.html`/`sensors.html`/`snippets.html`. `live.html` is
+    deliberately NOT one of this function's outputs -- it is a full native
+    control-room replay with its own real-data precompute step, owned by
+    `scripts/build_live_replay.py` (this script's `curate-clips`/`build-pages`
+    split, "touches no results/ data" contract, does not fit a per-window
+    parquet/cache read). `review.html` is likewise owned by its own publish
+    step (`scripts/publish_review_site.py`, wrapping `scripts/candidate_kit.py`).
+    """
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     demo_manifest = json.loads(demo_manifest_path.read_text(encoding="utf-8"))
     pages = {
         "index.html": render_index(),
         "sensors.html": render_sensors(),
-        "live.html": render_live(),
         "snippets.html": render_snippets(manifest, demo_manifest),
     }
     site_dir.mkdir(parents=True, exist_ok=True)

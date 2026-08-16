@@ -1,0 +1,169 @@
+/* ROWII Monitor -- shared design system (v2, light HMI / control-room).
+   Loaded by every docs/site/*.html page. Local relative file, no external
+   requests. Tokens match the approved design contract exactly:
+   paper/panels/ink/dim/hairlines + functional-only colors (live/alarm/warn +
+   fixed per-state colors) -- no decorative accent color anywhere. */
+
+:root {
+  color-scheme: light;
+
+  /* -- surfaces -- */
+  --paper: #eceef0;
+  --panel: #ffffff;
+  --panel-2: #f7f8f9;
+  --ink: #1f2a37;
+  --dim: #5b6b7c;
+  --hair: #c7cdd4;
+  --hair-2: #dde1e6;
+
+  /* -- functional colors (never decorative) -- */
+  --live: #0f766e;
+  --alarm: #b93815;
+  --warn: #a16207;
+
+  /* -- fixed per-state colors (closed vocabulary) -- */
+  --s-turbine: #2563a8;
+  --s-pump: #7c4dbc;
+  --s-phase: #1d8a70;
+  --s-standstill: #6b7684;
+  --s-transition: #c07f10;
+  --s-unknown: #aab2bc;
+
+  /* -- type -- */
+  --font-ui: "Avenir Next", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p { margin: 0 0 .6em; }
+h1, h2, h3, h4 { font-weight: 700; letter-spacing: -0.01em; }
+a { color: var(--ink); text-decoration-color: var(--hair); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--ink); }
+code, .mono, .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: .92em;
+}
+::selection { background: #cfe0de; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 5px; }
+::-webkit-scrollbar-track { background: var(--panel-2); }
+
+/* ---------------------------------------------------------------- topbar */
+header.topbar {
+  display: flex; align-items: center; gap: 24px; padding: 13px 22px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--panel);
+  position: sticky; top: 0; z-index: 40;
+}
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.brand-mark {
+  font-size: 15px; font-weight: 800; letter-spacing: .06em; color: var(--ink);
+}
+.brand-sub { font-size: 12.5px; color: var(--dim); font-weight: 600; }
+nav.nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
+nav.nav a {
+  color: var(--dim); text-decoration: none; font-size: 13px; font-weight: 600;
+  padding: 7px 12px; border-radius: 6px; border: 1px solid transparent;
+}
+nav.nav a:hover { color: var(--ink); background: var(--panel-2); }
+nav.nav a.active { color: var(--ink); background: var(--panel-2); border-color: var(--hair); }
+
+/* ------------------------------------------------------------------ page */
+main.page { max-width: 1040px; margin: 0 auto; padding: 34px 22px 60px; }
+main.page.wide { max-width: 1320px; }
+.page-head h1 { font-size: 25px; }
+.page-head p { color: var(--dim); max-width: 70ch; }
+
+.notice {
+  background: var(--panel-2); border: 1px solid var(--hair);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 16px; font-size: 13.5px; line-height: 1.5; margin: 18px 0 28px;
+  color: var(--ink);
+}
+.notice strong { color: var(--ink); }
+
+/* -------------------------------------------------------------- landing */
+.hero { padding: 8px 0 6px; }
+.hero h1 { font-size: 31px; letter-spacing: -.015em; }
+.hero .lede { color: var(--dim); font-size: 16px; max-width: 76ch; }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px; }
+@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+a.card {
+  display: block; background: var(--panel); border: 1px solid var(--hair);
+  border-radius: var(--radius-lg);
+  padding: 18px 18px 20px; text-decoration: none; color: var(--ink);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+a.card:hover {
+  border-color: var(--ink); transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(31,42,55,.08);
+}
+a.card h2 { font-size: 16px; margin-bottom: 6px; }
+a.card p { color: var(--dim); font-size: 13.5px; margin: 0; }
+a.card .go { display: block; margin-top: 12px; font-size: 12px; font-weight: 700; color: var(--live); }
+
+.site-footer {
+  max-width: 1040px; margin: 0 auto; padding: 24px 22px 46px;
+  color: var(--dim); font-size: 12px;
+  border-top: 1px solid var(--hair);
+}
+main.page.wide + .site-footer, .site-footer.wide { max-width: 1320px; }
+
+/* ------------------------------------------------------------------ misc */
+.panel {
+  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
+}
+.panel-2 { background: var(--panel-2); border: 1px solid var(--hair); border-radius: var(--radius-lg); }
+.hairline { border-color: var(--hair) !important; }
+
+table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data-table th, table.data-table td {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--hair-2);
+}
+table.data-table th {
+  color: var(--dim); font-weight: 700; text-transform: uppercase;
+  font-size: 10.5px; letter-spacing: .05em;
+}
+table.data-table td.num { text-align: right; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--hair); background: var(--panel-2); color: var(--dim);
+  white-space: nowrap;
+}
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.btn {
+  font: 12.5px/1 var(--font-ui); font-weight: 700; cursor: pointer;
+  border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
+  border-radius: 6px; padding: 8px 12px;
+}
+.btn:hover { background: var(--panel-2); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.btn.primary:hover { background: #33404f; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* state colors as utility classes -- fixed vocabulary, never reused for anything else */
+.st-turbine { color: var(--s-turbine); } .bg-turbine { background: var(--s-turbine); }
+.st-pump { color: var(--s-pump); } .bg-pump { background: var(--s-pump); }
+.st-phase-shifter { color: var(--s-phase); } .bg-phase-shifter { background: var(--s-phase); }
+.st-standstill { color: var(--s-standstill); } .bg-standstill { background: var(--s-standstill); }
+.st-transition { color: var(--s-transition); } .bg-transition { background: var(--s-transition); }
+.st-unknown { color: var(--s-unknown); } .bg-unknown { background: var(--s-unknown); }
+
+.text-live { color: var(--live); } .text-alarm { color: var(--alarm); } .text-warn { color: var(--warn); }
