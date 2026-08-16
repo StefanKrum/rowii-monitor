@@ -7,7 +7,7 @@ any other GT-based metric (by design: "narrative cross-check ... report-only, no
 adopted, no metrics claimed").
 
 Detector transfer itself is `rowii.state.detect.FittedDetector.fit`/`.apply`
-(package-2 spec D1, no refit/EM on the apply day) -- identical mechanics to
+(no refit/EM on the apply day) -- identical mechanics to
 `scripts/run_step2.py`'s own `cross-day-per-state` protocol, just without any
 scoring/conformal step and without a second SCADA-covered day to compare against.
 
@@ -25,7 +25,7 @@ ARI/macro-F1/boundary metrics -- which this script's qualitative-only contract m
 never surface -- and avoids `evaluate()`'s hard `ValueError` when a day has zero
 eval windows, a real possibility here (`_fit_detector_and_mapping` handles that case
 by returning an empty mapping instead of raising). The mapping always comes from the
-FIT day alone; the apply day never has GT in this path (spec D2).
+FIT day alone; the apply day never has GT in this path.
 """
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def _import_beats_or_exit() -> None:
 def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
     """Mirrors `scripts/run_step1.py`'s own private helper of the same name
     (duplicated, not imported -- see this module's own docstring). Extends the
-    beats-import-guard pattern (package-4 spec D4): torch missing (checked first)
+    beats-import-guard pattern: torch missing (checked first)
     -> SystemExit naming the shared `[beats]` extra; else the ONE checkpoint
     relevant to *variant* itself missing -> SystemExit naming its own env var."""
     try:
@@ -167,7 +167,7 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
 
 
 def _import_student_or_exit(cfg: Config) -> None:
-    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    """Mirrors `_import_tfc_or_exit` above, simplified: the
     distilled student has only ONE checkpoint (unlike TF-C's two independent
     branches), so there is no variant-based checkpoint selection -- torch
     missing (checked first) -> SystemExit naming the shared `[beats]` extra;
@@ -198,16 +198,15 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
     private helper of the same name (duplicated, not imported -- see this module's
     own docstring).
 
-    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
-    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
-    header`, straight off disk) is still the raw DAQ axis -- shifted here by
-    *betriebsdaten*'s own derived offset (`rowii.io.dataset.
-    betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
-    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
-    comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
-    sides shared the SAME axis by construction, so selection worked correctly by
-    accident, not because either side was ever true UTC (see the task report for
-    the full derivation).
+    *grid* is true-UTC since `rowii.pipeline.build_run_grid`'s own fix, but each
+    candidate file's own `header.t0_ns` (`read_header`, straight off disk) is
+    still the raw DAQ axis -- shifted here by *betriebsdaten*'s own derived
+    offset (`rowii.io.dataset.betriebsdaten_utc_offset_ns`) before the
+    intersection test, mirroring `rowii.scada.labels.load_scada_window_means`'s
+    identical fix. BEFORE that fix the comparison was RAW-vs-RAW (grid built on
+    the pre-fix raw axis too) -- both sides shared the SAME axis by
+    construction, so selection worked correctly by accident, not because
+    either side was ever true UTC.
     """
     grid_end_ns = int(grid.edges_ns()[-1])
     offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
@@ -229,7 +228,7 @@ def _fit_detector_and_mapping(
     cluster-id -> GT-state-name majority mapping (module docstring). The mapping is
     `{}` when the fit day has no Betriebsdaten at all, or no window with a known
     (non-"unknown") GT state -- every `mapped_mode` then falls back to "" for that
-    fit run (orchestrator resolution 2), never guessed.
+    fit run, never guessed.
     """
     valid_mask = prepared.valid_mask
     features_valid = prepared.features[valid_mask]
@@ -296,7 +295,7 @@ def _apply_and_segment(detector: FittedDetector, prepared: PreparedRun) -> pd.Da
 
 
 # ---------------------------------------------------------------------------
-# timeline.md (orchestrator resolution 3: banner + one line per segment, no metrics)
+# timeline.md (banner + one line per segment, no metrics)
 # ---------------------------------------------------------------------------
 
 

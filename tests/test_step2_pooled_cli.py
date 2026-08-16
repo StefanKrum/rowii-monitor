@@ -81,8 +81,8 @@ def _blob_run(
     """Contiguous `_SEG_LEN`-window segments, one blob per segment, cycling
     *blob_cycle* -- `tests/test_detect_pooled.py`'s layout with per-segment ids so
     `split_by_segments` has real segments to draw. *feature_names* defaults to the
-    original `["f0", "f1"]` (every pre-T6 call site is unaffected); the T6
-    `--level-recal` fixture (`_level_pooled_prepared` below) passes
+    original `["f0", "f1"]` (every call site that predates `--level-recal` is
+    unaffected); the `--level-recal` fixture (`_level_pooled_prepared` below) passes
     `_LEVEL_FEATURE_NAMES` so the columns actually match `rowii.anomaly.
     levelrecal`'s level-column substrings."""
     rng = np.random.default_rng(seed)
@@ -113,7 +113,7 @@ def _pooled_prepared() -> dict[str, PreparedRun]:
 
 def _fake_run(name: str, date: str) -> Run:
     """A discovery-shaped `Run` whose single burst file's NAME carries *date* --
-    exactly what the A3.8 day-group guard parses."""
+    exactly what the day-group guard parses."""
     return Run(
         name=name,
         files={
@@ -229,7 +229,7 @@ def _expected_mode_thresholds(
     hand: _HandRun, prepared: dict[str, PreparedRun], alpha: float
 ) -> tuple[dict[int, ConformalThreshold], dict[int, ConformalThreshold], dict[int, int]]:
     """(frozen, recalibrate, n_scoring_alarms_frozen) per pooled label id --
-    frozen from the pool's CONFORMAL side (A3.7), recalibrate from the test run's
+    frozen from the pool's CONFORMAL side, recalibrate from the test run's
     own calibration side."""
     test = prepared[_TEST_RUN_NAME]
     lab_test = hand.labels[_TEST_RUN_NAME]
@@ -297,7 +297,7 @@ def test_end_to_end_writes_both_far_tables(tmp_path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. FROZEN thresholds are bitwise calibrate(pool CONFORMAL scores, alpha) (A3.7)
+# 3. FROZEN thresholds are bitwise calibrate(pool CONFORMAL scores, alpha)
 # ---------------------------------------------------------------------------
 
 
@@ -355,7 +355,7 @@ def test_recalibrate_thresholds_bitwise_from_test_calibration_side(
 
 
 # ---------------------------------------------------------------------------
-# 5. A3.1 guard: the test run must never be a pool member
+# 5. Guard: the test run must never be a pool member
 # ---------------------------------------------------------------------------
 
 
@@ -378,7 +378,7 @@ def test_pool_member_as_test_run_rejected(tmp_path, monkeypatch, capsys) -> None
 
 
 # ---------------------------------------------------------------------------
-# 6. A3.8 guard: fit and test day groups must be disjoint (sibling-run case)
+# 6. Guard: fit and test day groups must be disjoint (sibling-run case)
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +452,7 @@ def test_k_too_large_exits_2(tmp_path, monkeypatch, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Coverage tables (A4.1/A4.2) + notes sections
+# 9. Coverage tables + notes sections
 # ---------------------------------------------------------------------------
 
 
@@ -483,7 +483,7 @@ def test_coverage_tables_and_notes_written(tmp_path, monkeypatch) -> None:
     assert "frozen" in notes
     assert "recalibrate" in notes
     assert "A3.1" in notes
-    # A4.5 estimator-vs-final framing.
+    # Estimator-vs-final framing.
     assert "estimator" in notes.lower()
     assert "final" in notes.lower()
     # No SCADA on the synthetic runs and full detected-label coverage -> the
@@ -497,7 +497,7 @@ def test_coverage_tables_and_notes_written(tmp_path, monkeypatch) -> None:
 def test_notes_surface_coverage_warnings_verbatim() -> None:
     """Seam test for the warning plumbing: detected-label warnings cannot fire on
     this fixture (the pooled detector's id space is covered by construction), so the
-    notes builder is asserted directly with a crafted A4.2 composite-label warning."""
+    notes builder is asserted directly with a crafted composite-label warning."""
     import run_step2
 
     warning = (
@@ -546,7 +546,7 @@ def test_save_snapshot_round_trip_geometry_and_provenance(tmp_path, monkeypatch)
     hand = _hand_pipeline(prepared)
     frozen, _recal, _ = _expected_mode_thresholds(hand, prepared, alpha=0.05)
     for lid in range(_K):
-        # The snapshot stores the FROZEN pool-conformal thresholds (A3.7) and the
+        # The snapshot stores the FROZEN pool-conformal thresholds and the
         # pooled fit-side references, bitwise.
         assert loaded.thresholds[lid] == frozen[lid]
         np.testing.assert_array_equal(
@@ -811,15 +811,15 @@ def test_k_below_one_exits_2(tmp_path, monkeypatch, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T4: --session-norm / --norm-minutes (package-7 Task 4, spec D3/A3.5) --
-#     cross-day-pooled wiring ONLY (within-day/cross-day wiring is deferred)
+# --session-norm / --norm-minutes -- cross-day-pooled wiring ONLY
+#     (within-day/cross-day wiring is deferred)
 # ---------------------------------------------------------------------------
 
 _SNORM_ARGS = [*_BASE_ARGS, "--session-norm"]
 
 
 def _snorm_out_dir(tmp_path, minutes: str = "20") -> Path:
-    """Session-norm runs land in a `-snorm<N>` suffixed leaf so the A2.2 N-sweep
+    """Session-norm runs land in a `-snorm<N>` suffixed leaf so the N-sweep
     never overwrites the un-normed baseline (or another N's outputs)."""
     return (
         tmp_path / "results" / "step2" / "cross-day-pooled" / _TEST_RUN_NAME
@@ -859,13 +859,13 @@ def test_session_norm_smoke_tables_and_thresholds_differ(tmp_path, monkeypatch) 
     notes = (out_dir / "notes.md").read_text()
     assert "session" in notes.lower()
     assert "deferred" in notes.lower()  # within-day/cross-day wiring deferral, documented
-    assert "confound" in notes.lower()  # the A3.5 state-mix caveat travels with results
+    assert "confound" in notes.lower()  # the state-mix caveat travels with results
 
 
 def test_session_norm_uses_per_run_stats(tmp_path, monkeypatch) -> None:
-    """Per-run stats are BINDING (Task 4: "per-run stats for pool members!") -- the
-    CLI must fit session stats exactly once per run (2 fit runs + the test run),
-    each on that run's OWN feature matrix, at the requested norm minutes."""
+    """Per-run stats are BINDING -- the CLI must fit session stats exactly once
+    per run (2 fit runs + the test run), each on that run's OWN feature matrix,
+    at the requested norm minutes."""
     prepared = _pooled_prepared()
     _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
 
@@ -892,13 +892,13 @@ def test_session_norm_uses_per_run_stats(tmp_path, monkeypatch) -> None:
 def test_session_norm_snapshot_stores_pool_global_stats_and_raw_references(
     tmp_path, monkeypatch
 ) -> None:
-    """Task 4's pooled-snapshot design decision: references stay RAW (the
+    """The pooled-snapshot design decision: references stay RAW (the
     MonitorSnapshot field contract), `session_stats` = pool-global median/MAD over
     the RAW pooled fit matrix (`norm_minutes == 0.0` sentinel), and the stored
     conformal scores/thresholds are SELF-CONSISTENT in the exact space the monitor
     reconstructs (scorer on stats-transformed references, stats-transformed
     conformal rows) -- deliberately NOT far_table_frozen.csv's per-run-normalized
-    thresholds (FAR-level-only comparability, A3.5)."""
+    thresholds (FAR-level-only comparability)."""
     prepared = _pooled_prepared()
     _install_fakes(monkeypatch, tmp_path, prepared, _default_index())
 
@@ -966,7 +966,7 @@ def test_norm_minutes_must_be_positive(tmp_path, monkeypatch, capsys) -> None:
 def test_session_norm_requires_cross_day_pooled_protocol(
     tmp_path, monkeypatch, capsys, extra
 ) -> None:
-    """Task 4 wires --session-norm into cross-day-pooled ONLY (the plan's
+    """--session-norm wires into cross-day-pooled ONLY (the plan's
     within-day/cross-day wiring is DEFERRED) -- other protocols must refuse."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
@@ -981,9 +981,9 @@ def test_session_norm_requires_cross_day_pooled_protocol(
 
 
 # ---------------------------------------------------------------------------
-# T6: --level-recal (package-8 Task 6, spec D2/A1.4/A1.9/A1.11) -- cross-day-
-#     pooled wiring ONLY, audio/vibration variants (fusion excluded, A1.1),
-#     mutually exclusive with --session-norm (A1.10 fit-path exclusivity)
+# --level-recal -- cross-day-pooled wiring ONLY, audio/vibration variants
+#     (fusion excluded), mutually exclusive with --session-norm
+#     (fit-path exclusivity)
 # ---------------------------------------------------------------------------
 
 _LEVEL_FEATURE_NAMES = [
@@ -991,7 +991,7 @@ _LEVEL_FEATURE_NAMES = [
     "RAWGeneratorMic__0::ch0_octave_125",
 ]
 """Level-bearing column names (both match `rowii.anomaly.levelrecal`'s
-`_LEVEL_SUBSTRINGS`) -- the T6 fixture needs `--variant audio` runs whose
+`_LEVEL_SUBSTRINGS`) -- the level-recal fixture needs `--variant audio` runs whose
 feature_names actually carry a level column, unlike the module's default
 `["f0", "f1"]` blob fixture."""
 
@@ -1050,7 +1050,7 @@ def test_level_recal_writes_lrecal_leaf_with_notes(tmp_path, monkeypatch) -> Non
 def test_level_recal_computes_offsets_from_pool_fit_anchor_and_test_first_n(
     tmp_path, monkeypatch
 ) -> None:
-    """Pins the A1.4 wiring precisely: the anchor is the per-column median over
+    """Pins the wiring precisely: the anchor is the per-column median over
     the POOLED FIT side, the run-side statistic is the TEST run's own first-N-
     MINUTES valid rows (label-free), and `apply_level_recal` is called exactly
     once, on the TEST run's own features -- never the pool's (module docstring:
@@ -1101,7 +1101,7 @@ def test_level_recal_frozen_thresholds_match_raw_baseline_pool_stays_raw(
 ) -> None:
     """The pooled FIT/CONFORMAL rows are NEVER level-recalibrated -- only the
     TEST run's own scoring features shift -- so the FROZEN references/thresholds
-    (calibrated on the pool's own nested-CONFORMAL side, A3.7) must be BITWISE
+    (calibrated on the pool's own nested-CONFORMAL side) must be BITWISE
     IDENTICAL to the raw baseline's."""
     prepared = _level_pooled_prepared()
     _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
@@ -1181,9 +1181,9 @@ def test_level_recal_requires_cross_day_pooled_protocol(
 
 
 # ---------------------------------------------------------------------------
-# T7: --save-snapshot + --level-recal stores the anchor as the snapshot's
-#     optional v2 `level_recal_medians` member (package-8 Task 7, spec
-#     D2/A1.4/A1.10) -- closes the gap the T6 commit (d791d13) left open.
+# --save-snapshot + --level-recal stores the anchor as the snapshot's
+#     optional v2 `level_recal_medians` member -- closes the gap commit
+#     d791d13 left open.
 # ---------------------------------------------------------------------------
 
 
@@ -1192,9 +1192,9 @@ def test_level_recal_save_snapshot_stores_pool_fit_anchor_medians(
 ) -> None:
     """`_run_cross_day_pooled` with --save-snapshot --level-recal must pass the
     SAME anchor `far_table_frozen.csv`/`far_table_recalibrate.csv` align the test
-    run onto (`column_medians(pool_fit.features, feature_names)`, A1.4) into
+    run onto (`column_medians(pool_fit.features, feature_names)`) into
     `fit_snapshot_from_parts` as `level_recal_medians` -- references stay RAW,
-    and `session_stats` must stay unset (A1.10 fit-path exclusivity)."""
+    and `session_stats` must stay unset (fit-path exclusivity)."""
     prepared = _level_pooled_prepared()
     _install_fakes(monkeypatch, tmp_path, prepared, _default_index(), variant="audio")
 
@@ -1268,15 +1268,15 @@ def test_first_n_minutes_rows_matches_fit_session_stats_window_membership() -> N
 
 
 # ---------------------------------------------------------------------------
-# T2 (P9 D2/A1.8): --save-snapshot's state_names computation -- the A1.8
-# GT-skip seam (missing_fit_scada -> None) and the object-dtype pool-row GT
+# --save-snapshot's state_names computation -- the GT-skip seam
+# (missing_fit_scada -> None) and the object-dtype pool-row GT
 # gather `_pool_row_gt_labels` (duplicated from `run_modebank.py::_pool_gt_labels`,
 # script-sibling rule).
 # ---------------------------------------------------------------------------
 
 
 def test_save_snapshot_state_names_none_without_gt(tmp_path, monkeypatch) -> None:
-    """Default fixture has no Betriebsdaten (missing_fit_scada) -> state_names=None (A1.8)."""
+    """Default fixture has no Betriebsdaten (missing_fit_scada) -> state_names=None."""
     import run_step2
 
     from rowii.runtime.snapshot import load_snapshot
@@ -1288,10 +1288,9 @@ def test_save_snapshot_state_names_none_without_gt(tmp_path, monkeypatch) -> Non
 
 
 def test_save_snapshot_state_names_populated_with_gt(tmp_path, monkeypatch) -> None:
-    """P9 hardening T2b: the positive counterpart to
+    """The positive counterpart to
     test_save_snapshot_state_names_none_without_gt above -- with every fit run's
-    GT available, --save-snapshot must populate state_names over EVERY fitted id
-    (A1.8).
+    GT available, --save-snapshot must populate state_names over EVERY fitted id.
 
     Monkeypatches the run_step2 GT seams directly (`_load_run_scada` +
     `_gt_state_labels`/`_gt_composite_labels`) rather than building a real

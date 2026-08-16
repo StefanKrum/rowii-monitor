@@ -17,21 +17,21 @@ class WindowConfig:
 @dataclass(frozen=True)
 class GtRules:
     # Measured plateau of "1_Drehzahl UPM" (GT_CHANNELS["speed"]) during full-power
-    # turbine generation (Task 13b, 2026-06-25 05:00 Betriebsdaten hour: median while
-    # power > 50 MW). Task 13 originally measured this off "1_Drehzahl_Ist" instead
+    # turbine generation (2026-06-25 05:00 Betriebsdaten hour: median while
+    # power > 50 MW). This channel was originally measured off "1_Drehzahl_Ist" instead
     # (~101 rpm) -- that channel is NOT rpm (a percent-of-nominal-ish quantity, ~3.75x
-    # smaller than the true rpm channel on the same file); Task 13b corrected
-    # GT_CHANNELS["speed"] to the genuine rpm channel and remeasured, landing almost
-    # exactly on the pre-delivery "8-pole 50 Hz machine" 375 rpm hypothesis Task 13 had
-    # discarded. See results/parameter_verification.md's Revision 2026-07-07 section
+    # smaller than the true rpm channel on the same file); GT_CHANNELS["speed"] was
+    # corrected to the genuine rpm channel and remeasured, landing almost
+    # exactly on the pre-delivery "8-pole 50 Hz machine" 375 rpm hypothesis that had
+    # previously been discarded. See results/parameter_verification.md's Revision 2026-07-07 section
     # for the full derivation.
     speed_nominal_rpm: float = 378.832
-    speed_eps_frac: float = 0.05           # validated against data in Task 5/13
+    speed_eps_frac: float = 0.05           # validated against real data
     power_eps_mw: float = 2.0
     ramp_mw_per_s: float = 1.0
     transition_buffer_s: float = 10.0
     n_load_bins: int = 3
-    # Phase-shifter GT (multi-day/phase-shifter addendum, spec §3): a contiguous run
+    # Phase-shifter GT (multi-day/phase-shifter addendum): a contiguous run
     # of nominal-speed, near-zero-power windows must dwell at least this long before
     # being promoted from "transition" (unloaded spinning during a start/stop ramp) to
     # "phase-shifter" (a genuine, sustained synchronous-condenser operating mode).
@@ -92,8 +92,8 @@ class Config:
     detect: DetectConfig = field(default_factory=DetectConfig)
     beats_checkpoint: Path | None = None
     tfc_audio_checkpoint: Path | None = None
-    """Frozen TF-C audio-branch checkpoint (`ROWII_TFC_AUDIO_CHECKPOINT`, package-4
-    spec D4) -- mirrors `beats_checkpoint`'s own env-driven pattern exactly, but as
+    """Frozen TF-C audio-branch checkpoint (`ROWII_TFC_AUDIO_CHECKPOINT`)
+    -- mirrors `beats_checkpoint`'s own env-driven pattern exactly, but as
     two independent fields (`tfc_audio_checkpoint`/`tfc_vib_checkpoint`) rather than
     one: unlike BEATs (audio-branch only), TF-C is pre-trained separately per branch
     (MIMII for audio, CWRU/Paderborn bearing vibration for vibration), so the two
@@ -104,8 +104,8 @@ class Config:
     `tfc_audio_checkpoint`'s docstring. Consumed by `rowii.pipeline.
     _featurizer_for_stream`'s `"vibration-tfc"` dispatch."""
     student_checkpoint: Path | None = None
-    """Distilled BEATs-student checkpoint (`ROWII_STUDENT_CHECKPOINT`, Step-2
-    package-5 spec D5) -- backs the `"audio-student"` variant's `rowii.adapt.
+    """Distilled BEATs-student checkpoint (`ROWII_STUDENT_CHECKPOINT`)
+    -- backs the `"audio-student"` variant's `rowii.adapt.
     student.StudentFeaturizer`. Unlike TF-C's two independent branch
     checkpoints, the student has only ONE (audio-only, distilled from BEATs'
     own audio-branch teacher embeddings via `scripts/distill_beats.py`) --
@@ -113,7 +113,7 @@ class Config:
     by `rowii.pipeline._featurizer_for_stream`'s `"audio-student"` dispatch."""
     beats_int8_checkpoint: Path | None = None
     """Post-training INT8-quantized BEATs checkpoint (`ROWII_BEATS_INT8_
-    CHECKPOINT`, Step-2 package-5 spec D6) -- a `scripts/quantize_beats.py`-
+    CHECKPOINT`) -- a `scripts/quantize_beats.py`-
     produced module pickle, NOT the `{"cfg","model"}` state-dict format
     `beats_checkpoint` points at. Independent of `beats_checkpoint` (both may
     be set together: the int8 file was quantized FROM the fp32 one, but
@@ -123,8 +123,8 @@ class Config:
     _featurizer_for_stream`'s beats-variant dispatch (`"audio-beats"`/
     `"fusion-beats"`) as `BeatsFeaturizer`'s `int8_model_path` constructor arg."""
     xattn_checkpoint: Path | None = None
-    """Cross-attention fusion-head checkpoint (`ROWII_XATTN_CHECKPOINT`, Step-2
-    package-5 spec D8) -- a `scripts/train_xattn.py`-produced
+    """Cross-attention fusion-head checkpoint (`ROWII_XATTN_CHECKPOINT`)
+    -- a `scripts/train_xattn.py`-produced
     `{"cfg","model","run","vib_dim","epochs"}` checkpoint backing
     `scripts/run_step2.py`'s `--xattn-fusion` view (the design chapter's third
     fusion level). Single-field env-driven pattern like `student_checkpoint`;

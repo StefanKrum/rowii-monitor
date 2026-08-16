@@ -9,7 +9,7 @@ deep inside `discover`).
 These are integration guards, not unit tests of new logic -- their purpose is
 to catch the moment reality (channel names, sample rates, channel counts, day
 tree layout) drifts from what the rest of the pipeline hard-codes or assumes.
-Task 13's no-legacy-assumptions constraint: every number asserted below is a
+The no-legacy-assumptions constraint: every number asserted below is a
 property of THIS data, not carried over from an earlier delivery or
 exploratory deck.
 
@@ -108,7 +108,7 @@ def test_discover_finds_every_day_tree_with_its_dayid_prefix(data_root: Path) ->
 
 
 def test_discover_scopes_betriebsdaten_per_day_tree_on_real_data(data_root: Path) -> None:
-    # 27.06 has zero Betriebsdaten (spec §1: "none (photo only)") while the
+    # 27.06 has zero Betriebsdaten ("none (photo only)") while the
     # other three days each have their own full day's worth -- a day tree with
     # no SCADA at all must have no entry (or an empty list), never silently
     # inherit a sibling day's files.
@@ -185,7 +185,7 @@ def test_betriebsdaten_file_contains_all_gt_channel_names(data_root: Path) -> No
 
 
 def test_fitted_detector_apply_equals_fit_on_cached_run(data_root: Path) -> None:
-    """Same-day apply == fit labels on a real cached PreparedRun (spec D1 gate).
+    """Same-day apply == fit labels on a real cached PreparedRun.
 
     No dedicated real-run fixture exists yet in this file, so this builds the
     `PreparedRun` inline via `prepare_run(..., use_cache=True)`, exactly like
@@ -217,12 +217,12 @@ def test_fitted_detector_apply_equals_fit_on_cached_run(data_root: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# Task 10 (D6b/c): true-UTC time axis, the invariance regression on real data --
+# True-UTC time axis, the invariance regression on real data --
 # labels/scores/FAR/GT-eval-window-counts must be bit-for-bit unaffected by moving
 # the whole pipeline from the raw DAQ axis onto true UTC. Both tests are cache-hit
 # fast (no raw file re-read): `250526-tu--fusion.npz`/`250526-tu--audio.npz` are
-# already on disk with a RAW-axis `grid_t0_ns` (written before this task), so
-# `prepare_run`'s cache-hit path (D4) exercises the override for real here, not
+# already on disk with a RAW-axis `grid_t0_ns` (written before this fix), so
+# `prepare_run`'s cache-hit path exercises the override for real here, not
 # just on the synthetic fixture in `tests/test_pipeline.py`.
 # ---------------------------------------------------------------------------
 
@@ -241,12 +241,11 @@ def test_within_day_far_table_matches_persisted_after_true_utc_fix(data_root: Pa
     via its own private `_detected_labels`) and assert the resulting `far_table` is
     numerically identical to the ALREADY-PERSISTED `results/step2/within-day/
     250526-tu/fusion-detected/per-state-knn/far_table.csv` (note: the directory
-    name is `<conditioning>-<scorer>` = "per-state-knn", not the brief's literal
-    "knn-per-state" -- see the task report). `far_table` carries no time/UTC
-    column at all (label, counts, FAR, threshold, ...) -- window INDICES and
-    VALUES, never absolute timestamps -- so this is a direct, real-data proof of
-    D6's bit-identity guarantee: the grid this sweep runs against is now true-UTC
-    (D2/D4), yet the FAR table matches a file generated back when the same grid
+    name is `<conditioning>-<scorer>` = "per-state-knn"). `far_table` carries no
+    time/UTC column at all (label, counts, FAR, threshold, ...) -- window INDICES
+    and VALUES, never absolute timestamps -- so this is a direct, real-data proof
+    of the bit-identity guarantee: the grid this sweep runs against is now
+    true-UTC, yet the FAR table matches a file generated back when the same grid
     was still on the raw DAQ axis, numeral for numeral.
     """
     if not _HAS_FAR_TABLE:
@@ -271,8 +270,8 @@ def test_within_day_far_table_matches_persisted_after_true_utc_fix(data_root: Pa
 
     # check_dtype=False: a CSV round-trip infers plain numeric dtypes for columns
     # that are float64-with-NaN in memory (pandas' own read_csv type inference,
-    # unrelated to this task) -- values (NaN-equal by assert_frame_equal's default)
-    # are what D6 actually claims invariant, not incidental dtype.
+    # unrelated to this fix) -- values (NaN-equal by assert_frame_equal's default)
+    # are what this test actually claims invariant, not incidental dtype.
     pd.testing.assert_frame_equal(
         far_table.reset_index(drop=True), persisted.reset_index(drop=True), check_dtype=False
     )
@@ -282,17 +281,17 @@ def test_250526_tu_gt_eval_window_counts_match_historical_readme_values(
     data_root: Path,
 ) -> None:
     """Recompute GT labels for 250526-tu (audio variant) on the NEW true-UTC axis
-    (`scripts/run_step1.py::load_run_gt`, now D3-fixed) and assert the per-state
+    (`scripts/run_step1.py::load_run_gt`, now fixed) and assert the per-state
     eval-window (non-"unknown") counts equal README.md's historical Step-1-grid
     values (122 standstill / 403 transition / 7750 turbine = 8275 total,
-    "Step-1 grid results" section) -- proving SCADA (D3, its own independently
-    derived offset) and the audio grid (D2, the run's own offset) moved together
+    "Step-1 grid results" section) -- proving SCADA (its own independently
+    derived offset) and the audio grid (the run's own offset) moved together
     under this run's true-UTC shift. A genuine misalignment (e.g. SCADA selected
     from the wrong file set, or one offset silently diverging from the other)
     would shift these counts, not just their rendered times -- this is the
     real-data equivalent of `tests/test_sweep.py`'s/`tests/test_detect_e2e.py`'s
-    synthetic D6a invariance tests, specifically for the SCADA/GT side D6a alone
-    does not cover.
+    synthetic invariance tests, specifically for the SCADA/GT side those tests
+    alone do not cover.
     """
     import run_step1
 

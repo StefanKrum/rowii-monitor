@@ -26,7 +26,7 @@ Representations x alarms source (the FIVE the task scopes this to):
   {0.01, 0.05, 0.10} from that one file's `p_value` column).
 
 A representation missing for a session (`.is_file()` false) is skipped with a
-warning, not a hard failure ("where present", task item 1).
+warning, not a hard failure ("where present").
 
 Outputs (`results/pillar3-perstrike/`):
 
@@ -197,7 +197,7 @@ def _unmarked_events(repo_root: Path, session: str, marks: pd.DataFrame) -> list
 
 def _plate_6mark_gap_summary(session: str, marks: pd.DataFrame) -> list[dict[str, Any]]:
     """`row_type="summary"` rows: inter-mark-gap median/min/max for the
-    "6-mark plate events" (task item 3), pooled and split at DEDUP_GAP_S --
+    "6-mark plate events", pooled and split at DEDUP_GAP_S --
     directly shows why the 1.5s dedup threshold folds the short gaps
     together and leaves the long ones as separate physical strikes."""
     mpe = marks_per_event(marks)

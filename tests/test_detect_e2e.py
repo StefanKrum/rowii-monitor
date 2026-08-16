@@ -259,12 +259,11 @@ def test_determinism_two_runs_produce_identical_results() -> None:
 
 
 def test_run_detection_is_invariant_under_a_constant_grid_t0_shift() -> None:
-    """Task 10 (D6a, the invariance regression this task's whole point rests on):
-    `grid.t0_ns` is a pure rendering axis for `run_detection`'s chain -- `window_ns`
+    """`grid.t0_ns` is a pure rendering axis for `run_detection`'s chain -- `window_ns`
     (min-dwell conversion) and `n_windows`/`len(features)` are the only grid fields
     the zscore -> cluster -> smooth -> duration-filter pipeline ever reads (`rowii.
     state.detect` module docstring). Adding an arbitrary constant to `grid.t0_ns`
-    (standing in for `rowii.pipeline.build_run_grid`'s D2 true-UTC shift) must leave
+    (standing in for `rowii.pipeline.build_run_grid`'s true-UTC shift) must leave
     `frame_labels`/`k` bit-for-bit IDENTICAL and every segment's `cluster`/
     `duration_s` identical too -- only `start_utc`/`end_utc` move by that same
     constant. This is the property the whole DAQ-clock-quirk fix depends on: moving
@@ -273,8 +272,9 @@ def test_run_detection_is_invariant_under_a_constant_grid_t0_shift() -> None:
     """
     features, _truth = _synthetic_three_state_stream()
     grid = _grid()
-    shift_ns = 946_677_600 * 10**9  # arbitrary but realistic (task-10-brief.md's own
-    # worked CEST offset) -- large enough that a bug re-deriving anything from an
+    shift_ns = 946_677_600 * 10**9  # arbitrary but realistic (the worked CEST
+    # offset from tests/test_dataset.py's own DAQ epoch-2000 example) -- large
+    # enough that a bug re-deriving anything from an
     # absolute t0_ns (e.g. treating it as a real calendar date) would show up loudly.
     shifted_grid = WindowGrid(
         t0_ns=grid.t0_ns + shift_ns, window_ns=grid.window_ns, n_windows=grid.n_windows
@@ -562,7 +562,7 @@ class TestFittedDetector:
         assert set(np.unique(applied.frame_labels)) == {a_middle_label}
 
     def test_apply_raises_value_error_on_feature_count_mismatch(self) -> None:
-        """Orchestrator resolution (Task-1 review): hmmlearn's `decode` silently
+        """hmmlearn's `decode` silently
         accepts a wrong feature count and returns garbage rather than raising, and
         `apply` is exactly the entry point that receives a FOREIGN day's feature
         array -- a column-count typo/bug must fail loudly, not decode garbage."""

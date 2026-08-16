@@ -344,7 +344,7 @@ def test_parent_root_with_no_scada_day_has_empty_betriebsdaten_for_that_day(tmp_
 
 
 # ---------------------------------------------------------------------------
-# run_utc_offset_ns / betriebsdaten_utc_offset_ns (Task 10: DAQ epoch-2000 clock
+# run_utc_offset_ns / betriebsdaten_utc_offset_ns (DAQ epoch-2000 clock
 # quirk -- every Gantner file's binary frame timestamps count seconds since
 # 2000-01-01 LOCAL time but are labelled as Unix (1970) nanoseconds; both functions
 # derive the constant per-file-set offset that maps the raw axis onto true UTC)
@@ -384,7 +384,7 @@ def _burst_run(
 
 
 # CEST (UTC+2) worked example, verified against the real June-2026 delivery (module
-# docstring above / task-10-brief.md): raw header.t0_ns decodes (naively, as Unix ns)
+# docstring above): raw header.t0_ns decodes (naively, as Unix ns)
 # to 1996-06-27T06:41:03Z; the true instant is 2026-06-27T04:41:03Z (local
 # Europe/Vienna wall-clock digits 06:41:03 on 2026-06-27, CEST = UTC+2). Offset =
 # 946_684_800 s epoch-2000 shift - 7_200 s CEST = 946_677_600 s -- exactly a whole

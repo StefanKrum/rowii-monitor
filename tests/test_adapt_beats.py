@@ -1,14 +1,13 @@
-"""Tests for `scripts/adapt_beats.py` (Step-2 package-5 spec D4, Task 3;
-objective per spec D1 as amended by Amendment A1): CLI-level end-to-end tests
+"""Tests for `scripts/adapt_beats.py`: CLI-level end-to-end tests
 against a monkeypatched `discover`/`load_beats_model`/`iter_target_windows`
 (mirrors `tests/test_warm_cache.py`'s/`tests/test_pretrain_tfc.py`'s own
 established patterns -- no real data tree, no real BEATs checkpoint, no
 network anywhere in this file) plus focused unit tests for the pieces of new
-logic that have no natural home in Task 1/2's own test files: the native
+logic that have no natural home elsewhere: the native
 token construction (`_native_tokens`/`_encoder_forward` -- including THE
 train/inference-consistency test that pins `_native_tokens` to the exact
 tensor `BEATs.extract_features` hands its encoder, the decoupling bug class
-Amendment A1 exists to close), mode preparation/optimizer-param scoping
+this native-token design exists to close), mode preparation/optimizer-param scoping
 (`_prepare_model_for_mode`/`_trainable_params`), and mode-default resolution
 (`_resolve_mode_defaults`).
 
@@ -329,9 +328,9 @@ class TestNativeTokensAndEncoderForward:
         "embed_dim", [32, 16], ids=["no-post-extract-proj", "with-post-extract-proj"]
     )
     def test_native_tokens_match_extract_features_encoder_input(self, embed_dim):
-        """THE train/inference-consistency test (Amendment A1; the rework
-        brief's own words: "pins the decoupling bug class forever"): the
-        script's token construction must equal, EXACTLY, the tensor
+        """THE train/inference-consistency test ("pins the decoupling bug
+        class forever"): the script's token construction must equal,
+        EXACTLY, the tensor
         `BEATs.extract_features` -- the deployed inference path, the same
         method `BeatsFeaturizer._RealBeatsEncoder.extract` mirrors -- hands
         `model.encoder`. Captured via a forward pre-hook on the encoder
@@ -416,13 +415,13 @@ def test_lora_adapter_grads_nonzero_against_real_tiny_encoder():
     OTHER position's weights. A REAL multi-head self-attention encoder is
     different: a masked query attends to unmasked keys/values, so information
     genuinely crosses positions. This test proves gradient reaches the LoRA
-    adapters along adapt_beats.py's ACTUAL training path (Amendment A1's
-    native one): `model.preprocess` -> `_native_tokens` ->
+    adapters along adapt_beats.py's ACTUAL (native-token) training path:
+    `model.preprocess` -> `_native_tokens` ->
     `masked_token_loss` against the REAL vendored TransformerEncoder --
     reviewer-verified gradient feasibility, asserted here permanently.
 
-    Two backward passes, not one -- LoRA's own zero-init for lora_b (Task 1
-    design: "B init zeros") makes lora_a's gradient EXACTLY zero at the very
+    Two backward passes, not one -- LoRA's own zero-init for lora_b
+    ("B init zeros") makes lora_a's gradient EXACTLY zero at the very
     first step, by the chain rule alone (dLoss/dA = dLoss/dB_out @ B.weight,
     and B.weight is all-zero pre-training), REGARDLESS of which encoder is
     downstream -- a well-known LoRA training-dynamics property, not a
@@ -500,8 +499,8 @@ def test_e2e_lora_mode_checkpoint_sidecar_and_reload_check(tmp_path, monkeypatch
     assert set(state.keys()) == {"cfg", "model"}
     assert isinstance(state["model"], dict)
     assert len(state["model"]) > 0
-    # the merged checkpoint must NOT contain any lora_a/lora_b keys (D2:
-    # merge_lora folds them back into plain Linears before export)
+    # the merged checkpoint must NOT contain any lora_a/lora_b keys
+    # (merge_lora folds them back into plain Linears before export)
     assert not any("lora_a" in k or "lora_b" in k for k in state["model"])
 
     deviation_logs = [
@@ -684,9 +683,9 @@ def test_missing_checkpoint_env_exits_via_systemexit(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 10. --runs: multi-run round-robin pooling (Step-2 package-7 Task 8, spec D6
-#     as amended by A3.11). The rotation itself is unit-tested in
-#     tests/test_target_windows.py; here the CLI wiring is pinned --
+# 10. --runs: multi-run round-robin pooling. The rotation itself is
+#     unit-tested in tests/test_target_windows.py; here the CLI wiring is
+#     pinned --
 #     mutual exclusion with --run, --runs parse-level validation, budget/seed
 #     forwarding into iter_target_windows_multi, the '+'-joined checkpoint
 #     name, and the sidecar's per-run window counts.
@@ -753,7 +752,7 @@ def test_e2e_multi_run_pool_checkpoint_name_and_per_run_sidecar_counts(tmp_path,
         )
         rng = np.random.default_rng(5)
         # A plausible round-robin trace with run-a longer than run-b: 4 + 2
-        # windows -- the sidecar must count these PER RUN (A3.11).
+        # windows -- the sidecar must count these PER RUN.
         order = ["run-a", "run-b", "run-a", "run-b", "run-a", "run-a"]
         return iter(
             [(name, rng.normal(0.0, 1.0, target_hz).astype(np.float32)) for name in order]

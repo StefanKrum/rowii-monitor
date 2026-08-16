@@ -1,4 +1,4 @@
-"""Corpus window-iterator tests (package-4 spec D2, Task 2): synthetic wav/mat
+"""Corpus window-iterator tests: synthetic wav/mat
 fixtures only -- no real MIMII/CWRU/Paderborn downloads anywhere in this file
 (those never run in tests; see `tests/test_download_corpora.py` for the
 acquisition script's own synthetic-only tests).
@@ -190,7 +190,7 @@ class TestIterWindowsMatDir:
 
 
 class TestIterWindowsPaderbornDir:
-    """`iter_windows_paderborn_dir` (Task 3, orchestrator resolution 2): real
+    """`iter_windows_paderborn_dir`: real
     Paderborn KAt `.mat` files hold a NESTED MATLAB struct -- unlike CWRU's
     flat top-level variable (`iter_windows_mat_dir`'s contract), confirmed
     against real files during a sanctioned read-only smoke check
@@ -293,7 +293,7 @@ class TestIterWindowsPaderbornDir:
     def test_corrupt_file_is_skipped_with_warning_never_crashes(self, tmp_path, caplog):
         # A v7.3/HDF5-format .mat (loadmat can't parse those at all) or any
         # other genuinely malformed file must never crash the corpus build
-        # (orchestrator resolution 2's explicit "NEVER crash" requirement) --
+        # (the explicit "NEVER crash" requirement) --
         # a plain non-mat byte blob exercises the same failure path.
         (tmp_path / "corrupt.mat").write_bytes(b"not a real mat file")
 

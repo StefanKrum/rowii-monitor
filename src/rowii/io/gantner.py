@@ -4,9 +4,9 @@ Layout: version-prefixed magic string, JSON metadata, channel descriptor block
 (name [unit] uuid per channel, each length-prefixed -- see `_valid_token_at`),
 a run of 0x2a padding, then frames of uint64 ns-timestamp + one float32 per
 channel. Verified against real files (Betriebsdaten `DeviceAppVersion` V2.17,
-TU vibration streams V2.18) during Task 13: earlier revisions of this reader
+TU vibration streams V2.18): earlier revisions of this reader
 had only ever been exercised against the synthetic test fixture
-(`tests/fixtures/gantner_builder.py`), which -- until Task 13's fix -- encoded
+(`tests/fixtures/gantner_builder.py`), which encoded
 a subtly different (and wrong) token length-prefix convention than the real
 delivery; see `_valid_token_at`'s docstring for the corrected semantic.
 """
@@ -79,7 +79,7 @@ def _valid_token_at(desc: bytes, i: int) -> tuple[str, int] | None:
     """If a length-prefixed token validates starting at *i*, return `(payload, end)` with
     `end` the index one past its NUL terminator; else `None`.
 
-    Length semantic verified against the real June-2026 delivery (Task 13): the u16
+    Length semantic verified against the real June-2026 delivery: the u16
     length prefix counts the payload bytes PLUS the terminating NUL itself (`length ==
     len(payload) + 1`), not the payload alone -- so payload is `desc[i+2 : i+2+length-1]`
     and the terminator is the single byte at `i+2+length-1`.
@@ -115,8 +115,8 @@ def _scan_tokens(desc: bytes) -> list[str]:
     reverse-engineered binary layout) fail validation and are skipped one byte at a time.
 
     Maximal munch: the real per-channel record layout has a short run of fixed
-    non-token bytes right before each token's true length prefix (Task 13 finding --
-    e.g. `2b 00 02 00` before a UUID token's own `<len><uuid>\\x00`). Those bytes can,
+    non-token bytes right before each token's true length prefix (e.g.
+    `2b 00 02 00` before a UUID token's own `<len><uuid>\\x00`). Those bytes can,
     read from one byte earlier than the genuine token's start, coincidentally validate
     as a SHORT token themselves (short length, one printable payload byte, NUL
     terminator) -- e.g. a `length=2` token whose single payload byte happens to be the

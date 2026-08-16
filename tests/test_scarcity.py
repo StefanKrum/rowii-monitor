@@ -1,4 +1,4 @@
-"""Unit tests for rowii.anomaly.scarcity (package-2 spec D3, primary + secondary curves)."""
+"""Unit tests for rowii.anomaly.scarcity (primary + secondary curves)."""
 from __future__ import annotations
 
 import numpy as np

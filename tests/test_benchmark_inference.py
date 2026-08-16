@@ -1,4 +1,4 @@
-"""Smoke tests for scripts/benchmark_inference.py (package-5 spec D7).
+"""Smoke tests for scripts/benchmark_inference.py.
 
 Synthetic-only: the numpy configs (handcrafted, logmel) exercise the real
 end-to-end measurement loop; torch configs are covered by the skip path
@@ -79,9 +79,8 @@ def test_torch_config_with_missing_checkpoint_file_is_skipped(
     tmp_path, monkeypatch, caplog
 ) -> None:
     """A SET-but-nonexistent checkpoint env must skip like an unset one (with its
-    own log line), not FileNotFoundError the whole benchmark table away -- the
-    package-5 execution hit exactly this when the student checkpoint had not
-    been produced yet."""
+    own log line), not FileNotFoundError the whole benchmark table away -- this
+    happened for real when the student checkpoint had not been produced yet."""
     import logging
 
     caplog.set_level(logging.INFO)

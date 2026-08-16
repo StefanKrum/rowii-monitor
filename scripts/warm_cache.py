@@ -7,11 +7,10 @@ prepare_run`'s on-disk cache (keyed by a content fingerprint; see that module's
 docstring) means this extraction only needs to happen ONCE per (run, variant):
 every later `scripts/run_step2.py` invocation against the same combo is then a
 cache hit. This script exists so that one-off extraction can run in the
-background (design spec D4: "cache warm-up first, in background, before other
-sweeps need it") while the rest of this package's tasks are still being
-implemented against cheap handcrafted variants -- the reason this task is
-scheduled BEFORE those in execution order: its deliverable (a warm cache) gates a
-long-running background computation that should start as early as possible.
+background while cheap handcrafted variants are what everything else still
+runs against -- warming the cache is scheduled first because its deliverable
+(a warm cache) gates a long-running background computation that should start
+as early as possible.
 
 Bootstrapping (config/env loading via `rowii.config.load_config`, run discovery
 via `rowii.io.dataset.discover`, the beats-import guard) mirrors `scripts/
@@ -114,7 +113,7 @@ def _import_beats_or_exit() -> None:
 def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
     """Mirrors `scripts/run_step1.py`'s own private helper of the same name
     (duplicated, not imported -- see `_import_beats_or_exit`'s docstring). Extends
-    the beats-import-guard pattern (package-4 spec D4): torch missing (checked
+    the beats-import-guard pattern: torch missing (checked
     first) -> SystemExit naming the shared `[beats]` extra; else the ONE checkpoint
     relevant to *variant* itself missing -> SystemExit naming its own env var."""
     try:
@@ -132,7 +131,7 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
 
 
 def _import_student_or_exit(cfg: Config) -> None:
-    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    """Mirrors `_import_tfc_or_exit` above, simplified: the
     distilled student has only ONE checkpoint (unlike TF-C's two independent
     branches), so there is no variant-based checkpoint selection -- torch
     missing (checked first) -> SystemExit naming the shared `[beats]` extra;

@@ -1,7 +1,7 @@
-"""Tests for `scripts/run_step2_scarcity.py` (Step-2 package 2, Task 5): CLI-level
+"""Tests for `scripts/run_step2_scarcity.py`: CLI-level
 tests against a monkeypatched `discover`/`load_config`/`prepare_run` seam, feeding a
 hand-built `PreparedRun` directly -- no real ROWII data or synthetic gantner tree
-anywhere (orchestrator resolution 6: mirrors `tests/test_warm_cache.py`'s established
+anywhere (mirrors `tests/test_warm_cache.py`'s established
 monkeypatch style, not `tests/test_step2_cli.py`'s synthetic-tree fixture).
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 # ---------------------------------------------------------------------------
-# Hand-built fixtures (no gantner tree -- orchestrator resolution 6)
+# Hand-built fixtures (no gantner tree)
 # ---------------------------------------------------------------------------
 
 
@@ -134,7 +134,7 @@ def test_build_parser_defaults_match_the_documented_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1b. audio-student variant (Step-2 package-5 spec D5): choices inclusion +
+# 1b. audio-student variant: choices inclusion +
 # _import_student_or_exit guard messages.
 # ---------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ def test_without_secondary_flag_no_segment_curve_files(tmp_path, monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
-# 3. Not-curvable states are named, never silently dropped (orchestrator resolution 4)
+# 3. Not-curvable states are named, never silently dropped
 # ---------------------------------------------------------------------------
 
 

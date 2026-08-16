@@ -1,5 +1,5 @@
 """LoRA (Low-Rank Adaptation, Hu et al. 2021) injection for the vendored
-BEATs encoder (Step-2 package-5 spec D2, Task 1): the ONE module under
+BEATs encoder: the ONE module under
 `rowii.adapt` (alongside `objective.py`) that imports torch at module level,
 mirroring `rowii.anomaly._recon_models`'s / `rowii.tfc.model`'s role in their
 own packages -- adaptation only ever runs with the `[beats]` extra installed
@@ -7,7 +7,7 @@ own packages -- adaptation only ever runs with the `[beats]` extra installed
 guarding here, unlike `rowii.tfc.wrapper`/`rowii.signals.beats`), so this
 module is eager rather than lazy-behind-a-wrapper.
 
-Design (spec D2): rank-8, alpha-16, dropout-0.0 low-rank adapters are
+Design: rank-8, alpha-16, dropout-0.0 low-rank adapters are
 injected into the QUERY and VALUE projections of every self-attention block
 of the vendored BEATs encoder (`rowii.vendor.beats.backbone.
 TransformerSentenceEncoderLayer.self_attn.{q,v}_proj`, both plain
@@ -33,7 +33,7 @@ from collections.abc import Iterator
 import torch
 
 _DEFAULT_TARGET_NAMES = ("q_proj", "v_proj")
-"""Attribute names LoRA targets by default (spec D2: query and value
+"""Attribute names LoRA targets by default (query and value
 projections only -- key/output projections are left frozen, matching the
 literature-cited placement for transformer LoRA)."""
 
@@ -155,10 +155,10 @@ def inject_lora(
     Args:
         module: Root module to walk (e.g. a whole `BEATs` instance, or just
             its `.encoder`).
-        r: LoRA rank (spec D2 default: 8).
-        alpha: LoRA scale numerator (spec D2 default: 16); `LoraLinear.scale
+        r: LoRA rank (default: 8).
+        alpha: LoRA scale numerator (default: 16); `LoraLinear.scale
             = alpha / r`.
-        target_names: Attribute names to target (spec D2 default: query and
+        target_names: Attribute names to target (default: query and
             value projections only).
 
     Returns:
@@ -228,7 +228,7 @@ def lora_parameters(module: torch.nn.Module) -> Iterator[torch.nn.Parameter]:
     `base` Linear, whether or not it happens to have `requires_grad=True`
     (`inject_lora` always freezes `base`, but this function does not rely on
     that: it filters by module identity, not by gradient flag). This is the
-    parameter set an adaptation optimizer should train (spec D2: "only
+    parameter set an adaptation optimizer should train ("only
     adapter params train"); passing `module.parameters()` directly to an
     optimizer would also (uselessly, since frozen) include every base
     weight.

@@ -41,9 +41,11 @@ in-sample, the rest held-out across three DAQ-configuration eras -- see
 reported both aggregated ("(all)") and broken down per SCADA-derived GT
 operating mode (`rowii.scada.labels.gt_labels`) -- showing (a) drift of the
 rate across eras (a mode-BLIND threshold has no way to track the era-6-29
-microphone level step P7/P8/P9 document) and (b) mode-dependence within a
-single day (a global threshold necessarily over- or under-fires on whichever
-mode's level differs most from the B1 pool's own mode mix).
+microphone level step also visible in `scripts/analyze_days.py`'s `era-step`
+view and independently reported by the partner, Rodrigues & Zhang 2026) and
+(b) mode-dependence within a single day (a global threshold necessarily
+over- or under-fires on whichever mode's level differs most from the B1
+pool's own mode mix).
 
 **Experiment 2 -- event detection on 080726 (`events_pu.csv`/`events_st.csv`).**
 Per-event TPR and FAR outside events (`rowii.eval.events.evaluate_events`,

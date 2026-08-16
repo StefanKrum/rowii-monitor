@@ -1,13 +1,12 @@
-"""Tests for rowii.anomaly.sentinels (Package-9 D1, A1.1): the level-series
+"""Tests for rowii.anomaly.sentinels: the level-series
 stream∩level extraction (raises for embeddings), the seeded segment-block s1
 bootstrap threshold + firing, and the s2 anchor/MAD math + mic-out/vib-in
 attribution. Deterministic, no real data, no partner number as an expected value.
 
 The s2 MAD is 1.4826-scaled (the SAME `_MAD_TO_SIGMA` normal-consistency factor as
-`rowii.anomaly.normalize`'s `SessionNormalizer`/`_center_scale`) -- the Task-5
-Interfaces bullet's resolution of the plan's own self-review item 5 (RAW vs scaled
-MAD), pinned explicitly by `test_s2_anchor_mad_uses_1_4826_scaling_like_session_
-normalizer` below so a future regression to raw MAD fails loudly.
+`rowii.anomaly.normalize`'s `SessionNormalizer`/`_center_scale`) -- resolved as
+scaled, not raw, MAD, pinned explicitly by `test_s2_anchor_mad_uses_1_4826_scaling_
+like_session_normalizer` below so a future regression to raw MAD fails loudly.
 """
 from __future__ import annotations
 
@@ -51,7 +50,7 @@ def test_level_series_raises_for_embedding_names() -> None:
 
 
 def test_level_series_raises_for_geometry_mismatch() -> None:
-    """P9 hardening T5a: width guard (mirrors `rowii.anomaly.levelrecal`'s
+    """Width guard (mirrors `rowii.anomaly.levelrecal`'s
     `column_medians`/`apply_level_recal` geometry posture: `ndim != 2 or
     shape[1] != len(feature_names)` -> ValueError). Without it, an oversized
     rows array silently succeeds -- the selected columns (0, 2) happen to
@@ -65,7 +64,7 @@ def test_level_series_raises_for_geometry_mismatch() -> None:
 def test_level_series_warns_when_some_but_not_all_streams_absent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """P9 hardening T5b: a PARTIAL stream absence (one of the two `_MIC`
+    """A PARTIAL stream absence (one of the two `_MIC`
     streams present, the other entirely missing from feature_names) must be
     visible via `logger.warning` naming the skipped stream -- only a TOTAL
     absence across every requested stream stays a silent-to-a-log,
@@ -107,7 +106,7 @@ def test_s2_anchor_mad_and_fire() -> None:
 
 
 def test_s2_anchor_mad_uses_1_4826_scaling_like_session_normalizer() -> None:
-    """A1.1 pin (T5 Interfaces, resolving the plan's own self-review item 5): mad is
+    """mad is
     the 1.4826-scaled MAD over the per-segment-block medians, not the raw MAD --
     the same `_MAD_TO_SIGMA` precedent as `rowii.anomaly.normalize._center_scale`."""
     seg = np.repeat(np.arange(6), 10)
@@ -119,7 +118,7 @@ def test_s2_anchor_mad_uses_1_4826_scaling_like_session_normalizer() -> None:
 
 
 def test_s2_anchor_mad_floors_degenerate_single_block_mad() -> None:
-    """P9 hardening T5c: a single-block anchor has `raw_mad == 0` exactly (one
+    """A single-block anchor has `raw_mad == 0` exactly (one
     block medians to nothing to spread across) -- without a floor this makes
     `mad == 0.0`, a zero-margin hair-trigger where `s2_fires` fires on ANY
     nonzero deviation. Floored at 1e-8 (mirrors `rowii.anomaly.normalize.

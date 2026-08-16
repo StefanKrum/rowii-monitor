@@ -81,9 +81,9 @@ n=319); independent, anti-correlated, and identical branches measure within
 `alpha + 3*SE`. A dedicated p-reference split (branch p-values for calibration AND
 scoring windows both computed against a third, held-out reference set) would restore
 exactness -- deliberately NOT adopted: per-state calibration pools are the binding
-resource in this project's data (the package-2 scarcity results, `rowii.anomaly.
-scarcity`/spec D3, already put several states near the `1/(n+1)` achievability floor;
-carving a third split out of every per-state pool would push them under it).
+resource in this project's data (the `rowii.anomaly.scarcity` results already put
+several states near the `1/(n+1)` achievability floor; carving a third split out
+of every per-state pool would push them under it).
 `far_table_scorefusion.csv`'s tippett rows are therefore reported as the max-rule
 CONTRAST to Fisher, carrying this documented caveat -- NOT as guaranteed-FAR rows --
 and `tests/test_fusion.py` pins the excess at `alpha + 0.010` (n=39) /

@@ -103,7 +103,7 @@ class StickyHmmSmoother:
     def decode(self, features: np.ndarray) -> np.ndarray:
         """Viterbi labels for *features* from the already-fitted sticky HMM — no
         refit, no EM; labels come back in the SAME id space `fit_decode` was given
-        (package-2 spec D1: cross-day apply must never re-estimate on the new day).
+        (cross-day apply must never re-estimate on the new day).
 
         Raises:
             RuntimeError: if `fit_decode` has never run on this instance.

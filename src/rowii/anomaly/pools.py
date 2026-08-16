@@ -13,16 +13,16 @@ independently with the SAME `split_by_segments` convention `run_sweep` uses
 `side="calibration"` pools each run's whole top calibration side; `side="fit"` /
 `side="conformal"` pool the nested parts. Pooled references are built on the pooled
 FIT part and pooled FROZEN thresholds calibrate on the pooled CONFORMAL part's scores
-(spec A3.7) -- the same three-way footing `run_sweep` gives a single run. The
-cross-run leakage rule (spec D1) holds by construction: every run's SCORING side is
+-- the same three-way footing `run_sweep` gives a single run. The
+cross-run leakage rule holds by construction: every run's SCORING side is
 untouched by every pooled side, so a pooled artifact evaluated on run R's scoring
 windows was never fit or calibrated on them -- defensively re-asserted per run here,
 the same trust-but-verify posture as `run_sweep._assert_three_way_disjoint`. (The
-stronger A3.1 rule -- pool artifacts are never EVALUATED on pool-member runs at all
+stronger rule -- pool artifacts are never EVALUATED on pool-member runs at all
 -- is a protocol-level concern enforced by `scripts/run_step2.py`'s
 cross-day-pooled guards, not by this module.)
 
-WARNING (spec A3.7, binding): `scripts/run_step2.py::_cross_day_per_state_sweep`
+WARNING (binding): `scripts/run_step2.py::_cross_day_per_state_sweep`
 uses its ONE `split_by_segments` call's two sides directly as fit/conformal -- i.e.
 the TOP split doubles as the fit/conformal split. That is correct THERE (its fit day
 contributes no scoring windows, so a nested split would waste half the day) but
@@ -31,7 +31,7 @@ are later evaluated against. Do NOT copy that convention into this module or its
 callers: pooled fit/conformal sides always come from the NESTED split of the
 calibration side, exactly as `run_sweep` does.
 
-`coverage_table`/`coverage_warnings` are the A4.1/A4.2 coverage machinery: windows
+`coverage_table`/`coverage_warnings` are the coverage machinery: windows
 per (run, label) for any caller-supplied per-window label array -- Step-1 detected
 cluster ids, GT state names, or composite `"state|load_bin"` strings assembled by
 the caller from `rowii.scada.labels.gt_labels`' two output columns. The pool
@@ -39,8 +39,8 @@ machinery is deliberately labels-agnostic (it never derives labels itself, match
 `references.build_references`' "labels is deliberately generic" stance);
 `coverage_warnings` compares a TRAINING-side table against an EVALUATION-side table
 and warns for every label evaluated somewhere but covered nowhere in training --
-"a mode with zero coverage on either side must be visible, never silent" (spec
-A4.1), operationalized for load bins by passing composite labels (spec A4.2).
+"a mode with zero coverage on either side must be visible, never silent" --
+operationalized for load bins by passing composite labels.
 """
 from __future__ import annotations
 
@@ -94,8 +94,7 @@ class PoolResult:
     own grid: `features[i] == prepared[members[run_index[i]].run_name]
     .features[window_index[i]]` bitwise."""
     provenance: dict[str, dict[str, int]]
-    """Run name -> `{"n_windows": ...}` -- per-run window counts for the sidecars
-    (spec D1: "PoolResult carries per-run provenance")."""
+    """Run name -> `{"n_windows": ...}` -- per-run window counts for the sidecars."""
 
 
 def _side_windows(
@@ -103,8 +102,8 @@ def _side_windows(
 ) -> np.ndarray:
     """One run's window indices for *side* under the run_sweep split convention
     (module docstring) -- empty, with a WARNING log, when the run is too short or
-    sparse to form the requested side (plan Task 1 binding: "empty side for a run ->
-    member with n_windows 0 + warning, never a crash"). `split_by_segments` signals
+    sparse to form the requested side (binding: an empty side for a run becomes a
+    member with n_windows 0 plus a warning, never a crash). `split_by_segments` signals
     exactly that condition by raising `ValueError` on a degenerate split, so this is
     the one place a `split_by_segments` error is deliberately absorbed rather than
     propagated."""
@@ -156,7 +155,7 @@ def build_pool(
     sweep_cfg: SweepConfig,
 ) -> PoolResult:
     """Pool one leakage-safe side's windows and features across every run of
-    *prepared* -- see module docstring for the split convention and the A3.7
+    *prepared* -- see module docstring for the split convention and the
     WARNING against copying `_cross_day_per_state_sweep`'s top-split-as-fit
     semantics.
 
@@ -252,7 +251,7 @@ def coverage_table(
     windows_per_run: dict[str, np.ndarray],
     labels_per_run: dict[str, np.ndarray],
 ) -> pd.DataFrame:
-    """Windows per (run, label) over caller-selected window subsets -- the A4.1/A4.2
+    """Windows per (run, label) over caller-selected window subsets -- the
     coverage table for one side of a pool or evaluation.
 
     Args:
@@ -264,8 +263,8 @@ def coverage_table(
             runs appear in the table, in this dict's own order.
         labels_per_run: Run name -> (W,) per-window label array aligned with that
             run's grid -- ANY label space the caller chooses: detected cluster ids
-            (int), GT state names (str), or composite `"state|load_bin"` strings
-            (spec A4.2); this function never derives labels itself.
+            (int), GT state names (str), or composite `"state|load_bin"` strings;
+            this function never derives labels itself.
 
     Returns:
         DataFrame with columns `run, label, n_windows` -- one row per (run, label)
@@ -311,7 +310,7 @@ def coverage_table(
             rows.append({"run": run_name, "label": label, "n_windows": int(count)})
     # Pin n_windows to int64 even when *rows* is empty: pandas infers `object`
     # from an empty list, and an empty-selection table is a MAINLINE output of
-    # this module (A4.1 exists to make zero-coverage visible) whose dtype
+    # this module (zero-coverage visibility is the point) whose dtype
     # degradation would propagate through pd.concat into every aggregated
     # coverage table downstream.
     return pd.DataFrame(rows, columns=_COVERAGE_COLUMNS).astype({"n_windows": "int64"})
@@ -329,15 +328,15 @@ def _label_totals(table: pd.DataFrame) -> dict[int | str, int]:
 
 def coverage_warnings(train_table: pd.DataFrame, eval_table: pd.DataFrame) -> list[str]:
     """Warnings for every label present in *eval_table* but with ZERO training
-    coverage in *train_table* -- the A4.1/A4.2 "never silent" rule: a mode (or
+    coverage in *train_table* -- the "never silent" rule: a mode (or
     state x load-bin cell, via composite labels) that is evaluated somewhere but
     trained nowhere must be visible.
 
     Coverage is pool-wide: a label counts as covered when its `n_windows` SUM across
     every training run is positive (an explicit zero-count row is NOT coverage), and
     only labels with a positive evaluation total can fire (nothing was evaluated
-    otherwise). Each finding is BOTH logged at WARNING level (spec A4.2: "the pool
-    builder logs a warning") and returned as a string for the caller's notes/sidecar.
+    otherwise). Each finding is BOTH logged at WARNING level and returned as a
+    string for the caller's notes/sidecar.
 
     Args:
         train_table: `coverage_table` output for the training side (pool windows).

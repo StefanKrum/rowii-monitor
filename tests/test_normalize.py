@@ -7,8 +7,8 @@ the stats themselves).
 
 The first-N membership rule is by window START: window `i` qualifies iff its grid
 start offset `i * window_ns` is strictly below `norm_minutes * 60 * 1e9` ns, AND
-the window is valid. `fit_pool_stats` is the pooled-snapshot companion (spec A3.5 /
-plan Task 4 design decision): pool-global center/scale over an ALREADY-STACKED
+the window is valid. `fit_pool_stats` is the pooled-snapshot companion: pool-global
+center/scale over an ALREADY-STACKED
 matrix, carrying the `norm_minutes == 0.0` sentinel that marks stats NOT derived
 from any first-N prefix.
 """
@@ -137,14 +137,14 @@ def test_shape_mismatch_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Docstring pins (cheap doc contract, plan Task 4)
+# 3. Docstring pins (cheap doc contract)
 # ---------------------------------------------------------------------------
 
 
 def test_docstring_documents_state_mix_confound_and_deployment_rationale() -> None:
     doc = fit_session_stats.__doc__
     assert doc is not None
-    # The A3.5 state-mix confound (measured instance named) + the A2.2 N-sweep as
+    # The state-mix confound (measured instance named) + the N-sweep as
     # the sensitivity probe + the deployment-realism rationale must be IN the
     # docstring -- callers must not be able to miss the caveat.
     assert "confound" in doc

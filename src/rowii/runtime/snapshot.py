@@ -12,8 +12,8 @@ copy of its reference matrix; `MahalanobisScorer` a per-feature mean + shrunk
 variance), and both `fit()` calls are deterministic normalization, NOT training -- so
 the snapshot stores the RAW reference matrix per label and simply refits at use time,
 bit-identically. The sklearn-backed baselines (OC-SVM/IF/LOF) and the torch AEs would
-require pickling their fitted estimators; they are sweep-only comparison poles (spec
-D2 non-goals), and `save_snapshot`/`fit_snapshot` refuse them with the whitelist
+require pickling their fitted estimators; they are sweep-only comparison poles
+(non-goals), and `save_snapshot`/`fit_snapshot` refuse them with the whitelist
 named.
 
 **Detector half.** `mean`/`std` (fit-day standardization), the sticky HMM's four
@@ -21,15 +21,15 @@ parameter arrays as PLAIN arrays, `fitted_ids`, and the `DetectConfig` scalars n
 to rebuild `StickyHmmSmoother`/`FittedDetector`. The sklearn clusterer is NOT stored:
 `FittedDetector.apply` never calls it -- Viterbi labels both the fit and apply paths
 (documented behavior, `rowii.state.detect`), so the HMM alone reproduces `apply`
-exactly. Three reconstruction subtleties, all binding (amendment A1):
+exactly. Three reconstruction subtleties, all binding:
 
-- **hmmlearn covars trap (A1.1, measured):** for `covariance_type="diag"` the
+- **hmmlearn covars trap (measured):** for `covariance_type="diag"` the
   `covars_` GETTER returns full `(k, F, F)` matrices while the SETTER demands
   `(k, F)` diagonals. The snapshot stores `np.diagonal(covars_, axis1=1, axis2=2)`;
   reconstruction assigns that `(k, F)` array back. Viterbi parity of the
   reconstructed model was verified empirically before implementation (identical
   `predict`, non-contiguous label ids).
-- **k<=1 degenerate detector (A1.2):** `StickyHmmSmoother.fit_decode` with one
+- **k<=1 degenerate detector:** `StickyHmmSmoother.fit_decode` with one
   unique init id leaves `last_model_ = None` and `decode` returns the single fitted
   id for every window. The snapshot always carries `fitted_ids`; the four HMM arrays
   are `None` in memory and ABSENT from the npz exactly in this case, and
@@ -50,7 +50,7 @@ and the four arrays are assigned directly.
 that label), the calibration-score array (the one piece no existing dataclass
 captures -- required so the monitor can compute `p_values` against the SAME
 calibration set the threshold came from), and the full `ConformalThreshold`.
-`fit_snapshot` mirrors `run_sweep`'s split discipline 1:1 (A1.6, verified against
+`fit_snapshot` mirrors `run_sweep`'s split discipline 1:1 (verified against
 `run_sweep`'s actual code): top split (`calibration_frac`, `seed`) over the run's
 valid windows -> nested split of the calibration half (0.5, `seed + 1`) ->
 references from the nested FIT side (`build_references`, `min_ref` floor), one
@@ -79,7 +79,7 @@ the versions named instead of misreading. A human-readable `<stem>.json` sidecar
 duplicates the metadata for quick inspection (`cat`-able provenance next to the
 binary artifact); `load_snapshot` never reads it -- the npz is self-contained.
 
-**Format v2: session stats (package-7 Task 4, spec D3/A3.5).** A snapshot may carry
+**Format v2: session stats.** A snapshot may carry
 `session_stats` (`rowii.anomaly.normalize.SessionStats`) -- the fit-side robust
 center/scale the monitor's `--session-norm` mode uses as the REFERENCE-side
 transform (the stored references stay RAW; normalization happens at scoring time).
@@ -88,17 +88,16 @@ meta entry (`n_windows`, `norm_minutes`), present ONLY when the snapshot has sta
 New saves write `format_version = 2` either way; `load_snapshot` accepts {1, 2},
 and a v1 FILE (no session members by construction) loads with
 `session_stats=None`. Refusing a stats-less snapshot under `--session-norm` is the
-MONITOR's job (spec A3.5), not the reader's -- a v1 artifact is still a perfectly
+MONITOR's job, not the reader's -- a v1 artifact is still a perfectly
 valid raw-space snapshot.
 
-**Format v2 (cont'd): level-recal medians (package-8 Task 7, spec D2/A1.4/
-A1.10/A1.11).** A snapshot may ALSO carry `level_recal_medians`
+**Format v2 (cont'd): level-recal medians.** A snapshot may ALSO carry `level_recal_medians`
 (`dict[str, float]`, name-keyed over LEVEL columns only -- `rowii.anomaly.
 levelrecal.level_columns`) -- the fit-side ANCHOR the monitor's `--level-recal`
 mode aligns a new run's own first-N-minutes level median onto (shape-preserving,
 log10-domain additive offsets, `rowii.anomaly.levelrecal.level_recal_offsets`/
 `apply_level_recal`). This is a SECOND, independent OPTIONAL v2 member alongside
-`session_stats` -- NO version bump (A1.10: both live in the same v2 format) --
+`session_stats` -- NO version bump (both live in the same v2 format) --
 but the two are MUTUALLY EXCLUSIVE by fit path: session-normalization and
 level-only recalibration are different scoring-space transforms, and
 `fit_snapshot_from_parts` refuses a caller that passes both. Unlike
@@ -106,13 +105,13 @@ level-only recalibration are different scoring-space transforms, and
 `dict[str, float]` and needs no npz array member at all -- it lives entirely in
 the `meta` JSON, present under a `"level_recal_medians"` key exactly when the
 snapshot carries it. Refusing a medians-less snapshot under `--level-recal` is
-the MONITOR's job (mirrors `session_stats`' A3.5 precedent), not the reader's.
+the MONITOR's job (mirrors `session_stats`' precedent), not the reader's.
 
-**Format v2 (cont'd): state_names (package-9 Task 2, spec D2/A1.8).** A
+**Format v2 (cont'd): state_names.** A
 snapshot may ALSO carry `state_names` (`dict[int, str]`, keyed over the
 detector's FITTED label ids -- `rowii.eval.metrics.derive_state_names`'s
-output) -- the commissioning-time cluster-id -> operating-mode-name map D2
-persists so the monitor can surface named states instead of bare cluster ids.
+output) -- the commissioning-time cluster-id -> operating-mode-name map this
+format persists so the monitor can surface named states instead of bare cluster ids.
 A THIRD, independent OPTIONAL v2 member -- NO version bump (same v2 format as
 `session_stats`/`level_recal_medians`) and NO mutual-exclusivity with either
 (a naming layer, not a scoring-space transform, so it coexists with
@@ -155,7 +154,7 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_FORMAT_VERSION: int = 2
 """Bump on any incompatible change to the npz layout or meta schema -- `load_snapshot`
-refuses an unsupported file naming the versions. v2 (package-7 Task 4) adds the
+refuses an unsupported file naming the versions. v2 adds the
 OPTIONAL session-stats members (module docstring); v1 files remain readable."""
 
 _SUPPORTED_FORMAT_VERSIONS: tuple[int, ...] = (1, 2)
@@ -190,7 +189,7 @@ class MonitorSnapshot:
     docstring). Always present, even for the k<=1 degenerate detector."""
     hmm_startprob: np.ndarray | None
     """(k_eff,) float64, or `None` for the degenerate (single-state) detector --
-    all four `hmm_*` fields are `None` together (A1.2)."""
+    all four `hmm_*` fields are `None` together."""
     hmm_transmat: np.ndarray | None
     """(k_eff, k_eff) float64 sticky transition matrix, or `None` (see above)."""
     hmm_means: np.ndarray | None
@@ -198,7 +197,7 @@ class MonitorSnapshot:
     hmm_covars_diag: np.ndarray | None
     """(k_eff, F) float64 per-component emission-covariance DIAGONALS -- stored via
     `np.diagonal(covars_, axis1=1, axis2=2)` because hmmlearn's diag-covariance
-    getter/setter shapes disagree (A1.1, module docstring). `None` when degenerate."""
+    getter/setter shapes disagree (module docstring). `None` when degenerate."""
     min_dwell_s: float
     """`FittedDetector.min_dwell_s` -- duration-filter parameter at fit time."""
     k: int
@@ -226,7 +225,7 @@ class MonitorSnapshot:
     """`SweepConfig.min_ref` at fit time -- reference floor for per-label entries."""
     calibration_frac: float
     """`SweepConfig.calibration_frac` at fit time -- the monitor reuses it (with
-    `seed`) to split a NEW run for threshold recalibration (spec D2)."""
+    `seed`) to split a NEW run for threshold recalibration."""
     seed: int
     """`SweepConfig.seed` at fit time (top split seed; nested split used seed+1)."""
     variant: str
@@ -245,7 +244,7 @@ class MonitorSnapshot:
     format_version: int
     """`SNAPSHOT_FORMAT_VERSION` at creation -- checked by `load_snapshot`."""
     session_stats: SessionStats | None = None
-    """Fit-side session-normalization stats (format v2, spec D3/A3.5), or `None`
+    """Fit-side session-normalization stats (format v2), or `None`
     for a raw-space snapshot (every v1 file; any snapshot fitted without session
     normalization). When present, the monitor's `--session-norm` mode transforms
     the stored RAW references with THESE stats (`scorer_for_label`'s
@@ -253,32 +252,32 @@ class MonitorSnapshot:
     a pooled artifact stores POOL-GLOBAL stats with the `norm_minutes == 0.0`
     sentinel (`rowii.anomaly.normalize.fit_pool_stats`)."""
     level_recal_medians: dict[str, float] | None = None
-    """Fit-side level-only-recalibration ANCHOR medians (format v2, package-8
-    Task 7, spec D2/A1.4/A1.10/A1.11), name-keyed over LEVEL columns only
+    """Fit-side level-only-recalibration ANCHOR medians (format v2),
+    name-keyed over LEVEL columns only
     (`rowii.anomaly.levelrecal.level_columns`) -- OPTIONAL v2 member (no version
     bump, module docstring), or `None` for a snapshot fitted without
     `--level-recal`. For a `run_step2 --save-snapshot --level-recal` pooled
     artifact this is the pooled FIT side's own per-column median
     (`rowii.anomaly.levelrecal.column_medians(pool_fit.features, feature_names)`,
-    the A1.4 anchor) -- the SAME anchor `far_table_frozen.csv`/
+    the anchor) -- the SAME anchor `far_table_frozen.csv`/
     `far_table_recalibrate.csv` align the TEST run onto. The monitor's
     `--level-recal` mode treats this as the reference-side median it aligns a
     NEW run's own first-N-minutes median onto (`rowii.anomaly.levelrecal.
     level_recal_offsets`/`apply_level_recal`), applied AFTER the snapshot-
-    contract projection (A1.11) -- a medians-less snapshot under
+    contract projection -- a medians-less snapshot under
     `--level-recal` is refused with exit 2, never a silent raw-space fallback
-    (mirrors `session_stats`' A3.5 refusal precedent). Mutually exclusive with
-    `session_stats` by fit path (A1.10): the two normalization mechanisms are
+    (mirrors `session_stats`' refusal precedent). Mutually exclusive with
+    `session_stats` by fit path: the two normalization mechanisms are
     never both stored in one snapshot, enforced by `fit_snapshot_from_parts`."""
     state_names: dict[int, str] | None = None
-    """Fit-side cluster-id -> operating-mode-name map (format v2, package-9 Task 2,
-    spec D2/A1.8), keyed over the detector's FITTED label ids (`fitted_ids`) --
+    """Fit-side cluster-id -> operating-mode-name map (format v2),
+    keyed over the detector's FITTED label ids (`fitted_ids`) --
     NOT the threshold-label subset (`references`/`calibration_scores`/
     `thresholds`' key-agreement invariant does not apply here; a cluster can
     carry a name without ever having a calibrated threshold). OPTIONAL v2
     member (no version bump, module docstring), `None` for a snapshot fitted
     without a name derivation (e.g. `rowii.eval.metrics.derive_state_names`
-    was never run, or every fit run lacked SCADA ground truth -- the A1.8
+    was never run, or every fit run lacked SCADA ground truth -- the
     GT-skip seam `scripts/run_step2.py --save-snapshot` implements). NO
     mutual-exclusivity with `session_stats` or `level_recal_medians` (a naming
     layer, not a scoring-space transform -- coexists with either)."""
@@ -320,8 +319,8 @@ def scorer_for_label(
     Args:
         snapshot: The snapshot to draw the reference (and scorer name) from.
         label: A state label present in `snapshot.references`.
-        session_stats: When given (the monitor's `--session-norm` mode, spec
-            D3/A3.5), the scorer is fit on the SESSION-NORMALIZED reference
+        session_stats: When given (the monitor's `--session-norm` mode),
+            the scorer is fit on the SESSION-NORMALIZED reference
             (`apply_session_norm(references[label], session_stats)`) instead of
             the raw one -- the reference-side half of the scoring-space-only
             rule; the caller transforms its query windows with their own run's
@@ -332,8 +331,8 @@ def scorer_for_label(
 
     Raises:
         KeyError: if *label* has no reference in the snapshot -- the message names
-            the labels that do (callers gate unknown states BEFORE scoring, spec
-            A1.3, so reaching this is a caller bug worth a loud name-carrying error).
+            the labels that do (callers gate unknown states BEFORE scoring,
+            so reaching this is a caller bug worth a loud name-carrying error).
         ValueError: if `snapshot.scorer` is not a runtime scorer (only possible for
             a hand-built snapshot -- `fit_snapshot`/`save_snapshot` both refuse).
     """
@@ -352,7 +351,7 @@ def _hmm_arrays(
     smoother: StickyHmmSmoother, fitted_ids: np.ndarray
 ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     """Extract `(startprob, transmat, means, covars_diag)` from a fitted smoother,
-    or four `None`s for the k<=1 degenerate case (A1.2) -- asserting the
+    or four `None`s for the k<=1 degenerate case -- asserting the
     component/id invariant the reconstruction in `to_detector` relies on (module
     docstring).
 
@@ -383,7 +382,7 @@ def _hmm_arrays(
             f"StickyHmmSmoother's construction changed; the snapshot format cannot "
             f"represent this"
         )
-    # A1.1: the diag-covariance GETTER returns (k, F, F) full matrices; store the
+    # The diag-covariance GETTER returns (k, F, F) full matrices; store the
     # (k, F) diagonals the SETTER will demand at reconstruction.
     covars_diag = np.ascontiguousarray(np.diagonal(model.covars_, axis1=1, axis2=2))
     return (
@@ -406,14 +405,14 @@ def fit_snapshot(
 ) -> tuple[MonitorSnapshot, np.ndarray]:
     """Fit a detector on *prepared* and assemble the full `MonitorSnapshot` --
     detector half from `FittedDetector.fit` on the VALID rows, scoring half via
-    `run_sweep`'s exact split discipline (A1.6, module docstring).
+    `run_sweep`'s exact split discipline (module docstring).
 
     Detector fitting mirrors `scripts/apply_detector.py::_fit_detector_and_mapping`'s
     valid-grid pattern: fit on `features[valid_mask]` against a grid of
     `valid_mask.sum()` windows, then scatter labels back to full length with
     `_INVALID_LABEL` on invalid windows. State labels for the scoring half are these
     DETECTED labels (run-time realism -- the monitor will only ever have detected
-    states on a new day; spec §4).
+    states on a new day).
 
     Args:
         prepared: `rowii.pipeline.prepare_run` output for the fit run (or an
@@ -469,7 +468,7 @@ def fit_snapshot(
     fitted_ids = np.asarray(smoother._fitted_ids, dtype=np.int64)
     startprob, transmat, means, covars_diag = _hmm_arrays(smoother, fitted_ids)
 
-    # -- Scoring half: run_sweep's exact top/nested split (A1.6).
+    # -- Scoring half: run_sweep's exact top/nested split.
     top = split_by_segments(
         prepared.segment_ids, prepared.valid_mask, sweep_cfg.calibration_frac, sweep_cfg.seed
     )
@@ -600,12 +599,12 @@ def fit_snapshot_from_parts(
     counterpart to `fit_snapshot`; the
     `session_stats` kwarg is a later extension; the `level_recal_medians`
     kwarg is a later extension too; the `state_names` kwarg
-    is package-9 Task 2's D2/A1.8 extension).
+    is a later extension too.
 
     `fit_snapshot` owns the SINGLE-RUN derivation (its own split discipline,
     references, thresholds). Pooled artifacts derive those parts across runs
     instead -- `rowii.anomaly.pools.build_pool` sides, `FittedDetector.fit_pooled`,
-    frozen thresholds from the pool's nested-CONFORMAL scores (A3.7), wired by
+    frozen thresholds from the pool's nested-CONFORMAL scores, wired by
     `scripts/run_step2.py`'s cross-day-pooled protocol -- so this constructor is
     PURE assembly + validation: nothing is split, fit, scored, or calibrated here,
     and the caller's arrays enter the snapshot exactly as given (the dicts are
@@ -620,12 +619,12 @@ def fit_snapshot_from_parts(
             works before any `apply` call.)
         references: Label -> raw reference matrix (pooled fit-side rows per label).
         calibration_scores: Label -> the scores the threshold was calibrated on
-            (for a pooled artifact: the pool's CONFORMAL-side scores, A3.7).
+            (for a pooled artifact: the pool's CONFORMAL-side scores).
         thresholds: Label -> the calibrated `ConformalThreshold`.
         scorer: Runtime scorer name (whitelist `_RUNTIME_SCORERS`).
         alpha: Nominal per-state false-alarm target the thresholds carry.
         min_ref: Reference floor the caller applied (provenance/recalibration).
-        calibration_frac: Top-split fraction (the monitor reuses it, spec D2).
+        calibration_frac: Top-split fraction (the monitor reuses it).
         seed: Top-split seed (nested splits used `seed + 1`, per convention).
         variant: Feature variant (geometry guard, with `feature_names`).
         fit_run: Provenance name. A pooled artifact passes a `"pool:"`-prefixed
@@ -634,11 +633,11 @@ def fit_snapshot_from_parts(
             a bare run name.
         feature_names: Feature column names -- every reference's width must match.
         checkpoints: Config-field-name -> checkpoint path (provenance only).
-        session_stats: Optional fit-side session-normalization stats (format v2,
-            spec D3/A3.5). References are stored RAW regardless (the field
+        session_stats: Optional fit-side session-normalization stats (format v2).
+            References are stored RAW regardless (the field
             contract); these stats are the transform the monitor's
             `--session-norm` mode applies to them at scoring time. POOLED-STATS
-            SEMANTICS (plan Task 4 design decision): a pooled artifact has no
+            SEMANTICS: a pooled artifact has no
             single fit day, so its caller passes POOL-GLOBAL stats -- center/
             scale over the raw pooled fit matrix as a whole
             (`rowii.anomaly.normalize.fit_pool_stats`), sentinel
@@ -647,24 +646,24 @@ def fit_snapshot_from_parts(
             artifact stays self-consistent (`scripts/run_step2.py`'s
             cross-day-pooled `--session-norm` path does exactly this).
         level_recal_medians: Optional fit-side level-only-recalibration ANCHOR
-            medians (format v2, package-8 Task 7, spec D2/A1.4/A1.10/A1.11) --
+            medians (format v2) --
             name-keyed over LEVEL columns (`rowii.anomaly.levelrecal.
             level_columns`), e.g. the pooled FIT side's own per-column median
             (`rowii.anomaly.levelrecal.column_medians(pool_fit.features,
-            feature_names)`, the A1.4 anchor `scripts/run_step2.py --level-recal`
+            feature_names)`, the anchor `scripts/run_step2.py --level-recal`
             aligns the TEST run onto). References are stored RAW regardless (the
             field contract, mirroring `session_stats`); the monitor's
             `--level-recal` mode uses this as the reference-side median it
             aligns a NEW run's own first-N-minutes median onto. MUTUALLY
-            EXCLUSIVE with *session_stats* (A1.10): session-normalization and
+            EXCLUSIVE with *session_stats*: session-normalization and
             level-only recalibration are different fit paths and are never both
             stored in one snapshot.
         state_names: Optional fit-side cluster-id -> operating-mode-name map
-            (format v2, package-9 Task 2, spec D2/A1.8), keyed over the
+            (format v2), keyed over the
             detector's FITTED label ids -- typically `rowii.eval.metrics.
             derive_state_names`'s output, e.g. `scripts/run_step2.py
             --save-snapshot`'s pooled-fit-side name derivation (`None` when
-            the A1.8 GT-skip seam applies -- any fit run lacking Betriebsdaten).
+            the GT-skip seam applies -- any fit run lacking Betriebsdaten).
             Every key must be one of *detector*'s own fitted ids (the
             geometry-guard posture, mirroring the `level_recal_medians` ->
             `feature_names` check) -- NO mutual-exclusivity with
@@ -688,8 +687,8 @@ def fit_snapshot_from_parts(
             *session_stats* is given with a center/scale width different from
             `len(feature_names)` (the same geometry rule -- stats that cannot
             transform the stored references must never be stored beside them);
-            if *session_stats* AND *level_recal_medians* are BOTH given (A1.10
-            fit-path exclusivity); if *level_recal_medians* names a key that is
+            if *session_stats* AND *level_recal_medians* are BOTH given
+            (fit-path exclusivity); if *level_recal_medians* names a key that is
             not one of *feature_names* (the same geometry-guard posture -- a
             stray key would promise an anchor the snapshot cannot back); if
             *state_names* names a key that is not one of the detector's own
@@ -811,9 +810,9 @@ def to_detector(snapshot: MonitorSnapshot) -> FittedDetector:
     `_hmm_arrays` asserted equals the stored arrays' leading dimension; the
     snapshot's `k` field (clusters REQUESTED) is carried onto the `FittedDetector`
     unchanged but never sizes the HMM. Covars are assigned from the stored `(k, F)`
-    DIAGONALS (A1.1). For the degenerate single-state snapshot (`hmm_startprob is
+    DIAGONALS. For the degenerate single-state snapshot (`hmm_startprob is
     None`) the smoother is rebuilt with `last_model_ = None` and `decode` reproduces
-    the constant `fitted_ids[0]` labeling (A1.2).
+    the constant `fitted_ids[0]` labeling.
     """
     smoother = StickyHmmSmoother(
         self_transition=snapshot.self_transition, random_seed=snapshot.random_seed
@@ -821,7 +820,7 @@ def to_detector(snapshot: MonitorSnapshot) -> FittedDetector:
     fitted_ids = np.asarray(snapshot.fitted_ids, dtype=np.int64)
     smoother._fitted_ids = fitted_ids
     if snapshot.hmm_startprob is not None:
-        assert snapshot.hmm_transmat is not None  # all-or-none by format (A1.2)
+        assert snapshot.hmm_transmat is not None  # all-or-none by format
         assert snapshot.hmm_means is not None
         assert snapshot.hmm_covars_diag is not None
         model = GaussianHMM(
@@ -858,9 +857,9 @@ def _meta_dict(snapshot: MonitorSnapshot) -> dict[str, object]:
     the sidecar is for humans). Format v2: a `session_stats` entry (scalars only;
     the center/scale ARRAYS live in their own npz members) is added exactly when
     the snapshot carries stats; a `level_recal_medians` entry (the WHOLE dict --
-    no npz array member, package-8 Task 7) is added exactly when the snapshot
+    no npz array member) is added exactly when the snapshot
     carries medians; a `state_names` entry (the WHOLE dict, string-keyed --
-    no npz array member, package-9 Task 2) is added exactly when the snapshot
+    no npz array member) is added exactly when the snapshot
     carries names."""
     meta: dict[str, object] = {
         "format_version": snapshot.format_version,
@@ -915,7 +914,7 @@ def save_snapshot(
     Args:
         path: Target npz path (conventionally `*.npz`); parents are created.
         snapshot: The snapshot to persist.
-        provenance: Optional JSON-serializable provenance (package-7 spec D1/A3.11:
+        provenance: Optional JSON-serializable provenance (e.g.
             pooled artifacts carry per-run window counts and pool composition) --
             stored under a `"provenance"` key in the npz `meta` member AND the
             `.json` sidecar. ADDITIVE metadata only: `load_snapshot` never reads
@@ -954,7 +953,7 @@ def save_snapshot(
         "fitted_ids": np.asarray(snapshot.fitted_ids, dtype=np.int64),
     }
     if snapshot.hmm_startprob is not None:
-        assert snapshot.hmm_transmat is not None  # all-or-none by format (A1.2)
+        assert snapshot.hmm_transmat is not None  # all-or-none by format
         assert snapshot.hmm_means is not None
         assert snapshot.hmm_covars_diag is not None
         arrays["hmm_startprob"] = np.asarray(snapshot.hmm_startprob, dtype=np.float64)

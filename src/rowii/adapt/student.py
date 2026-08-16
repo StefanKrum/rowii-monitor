@@ -1,5 +1,4 @@
-"""Distilled BEATs-student audio featurizer (Step-2 package-5 spec D5,
-compactness pair): the compact-CNN counterpart to
+"""Distilled BEATs-student audio featurizer (compactness pair): the compact-CNN counterpart to
 `rowii.signals.beats.BeatsFeaturizer`, trained (`scripts/distill_beats.py`) to
 regress the frozen BEATs teacher's 768-d embedding from the `logmel` variant's
 own input patches -- zero teacher/extraction compute (both sides come from
@@ -33,7 +32,7 @@ LOCKED to the plant's own 50 kHz / 1-s window default (the SAME geometry
 `LogmelFeaturizer`'s own docstring pins to exactly 49 frames x 64 mels = 3136):
 unlike `TfcFeaturizer` (which explicitly resamples every window to a fixed
 8 kHz before its encoder), the student's compactness pair never resamples --
-D5's own framing is "compact CNN on the logmel variant's patches", i.e. this
+its own framing is "compact CNN on the logmel variant's patches", i.e. this
 project's own plant geometry, not a generic geometry-invariant design. A stub
 encoder bypasses this constraint entirely (it can do anything with whatever
 width `logmel_flat` happens to have), which is what keeps this module's own
@@ -92,7 +91,7 @@ _MISSING_CHECKPOINT_MSG = (
 
 @dataclasses.dataclass(frozen=True)
 class StudentConfig:
-    """Student-CNN architecture (Step-2 package-5 spec D5) -- torch-free by
+    """Student-CNN architecture -- torch-free by
     design (a plain dataclass) so it can be read out of a checkpoint's `cfg`
     field, logged, or hashed without ever importing torch.
     `rowii.adapt._student_model._StudentNet` imports this type FROM this
@@ -255,7 +254,7 @@ class _RealStudentEncoder:
 
 class StudentFeaturizer:
     """Distilled-student embedding featurizer: `(B, S)`/`(B, S, C)` windows ->
-    `(B, 768)` embeddings (spec D5).
+    `(B, 768)` embeddings.
 
     Mirrors `rowii.tfc.wrapper.TfcFeaturizer`'s stub-injectable design (an
     injected `encoder` short-circuits the real, torch-dependent path entirely)

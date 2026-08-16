@@ -6,11 +6,11 @@ consumes a `(N, F)` matrix of NORMAL reference embeddings/features for one opera
 mode (or the pooled, mode-agnostic reference -- `rowii.anomaly.references.build_references`'s
 output), then `score(x)` maps a `(W, F)` batch of windows to `(W,)` anomaly scores, higher
 always meaning more anomalous -- so both scorers, and anything added to this module later,
-can be thresholded and ranked identically by callers (`rowii.anomaly.conformal`, Task S4).
+can be thresholded and ranked identically by callers (`rowii.anomaly.conformal`).
 
 `KnnScorer` (k=1, cosine) is the design's cited default: distance to the nearest normal
 reference embedding is a simple yet effective anomaly score for pretrained-audio
-embeddings (design §3.5). For cosine, `score = 1 - max_similarity` at k=1, generalizing
+embeddings. For cosine, `score = 1 - max_similarity` at k=1, generalizing
 to `1 - mean(top-k similarities)` for k>1 (the k=1 case is the mean of a single value,
 so one formula covers both). An `"euclidean"` metric option scores by the distance to
 the k-th nearest neighbour instead (via `sklearn.neighbors.NearestNeighbors`) -- a
@@ -20,7 +20,7 @@ neighbour search does not hand back a bounded per-neighbour similarity to averag
 `MahalanobisScorer` (diagonal covariance + shrinkage) summarises the reference by its
 per-feature mean and variance and scores by the resulting diagonal Mahalanobis
 distance -- the classical alternative that accounts for the normal class's covariance
-structure (design §3.5). `shrinkage` (0 = pure per-feature variance, 1 = fully
+structure. `shrinkage` (0 = pure per-feature variance, 1 = fully
 isotropic) keeps a reference feature with near-zero variance from letting a
 correspondingly tiny deviation dominate the score; see `MahalanobisScorer.fit`.
 
@@ -112,7 +112,7 @@ def _chunk_bounds(n: int, chunk_size: int) -> list[tuple[int, int]]:
 
 
 class KnnScorer:
-    """kNN embedding-distance scorer (design spec §3.5) -- see module docstring for
+    """kNN embedding-distance scorer -- see module docstring for
     the cosine (top-k mean) vs. euclidean (k-th neighbour distance) formulas."""
 
     name: str = "knn"
@@ -218,7 +218,7 @@ class KnnScorer:
 
 
 class MahalanobisScorer:
-    """Diagonal-covariance Mahalanobis scorer with shrinkage (design spec §3.5) --
+    """Diagonal-covariance Mahalanobis scorer with shrinkage --
     see module docstring."""
 
     name: str = "mahalanobis"
@@ -399,7 +399,7 @@ class LofScorer:
     """Local Outlier Factor baseline (novelty mode) on the shared Scorer contract.
 
     score = -score_samples(x); higher = more anomalous; polarity is set here by
-    construction, never auto-detected (v1 H2 lesson, spec D1) -- sklearn's own
+    construction, never auto-detected (v1 H2 lesson) -- sklearn's own
     `LocalOutlierFactor.score_samples` (in `novelty=True` mode, required to score
     points outside the reference set) is signed the opposite way (higher = more
     normal, i.e. locally as dense as its neighbours), so every score this class
@@ -413,10 +413,10 @@ class LofScorer:
             n_neighbors: Neighbourhood size for the local density estimate --
                 sklearn `LocalOutlierFactor`'s own `n_neighbors`, unchanged. `fit`
                 does NOT pre-validate this against the reference row count the way
-                `KnnScorer.fit` validates `k` (design spec D1: deliberately left to
+                `KnnScorer.fit` validates `k` (deliberately left to
                 sklearn). Verified empirically against the installed sklearn version
-                that a too-small reference never raises (spec D1's "raises the
-                sklearn error untouched" does not hold here; see task report):
+                that a too-small reference never raises (sklearn silently clips
+                instead):
                 whenever `n_neighbors >= n_reference`, sklearn clips the effective
                 neighbourhood to `n_reference - 1`, emitting a `UserWarning` ONLY in
                 the strict case `n_neighbors > n_reference` -- at exactly

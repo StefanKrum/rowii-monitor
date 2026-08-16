@@ -3,7 +3,7 @@ and NO cross-run EM chain.
 
 Fixture: two synthetic runs with a DISJOINT extra mode -- run A carries gaussian
 blobs 1+2, run B carries blobs 2+3 -- so blob 3 exists ONLY in run B. The central
-A3.4 property under test ("pump owns a cluster"): a detector fit on the POOLED
+property under test ("pump owns a cluster"): a detector fit on the POOLED
 features must give blob 3 its own label id, and `apply` on run B must label blob-3
 windows with that id while blob 2 keeps ONE shared id across both runs. Blobs are
 tight (std 0.3) at centers >= 12 apart, laid out in contiguous 30-window blocks so
@@ -108,7 +108,7 @@ def _single_label(frame_labels: np.ndarray, mask: np.ndarray) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. The A3.4 property: pooled fit recovers all 3 modes; pump owns a cluster
+# 1. The property: pooled fit recovers all 3 modes; pump owns a cluster
 # ---------------------------------------------------------------------------
 
 
@@ -151,7 +151,7 @@ def test_zscore_stats_equal_pooled_stats() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. NO EM anywhere (A3.4): transmat is the sticky prior bitwise, and the
+# 3. NO EM anywhere: transmat is the sticky prior bitwise, and the
 #    emissions are EXACTLY the pooled per-cluster moment estimates
 # ---------------------------------------------------------------------------
 
@@ -248,7 +248,7 @@ def test_snapshot_round_trip_apply_parity(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Degenerate k=1 path (mirrors fit_decode's k<=1 contract, snapshot A1.2)
+# 5. Degenerate k=1 path (mirrors fit_decode's k<=1 contract)
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +273,7 @@ def test_degenerate_k1() -> None:
     np.testing.assert_array_equal(detector.mean, mean)
     np.testing.assert_array_equal(detector.std, std)
 
-    # Snapshot-representable in the A1.2 degenerate form: four Nones.
+    # Snapshot-representable in the degenerate form: four Nones.
     assert _hmm_arrays(smoother, np.asarray(smoother._fitted_ids)) == (
         None,
         None,

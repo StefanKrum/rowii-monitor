@@ -368,7 +368,7 @@ def discover(data_root: Path) -> RecordingIndex:
 
 
 # ---------------------------------------------------------------------------
-# DAQ epoch-2000 clock quirk (Task 10): derived per-run / per-Betriebsdaten-file-set
+# DAQ epoch-2000 clock quirk: derived per-run / per-Betriebsdaten-file-set
 # offset that maps the raw on-disk time axis onto true UTC. Every Gantner UDBF file
 # in this dataset (audio, vibration, AND Betriebsdaten) carries binary frame
 # timestamps from a DAQ clock that counts seconds since 2000-01-01 LOCAL time but
@@ -379,8 +379,8 @@ def discover(data_root: Path) -> RecordingIndex:
 # since it depends on which local UTC offset (CEST/CET) was in effect when the
 # recording was made -- `_median_utc_offset_ns` below is the one place that
 # median/round/plausibility-gate/per-file-warning algorithm lives, shared by
-# `run_utc_offset_ns` (a burst `Run`, D1) and `betriebsdaten_utc_offset_ns` (a flat
-# Betriebsdaten file list, D3).
+# `run_utc_offset_ns` (a burst `Run`) and `betriebsdaten_utc_offset_ns` (a flat
+# Betriebsdaten file list).
 # ---------------------------------------------------------------------------
 
 _HOUR_NS = 3_600_000_000_000
@@ -394,7 +394,7 @@ offset for data that was never quirky to begin with."""
 _OFFSET_WARN_TOLERANCE_NS = 2_000_000_000
 """Max per-file deviation from the derived, rounded-to-the-hour offset before
 `_median_utc_offset_ns` logs a WARNING for that file. Filename-second-truncation
-scatter is documented at 0-900 ms (task-10-brief.md); 2 s leaves a comfortable
+scatter is documented at 0-900 ms; 2 s leaves a comfortable
 margin above that while still catching a genuinely mismatched file."""
 
 
@@ -516,7 +516,7 @@ def _betriebsdaten_utc_hint(path: Path) -> datetime | None:
 
 def betriebsdaten_utc_offset_ns(files: Sequence[Path]) -> int:
     """Nanosecond offset that maps a Betriebsdaten file set's raw DAQ time axis onto
-    true UTC -- mirrors `run_utc_offset_ns` (D1: same DAQ-clock quirk, same
+    true UTC -- mirrors `run_utc_offset_ns` (same DAQ-clock quirk, same
     median/round-to-the-hour/plausibility-gate derivation, see that function's own
     docstring for the numeric worked example and full rationale) applied to the
     SCADA Betriebsdaten file set instead of a burst `Run`.

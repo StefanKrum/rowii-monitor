@@ -1,4 +1,4 @@
-"""Tests for rowii.state.modebank (Package-8 D1 core, A1.5): per-family fit/score
+"""Tests for rowii.state.modebank: per-family fit/score
 shapes, argmin assignment, conformal rejection (incl. all-rejected), min_ref
 floor + dropped modes, unknown/transition exclusion (fit- AND calibration-side
 invariance), low-confidence member visibility, global-standardization storage,

@@ -252,7 +252,7 @@ DEFAULT_ASSESSMENTS_DIR = REPO_ROOT / "docs" / "assessments"
 # Session scope + once-calibrated regime per session (2026-08-15 snapshot of the
 # trigger-log decision -- `results/step2/once-calibrated/{fusion,audio-beats}_
 # trigger_log.csv`'s own `decision` column, identical machine attribution on both
-# representations; `run_once_calibrated.py` module docstring/D1). 080726-st_strikes
+# representations; `run_once_calibrated.py` module docstring). 080726-st_strikes
 # carries no OWN trigger-log row (only 080726-pu_strikes does, era C) -- confirmed by
 # reading `run_once_calibrated.py`'s pillar-3 section (`era_c_decision`, lines
 # ~1034-1080): ST reuses the SAME day-level decision as PU, never computed
@@ -280,7 +280,7 @@ REGIME_BY_SESSION: dict[str, str] = {
     # 010726-tu1-morning/010726-tu2 are `_B1_FIT_RUNS` commissioning-pool members,
     # never `_REPLAY` entries). "recalibrate" is `scripts/monitor.py`'s own default
     # mode and needs no era-level FAR judgement to justify it, unlike "frozen"
-    # (package-2's cross-day evidence: frozen cross-day thresholds did NOT hold
+    # (cross-day evidence: frozen cross-day thresholds did NOT hold
     # their nominal FAR).
     "270626-pu_ph_pu_ph_pu_ph-1": "recalibrate",
     "010726-tu1-morning": "recalibrate",

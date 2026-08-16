@@ -1,5 +1,5 @@
-"""Cross-attention fusion head model (Step-2 package-5 spec D8, Task 6): the
-third fusion level -- a lightweight cross-attention head on FROZEN per-branch
+"""Cross-attention fusion head model: the third fusion level -- a lightweight
+cross-attention head on FROZEN per-branch
 features (audio-beats' own 768-d embeddings, the `fusion` cache's own
 vibration-branch columns), trained CLIP-style (audio and vibration views of the
 SAME window as the positive pair) and scored via kNN on the joint embedding at

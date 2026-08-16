@@ -1,8 +1,8 @@
-"""D3 explainability analysis suite: publication-grade figures + underlying CSVs from
+"""Explainability analysis suite: publication-grade figures + underlying CSVs from
 EXISTING artifacts/warm caches -- no new sweeps, no partner JSON/number read by any code here.
 
-This module ships six Package-8 D3 analysis subcommands, a Package-9 D3a
-addition (`transitions`), and a markdown digest. Five of the first six share
+This module ships six analysis subcommands, plus a `transitions`
+addition, and a markdown digest. Five of the first six share
 ONE read seam (`_run_features_and_gt`/`_RunFeatures`) for everything that
 reads warm feature caches + GT; `pillar3-figure` instead reads existing
 `results/pillar3/**/event_eval.csv` artifacts directly (mirrors
@@ -16,14 +16,14 @@ THIS module's own output tree:
    far_table_<mode>.csv` (`--leaf-suffix`, default `""` -- e.g. `-a0.05` reaches
    an alpha-suffixed leaf instead of the plain one) (the `label == "pooled"`
    aggregate row) + that leaf's own `notes.md` "fit pool:" line -- the visual
-   replacement for the FAR tables Stefan found unreadable (spec D3 point 1; no
+   replacement for the FAR tables Stefan found unreadable (no
    partner attribution -- this is Stefan's own usability motivation). Refuses to
    render below 2 discovered rotations (exit 2, listing what WAS found and
    hinting at `--leaf-suffix`) -- a 1-cell "matrix" is never silently plotted.
 2. `feature-stability` -- per-feature cross-day shift (own stored units for the
    PRIMARY dot-interval figure: log10 for level columns, raw units for shape
-   columns), per GT mode, on GT-bearing days only (A1.2), with 12-minute-block
-   (`PreparedRun.segment_ids`, NEVER wall-clock, A1.11) bootstrap CIs. The
+   columns), per GT mode, on GT-bearing days only, with 12-minute-block
+   (`PreparedRun.segment_ids`, NEVER wall-clock) bootstrap CIs. The
    CONTINUOUS per-day dot-interval figure is the PRIMARY deliverable; the binary
    slow(<3 dB)/drifting(>=3 dB) classification is SECONDARY and LEVEL-COLUMN-ONLY:
    each level column's own log10-domain shift is first converted to a genuine dB
@@ -31,7 +31,7 @@ THIS module's own output tree:
    x10 for `_band_`/`_octave_`, stored log10 mean Welch PSD POWER -- the standard
    amplitude/power dB relationship, computed entirely from our own stored
    features), THEN compared against a cutoff labeled "same cutoff as Rodrigues &
-   Zhang (2026), adopted for comparability" (A1.8) -- an independent replication
+   Zhang (2026), adopted for comparability" -- an independent replication
    of their stability-classes ANALYSIS TYPE on our own features, never a claim
    that our shift value is numerically their dB figure. Shape columns (raw
    Hz/dimensionless units) keep their dot-interval row but are never classified
@@ -41,17 +41,17 @@ THIS module's own output tree:
    z-score / embedding units, never log10.
 3. `era-step` -- per-day, per-STREAM-VARIANT (mic streams under `--variant
    audio`, vibration streams under `--variant vibration` -- `fusion` is refused,
-   exit 2: `fuse()`'s per-run z-score, A1.1, has no meaningful raw-scale level to
+   exit 2: `fuse()`'s per-run z-score has no meaningful raw-scale level to
    plot here; the mic-vs-vibration COMPOSITE view needs one run of EACH variant,
    each its own CSV/PNG) median level in GT-matched modes across the recording
    era, with 2026-06-27 (no Betriebsdaten at all) shown as an UN-MATCHED point
    flagged "no GT -- era-A anchor by MeasName only", and 2026-07-08 (080726)
-   included ONLY behind the explicit `--include-080726` gate (A1.2 -- gated on
-   the D4.3 SCADA-timebase probe, `scripts/verify_data_facts.py
+   included ONLY behind the explicit `--include-080726` gate (gated on
+   the SCADA-timebase probe, `scripts/verify_data_facts.py
    scada-timebase`). Consistent with, and attributed alongside, the partner's own
    independently reported mic-only broadband level step at the same era boundary
    (Rodrigues & Zhang, 2026) -- our own number, computed only from our own caches.
-4. `mode-signatures` (Task 9) -- per-GT-mode band/octave profile (median +
+4. `mode-signatures` -- per-GT-mode band/octave profile (median +
    interquartile range) for ONE day at a time -- the "modes are separable"
    picture on our own features, restricted to the `_band_`/`_octave_`
    spectral-shape columns (narrower than `rowii.anomaly.levelrecal.
@@ -64,12 +64,12 @@ THIS module's own output tree:
    caches. The figure's own title names the *variant* it was rendered from
    (by design, for interpretation honesty), and its x-axis units follow
    `_feature_unit_label`: genuine log10 for a raw-scale variant, `fusion`'s
-   own per-run z-score for `fusion` (A1.1 -- `fuse()`'s columns keep their
+   own per-run z-score for `fusion` (`fuse()`'s columns keep their
    `_band_`/`_octave_` name tokens even though the VALUES are z-scored, so
    the check is on *variant*, not column names), or that model's own
    embedding units for an embedding variant -- never a blanket "log10"
    claim regardless of variant.
-5. `tonal-table` (Task 9) -- per (run, GT mode, physical stream) the three
+5. `tonal-table` -- per (run, GT mode, physical stream) the three
    `rowii.signals.features.MACHINE_HZ` machine-tone band energies (shaft,
    blade-pass, guide-vane-pass) contrasted against their own NEAREST
    TONE-FREE OCTAVE FLOOR (`_nearest_octave_hz`: the
@@ -82,11 +82,11 @@ THIS module's own output tree:
    logged warning rather than the tone silently dropping out) --
    `_tonal_contrast = band_energy - octave_floor`, an SNR-like contrast
    defined ENTIRELY from our own band/octave features, explicitly NOT the
-   partner's exact metric (A1.8) -- it only shares the analysis TYPE (a
+   partner's exact metric -- it only shares the analysis TYPE (a
    machine-fingerprint table) with Rodrigues & Zhang (2026). Own stored
    units throughout: log10 for the audio/vibration variants (a genuine, if
    uncalibrated, level-ratio reading); for `fusion`, whose `fuse()` step
-   per-run z-scores every column before concatenation (A1.1), the same
+   per-run z-scores every column before concatenation, the same
    subtraction is a difference of two INDEPENDENTLY-scaled z-scores, not a
    log10-domain ratio -- still an internally consistent RELATIVE reading,
    but not even loosely decibel-equivalent the way the audio/vibration
@@ -94,11 +94,11 @@ THIS module's own output tree:
    units instead. Both non-log10 cases are named in the
    figure's own title/colorbar (`_feature_unit_label`) and repeated once
    in the digest, never silently left as an implied log10 claim. This
-   module does not exclude fusion here (unlike D2's corrective
-   `--level-recal`, `tonal-table` is a descriptive figure, never an offset
+   module does not exclude fusion here (unlike the corrective
+   `--level-recal` mechanism, `tonal-table` is a descriptive figure, never an offset
    applied to downstream detection) -- the caveat is real and stated once,
    here.
-6. `pillar3-figure` (Task 9) -- event-level TPR-vs-alpha grouped bars per
+6. `pillar3-figure` -- event-level TPR-vs-alpha grouped bars per
    representation, one panel per pillar-3 session, read straight from
    existing `results/pillar3/<session>/<representation>-a<alpha>/
    event_eval.csv` `row_type == "summary"` rows (`scripts/eval_events.py`'s
@@ -113,7 +113,7 @@ THIS module's own output tree:
    output (the `"transition"` state `_apply_ramp` + `_apply_transition_buffer`
    produce): every contiguous transition run is classed by the pair of KNOWN
    states (`rowii.scada.labels.STATES` minus `"transition"`) bracketing it --
-   `"<from>-><to>"`, or the explicit `"unbracketed"` category (A1.8) when
+   `"<from>-><to>"`, or the explicit `"unbracketed"` category when
    either side is `"unknown"` or the run touches a grid edge. Per (run,
    class) row: segment count, dwell-duration stats (seconds), and ramp
    stats (median |dP/dt| via the SAME centred-difference formula
@@ -123,19 +123,19 @@ THIS module's own output tree:
    audio/vibration features at all). An independent, our-own-derived
    taxonomy of the same transition/dwell PHENOMENON the partner's own
    monitoring work also characterizes (Rodrigues & Zhang, 2026) -- no
-   partner numeric constant appears anywhere as an expected value (A1.8
+   partner numeric constant appears anywhere as an expected value (a
    firewall); every count/dwell/ramp figure here is computed purely from
    our own `gt_labels` + SCADA power readings.
 
-`digest` (Task 9, extended Package-9) writes `results/analysis-days/README.md`:
+`digest` writes `results/analysis-days/README.md`:
 one section per subcommand above, a 2-3 sentence plain-language reading of
 that chart type, a markdown link to every PNG this module has actually
-written so far under that subcommand's own directory, the A1.8 attribution
+written so far under that subcommand's own directory, the attribution
 line for every partner-inspired analysis type (`feature-stability`,
 `era-step`, `mode-signatures`, `tonal-table`, `transitions`), and a dedicated
-paragraph documenting the A1.1 finding: `fuse()`'s built-in per-run z-score is
+paragraph documenting the finding: `fuse()`'s built-in per-run z-score is
 an implicit session normalization that plausibly explains fusion's own
-cross-day FAR advantage. English only (`--lang de` not built, spec D3 --
+cross-day FAR advantage. English only (`--lang de` not built --
 thesis language).
 
 Every subcommand writes a PNG (matplotlib, Agg backend) + its underlying CSV
@@ -200,7 +200,7 @@ logger = logging.getLogger(__name__)
 
 _ANALYSIS_DIR_NAME = "analysis-days"
 _STABILITY_CUTOFF_DB = 3.0
-"""The A1.8 named, adopted-for-comparability cutoff ("same cutoff as Rodrigues &
+"""The named, adopted-for-comparability cutoff ("same cutoff as Rodrigues &
 Zhang (2026), adopted for comparability"), in dB. Applied to THIS module's own
 shift value AFTER converting a level column's own log10-domain shift to dB
 (`_level_db_factor` -- x20 for `_log_rms`, x10 for `_band_`/`_octave_`, the
@@ -210,9 +210,8 @@ of CUTOFF, not a claim that our shift equals their reported figure. Shape
 columns, and every column under the `fusion`/embedding variants, never receive
 this classification at all (`"n/a"` -- see `_feature_stability_table`)."""
 _EXCLUDED_GT = ("unknown", "transition")
-"""Duplicated from `rowii.state.modebank._EXCLUDED_GT` / `scripts/run_modebank.py`
-(spec A1.5, reused-in-spirit here per plan Task 8/9 self-review note): GT windows
-excluded from every per-mode computation in this module."""
+"""Duplicated from `rowii.state.modebank._EXCLUDED_GT` / `scripts/run_modebank.py`:
+GT windows excluded from every per-mode computation in this module."""
 
 _MIC_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0", "RAWTurbineMic__1")
 _VIB_STREAMS: tuple[str, ...] = ("RAWGeneratorVib__2", "RAWTurbineVib__3")
@@ -223,7 +222,7 @@ data constants, not a private-API duplication)."""
 
 _080726_TOKEN = "080726"
 _UNMATCHED_NO_GT_NOTE = "no GT -- era-A anchor by MeasName only"
-"""Exact spec wording (A1.2) for a day with zero Betriebsdaten coverage at all
+"""Exact spec wording for a day with zero Betriebsdaten coverage at all
 (e.g. 2026-06-27) -- shown as an un-matched per-stream-median point."""
 
 # ---------------------------------------------------------------------------
@@ -320,7 +319,7 @@ def _run_scada_or_none(
 
 # ---------------------------------------------------------------------------
 # The shared read path: `_RunFeatures` + `_run_features_and_gt`. Every
-# subcommand in this module (and, per the plan's own Task 9 note, `mode-
+# subcommand in this module (and `mode-
 # signatures`/`tonal-table` later) goes through this ONE seam -- CLI tests
 # monkeypatch it directly, bypassing `prepare_run`/`load_scada_window_means`/
 # `gt_labels` entirely (mirrors how `tests/test_modebank.py` bypasses IO by
@@ -410,7 +409,7 @@ def _resolve_out_root(out_arg: str | None, results_root: Path | None) -> Path:
 
 
 def _classify_shift(shift_abs: float, cutoff: float = _STABILITY_CUTOFF_DB) -> str:
-    """"drifting" if `shift_abs >= cutoff` else "slow" -- A1.8: *cutoff* is a
+    """"drifting" if `shift_abs >= cutoff` else "slow" -- *cutoff* is a
     NAMED, adopted-for-comparability constant, never asserted against a
     partner-reported number. A pure comparison: the caller decides what
     *shift_abs* means -- `feature-stability` passes a dB-converted level-column
@@ -432,8 +431,8 @@ def _level_db_factor(feature_name: str) -> float:
     """The log10-domain-shift-to-dB multiplier for ONE level column, keyed by
     its own name token: `_LOG_RMS_DB_FACTOR` (20) for `*_log_rms` (stored log10
     RMS amplitude), `_BAND_OCTAVE_DB_FACTOR` (10) for `*_band_*`/`*_octave_*`
-    (stored log10 mean Welch PSD power) -- the BLOCKER dB-unit-coherence fix
-    (A1.8): the 3 dB comparability cutoff is meaningless applied to a raw log10
+    (stored log10 mean Welch PSD power) -- the BLOCKER dB-unit-coherence fix:
+    the 3 dB comparability cutoff is meaningless applied to a raw log10
     shift without this conversion first.
 
     Raises:
@@ -456,7 +455,7 @@ def _block_bootstrap_ci(
     values: np.ndarray, segment_ids: np.ndarray, n_boot: int, seed: int
 ) -> tuple[float, float]:
     """95% percentile bootstrap CI on `median(values)`, resampling whole
-    `segment_ids` BLOCKS with replacement (A1.11: the 12-min recording segment,
+    `segment_ids` BLOCKS with replacement (the 12-min recording segment,
     NEVER wall-clock/calendar time) -- a degenerate SINGLE-segment input still
     returns a FINITE interval, but a zero-WIDTH (degenerate) one: with only one
     block to draw from, every bootstrap replicate resamples that exact same
@@ -509,12 +508,12 @@ def _era_step_row(
 
 
 def _tonal_contrast(band_energy: float, octave_floor: float) -> float:
-    """`band_energy - octave_floor` -- OUR OWN SNR-like contrast (Task 9,
-    spec D3.5): how far a machine-tone band's own energy sits above
+    """`band_energy - octave_floor` -- OUR OWN SNR-like contrast: how far a
+    machine-tone band's own energy sits above
     (positive) or below (negative) its neighboring octave column's energy,
     in whatever units the two inputs already share (own stored log10 units
     for audio/vibration; per-run z-score units for fusion -- see module
-    docstring). Explicitly NOT the partner's exact tonal metric (A1.8) --
+    docstring). Explicitly NOT the partner's exact tonal metric --
     only the ANALYSIS TYPE (contrasting a narrowband tone against a nearby
     broadband floor) is shared."""
     return band_energy - octave_floor
@@ -529,7 +528,7 @@ def _feature_unit_label(variant: str, feature_names: Sequence[str]) -> str:
 
     `fusion` is checked FIRST, by *variant* NAME rather than column content:
     `fuse()` z-scores every stream per run before concatenating
-    (`rowii.signals.features.fuse`, A1.1), but its level-named columns keep
+    (`rowii.signals.features.fuse`), but its level-named columns keep
     their `_band_`/`_octave_` name tokens -- a content-only check would
     misclassify them as genuine log10 columns. An embedding variant
     (`rowii.anomaly.levelrecal.level_columns` returns the empty set for
@@ -549,8 +548,8 @@ def _feature_unit_label(variant: str, feature_names: Sequence[str]) -> str:
 def _mode_profile(
     features: np.ndarray, gt_states: np.ndarray, level_cols: Sequence[int]
 ) -> pd.DataFrame:
-    """Tidy (mode, column, median, q25, q75, n_windows) table (Task 9, spec
-    D3.4): per GT mode present in *gt_states* (`unknown`/`transition`
+    """Tidy (mode, column, median, q25, q75, n_windows) table:
+    per GT mode present in *gt_states* (`unknown`/`transition`
     excluded, `_EXCLUDED_GT`), per column INDEX in *level_cols*, that mode's
     own median + interquartile range over *features*' matching rows -- the
     "modes are separable" picture's underlying numbers. *column* is a bare
@@ -592,7 +591,7 @@ def _mode_profile(
 
 def _tpr_by_alpha(event_table: pd.DataFrame) -> pd.DataFrame:
     """(representation x alpha) `event_tpr` pivot from a tidy *event_table*
-    (Task 9, spec D3.6) -- columns `representation`/`alpha`/`event_tpr`, one
+    -- columns `representation`/`alpha`/`event_tpr`, one
     row per discovered pillar-3 leaf (mirrors `_flag_rate_matrix`'s own
     plain-pivot contract; callers filter to one `session` first). `NaN`
     where a (representation, alpha) combination was never discovered."""
@@ -765,8 +764,8 @@ def _feature_stability_table(
     median + CI for *feature* restricted to GT mode *mode*, plus the
     (feature, mode)-level `shift_abs` (max day-median - min day-median across
     the qualifying days, OWN STORED UNITS -- log10 for level columns, raw for
-    shape columns) and a `shift_db` column (the BLOCKER dB-unit-coherence fix,
-    A1.8): for a LEVEL column (`rowii.anomaly.levelrecal.level_columns`) of a
+    shape columns) and a `shift_db` column (the BLOCKER dB-unit-coherence fix):
+    for a LEVEL column (`rowii.anomaly.levelrecal.level_columns`) of a
     genuine raw-scale *variant*, `shift_abs` converted to a real dB figure via
     `_level_db_factor` (x20 `_log_rms` / x10 `_band_`/`_octave_`) -- THIS is
     what `_classify_shift` compares against *cutoff*, never the raw `shift_abs`
@@ -780,7 +779,7 @@ def _feature_stability_table(
     - every SHAPE column (own raw units, e.g. Hz or a dimensionless moment --
       a dB cutoff is meaningless there) in any variant, and
     - EVERY column, level-named or not, when *variant* is `"fusion"` (its
-      level-named columns are `fuse()`'s own per-run z-scores, A1.1 -- not
+      level-named columns are `fuse()`'s own per-run z-scores -- not
       log10 values, so a dB conversion would be meaningless) or an embedding
       variant (`level_columns` returns the empty set, e.g.
       `audio-beats`/`audio-tfc`/`logmel` -- embedding units, not log10).
@@ -789,7 +788,7 @@ def _feature_stability_table(
     (own-units median + CI stay meaningful and clearly axis-labeled even
     without a slow/drifting call).
 
-    Only GT-bearing runs (`has_gt=True`) participate (A1.2); a mode needs >= 2
+    Only GT-bearing runs (`has_gt=True`) participate; a mode needs >= 2
     qualifying days (each with >= *min_mode_windows* of that mode) to produce a
     shift at all -- modes/features that never reach that floor on any day pair
     are silently absent from the table (nothing to measure a shift from).
@@ -894,7 +893,7 @@ def _plot_feature_stability(
     """Dot-interval (errorbar) figure -- one dot per (feature, mode, day),
     grouped into rows by (feature, mode), restricted to the top *top_n* groups
     by `shift_abs` (legibility; the full table is the CSV's job). PRIMARY
-    deliverable (A1.8): the continuous per-day median + CI, not the binary
+    deliverable: the continuous per-day median + CI, not the binary
     classification, which lives only in the CSV's `classification` column."""
     if table.empty:
         fig, ax = plt.subplots(figsize=(8.5, 3.0))
@@ -1072,7 +1071,7 @@ def _era_step_table(runs_features: Sequence[_RunFeatures], gt_mode: str) -> pd.D
     contributes a MATCHED row (that mode's own windows); a GT-bearing run with
     zero windows of *gt_mode*, or a run with no GT at all (`has_gt=False`,
     e.g. 2026-06-27), contributes an UNMATCHED row computed over ALL of that
-    run's valid windows instead, flagged with a `note` explaining why (A1.2)."""
+    run's valid windows instead, flagged with a `note` explaining why."""
     rows: list[dict[str, object]] = []
     for rf in runs_features:
         levels_by_stream = _levels_by_stream(rf.features, rf.feature_names)
@@ -1207,7 +1206,7 @@ def _plot_era_step(
 def _run_era_step(args: argparse.Namespace) -> int:
     """era-step subcommand entrypoint. `--variant` is restricted to `audio`/
     `vibration` (exit 2 otherwise) -- `fusion` is refused: `fuse()`'s per-run
-    z-score (A1.1) has no meaningful raw-scale level to plot here. ONE
+    z-score has no meaningful raw-scale level to plot here. ONE
     invocation therefore plots ONLY that variant's own stream(s) (the mic pair
     for `audio`, the vibration pair for `vibration`); the mic-vs-vibration
     COMPOSITE view the module docstring describes needs one run of EACH
@@ -1286,7 +1285,7 @@ def _run_era_step(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand 4: mode-signatures (Task 9, spec D3.4)
+# Subcommand 4: mode-signatures
 # ---------------------------------------------------------------------------
 
 _MODE_SIGNATURES_TOP_N_DEFAULT = 20
@@ -1462,7 +1461,7 @@ def _run_mode_signatures(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand 5: tonal-table (Task 9, spec D3.5)
+# Subcommand 5: tonal-table
 # ---------------------------------------------------------------------------
 
 _OCTAVE_SUFFIX_RE = re.compile(r"_octave_(\d+)$")
@@ -1749,7 +1748,7 @@ def _run_tonal_table(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand 6: pillar3-figure (Task 9, spec D3.6)
+# Subcommand 6: pillar3-figure
 # ---------------------------------------------------------------------------
 
 _PILLAR3_LEAF_RE = re.compile(r"^(?P<rep>.+)-a(?P<alpha>\d+\.\d+)$")
@@ -1922,20 +1921,20 @@ def _run_pillar3_figure(args: argparse.Namespace) -> int:
 # taxonomy independently characterizes the same transition/dwell phenomenon
 # the partner's own monitoring work reports on (Rodrigues & Zhang, 2026) --
 # every number below is computed purely from OUR OWN `rowii.scada.labels.
-# gt_labels` output and SCADA power readings (A1.8 firewall).
+# gt_labels` output and SCADA power readings (firewall).
 # ---------------------------------------------------------------------------
 
 _KNOWN_GT_STATES: tuple[str, ...] = tuple(s for s in STATES if s != "transition")
 """`rowii.scada.labels.STATES` minus `"transition"` -- the states a transition
 run can be BRACKETED by (`"unknown"` is not in `STATES` at all, so it can
-never bracket a run either; D3a's own `unbracketed` category, A1.8)."""
+never bracket a run either; the `unbracketed` category)."""
 
 
 def _run_states_and_power(
     run_name: str, cfg: Config, index: RecordingIndex
 ) -> tuple[np.ndarray, np.ndarray, float]:
-    """Full-length `(gt_states, power, window_s)` for *run_name* -- D3a's own
-    seam (mirrors `_run_features_and_gt`'s resolve-then-load shape, and is
+    """Full-length `(gt_states, power, window_s)` for *run_name* -- the `transitions`
+    subcommand's own seam (mirrors `_run_features_and_gt`'s resolve-then-load shape, and is
     monkeypatched identically in CLI tests). `prepare_run` DOES read (or, on a
     cold cache, compute and write) the full audio feature cache here -- this
     function only avoids CONSUMING `prepared.features` afterward, not the
@@ -1956,7 +1955,7 @@ def _run_states_and_power(
             point, a GT-free run cannot contribute a transition class here).
         RuntimeError: `prepare_run` itself raises (too short/sparse for the
             requested variant) -- propagated, `_run_transitions` catches it
-            per-run (P9 T4b hardening, mirrors `_run_features_and_gt`'s own
+            per-run (mirrors `_run_features_and_gt`'s own
             documented RuntimeError).
     """
     runs_by_name = {r.name: r for r in index.runs}
@@ -1984,7 +1983,7 @@ def _transition_segments(
     the KNOWN state (`_KNOWN_GT_STATES`) immediately bracketing the run on
     each side, or `None` when that side is out of range (a run touching a
     grid edge) or itself not a known state (e.g. `"unknown"`) -- `None` on
-    either side is D3a's `unbracketed` signal (`_transition_class`)."""
+    either side is the `unbracketed` signal (`_transition_class`)."""
     st = np.asarray(states, dtype=object)
     out: list[tuple[str | None, str | None, int, int]] = []
     for start, stop in _contiguous_true_runs(st == "transition"):
@@ -1998,7 +1997,7 @@ def _transition_segments(
 
 def _transition_class(from_state: str | None, to_state: str | None) -> str:
     """`"<from>-><to>"` when BOTH sides bracket a known state, else the
-    explicit `"unbracketed"` category (A1.8: a run touching a grid edge, or
+    explicit `"unbracketed"` category (a run touching a grid edge, or
     bordering `"unknown"`, is counted and reported, never silently dropped)."""
     if from_state is None or to_state is None:
         return "unbracketed"
@@ -2125,7 +2124,7 @@ def _plot_transitions(table: pd.DataFrame, out_path: Path) -> None:
 
 
 def _run_transitions(args: argparse.Namespace) -> int:
-    """`transitions` subcommand entrypoint (D3a): one `_transition_taxonomy`
+    """`transitions` subcommand entrypoint: one `_transition_taxonomy`
     row set PER requested run (tagged by its own `run` column, mirroring
     `era-step`/`tonal-table`'s own per-run-row convention rather than
     collapsing already-aggregated per-run stats across runs, which cannot be
@@ -2153,7 +2152,7 @@ def _run_transitions(args: argparse.Namespace) -> int:
         try:
             states, power, window_s = _run_states_and_power(name, cfg, index)
         except (ValueError, RuntimeError) as exc:
-            # RuntimeError: prepare_run failed (P9 T4b hardening -- mirrors
+            # RuntimeError: prepare_run failed (mirrors
             # every other subcommand's own prepare_run guard in this file,
             # e.g. feature-stability's `except RuntimeError`, and
             # scripts/sweep_min_dwell.py's dedicated prepare_run guard).
@@ -2188,7 +2187,7 @@ def _run_transitions(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# digest (Task 9, spec D3 closing paragraph)
+# digest
 # ---------------------------------------------------------------------------
 
 _FUSION_ZSCORE_FINDING = (

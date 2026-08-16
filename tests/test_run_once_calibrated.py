@@ -1,7 +1,7 @@
-"""Tests for scripts/run_once_calibrated.py (Package-9 D1, A1.2/A1.6): pure regime-
+"""Tests for scripts/run_once_calibrated.py: pure regime-
 selection + trigger-log + FAR-reading helpers on synthetic parquet/verdict inputs,
 and the 270626 sentinel-only path -- monitor/eval_events subprocesses are behind
-monkeypatched seams, so no real monitor run happens in a unit test (spec §5).
+monkeypatched seams, so no real monitor run happens in a unit test.
 
 RED tests written directly against the design's own acceptance criteria:
 `test_read_realized_far_over_scored_only`, `test_far_on_common_window_set`,
@@ -21,12 +21,12 @@ away, so no real subprocess and no real data anywhere in this file).
 Hardening-pass additions (fixes filed and closed as a batch):
 `test_read_realized_window_far_reads_summary_row` (the event-free FAR
 reader) and `test_run_monitor_builds_expected_argv_frozen_recalibrate_and_
-event_free` (F3, patches `subprocess.run` itself -- never the `_run_monitor`
+event_free` (patches `subprocess.run` itself -- never the `_run_monitor`
 seam) are new. `test_run_once_calibrated_replay`'s `_fake_run_monitor` now
-marks a STRICT SUBSET of recalibrate windows scored (F4, exercises the A1.6
+marks a STRICT SUBSET of recalibrate windows scored (exercises the
 common-window subsetting for real) and its 080726-pu_strikes assertions +
-the sidecar's `s1` block assertions are extended (F1's event-free `far_basis`
-headline + still-present-and-distinct raw secondary; F2's echoed
+the sidecar's `s1` block assertions are extended (the event-free `far_basis`
+headline + still-present-and-distinct raw secondary; the echoed
 `pct`/`n_boot`/`seed`).
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ from rowii.pipeline import PreparedRun  # noqa: E402
 from rowii.signals.windows import WindowGrid  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Plan's own RED tests (verbatim, Task 6)
+# Plan's own RED tests (verbatim)
 # ---------------------------------------------------------------------------
 
 
@@ -71,7 +71,7 @@ def test_far_on_common_window_set(tmp_path: Path) -> None:
     import run_once_calibrated as roc
     path = _alarms(tmp_path, [0, 1, 2, 3], [True, True, False, True],
                    ["scored", "scored", "scored", "scored"])
-    # A1.6: subset the frozen arm onto the recalibrate scoring split {1, 3}.
+    # Subset the frozen arm onto the recalibrate scoring split {1, 3}.
     assert roc._far_on_windows(path, np.array([1, 3])) == pytest.approx(1.0)
 
 
@@ -92,14 +92,14 @@ def test_sentinel_only_day_has_no_far_row(tmp_path: Path, monkeypatch: pytest.Mo
         attribution="instrumentation", decision="recalibrate",
     )
     assert row["day"] == "270626" and "sentinel-only" in row["tags"]
-    assert "far" not in row  # sentinel-only: no FAR/GT (A1.2)
+    assert "far" not in row  # sentinel-only: no FAR/GT
 
 
 # ---------------------------------------------------------------------------
 # `_scoring_windows` -- declared in the plan's own Interfaces text ("Pure
 # helpers (unit-tested -- the load-bearing logic)") but not spelled out as its
 # own RED test there; the recalibrate arm's own scoring-split population, the
-# A1.6 common population `_far_on_windows` subsets every OTHER arm onto.
+# common population `_far_on_windows` subsets every OTHER arm onto.
 # ---------------------------------------------------------------------------
 
 
@@ -403,7 +403,7 @@ def _fake_run_monitor(
     FULL 20-window population (12/20 = 0.6), RECALIBRATE at a LOW rate over a
     STRICT SUBSET of scored windows -- windows 0-3 are `consumed_for_
     calibration` (NOT scored), windows 4-19 are `scored` with exactly 1 alarm
-    (1/16 = 0.0625) -- mirrors the P7 central finding (frozen cross-day FAR
+    (1/16 = 0.0625) -- mirrors the central finding (frozen cross-day FAR
     does not hold) so the 3-regime arithmetic is meaningfully checkable, not
     merely plumbing, AND exercises the common-window subsetting for real
     (regression coverage): the OLD fixture marked every window `role="scored"` on
@@ -442,8 +442,8 @@ def _fake_run_eval_events(
     when fed the RECALIBRATE alarms, TPR 0.5 + realized_window_far 0.9 when
     fed the FROZEN alarms (inferred from `_fake_run_monitor`'s own out_dir
     convention, both ends controlled by this same test file) -- the
-    once+triggered/frozen TPR contrast spec D1 wants illustrated, AND (T6-
-    review F1) `realized_window_far` values DELIBERATELY distinct from
+    once+triggered/frozen TPR contrast this module wants illustrated, AND
+    `realized_window_far` values DELIBERATELY distinct from
     `_fake_run_monitor`'s own raw parquet-mean FARs (0.6 frozen / 0.0625
     recalibrate) so a regimes-row assertion that accidentally reads the raw
     parquet mean instead of this eval_events summary is caught rather than
@@ -504,7 +504,7 @@ def _build_prepared_and_gt() -> tuple[dict[tuple[str, str], PreparedRun], dict[s
         )
         # Vibration STAYS at the B1 anchor -> the vib cross-check does NOT
         # fire -> s2_attribution == "instrumentation" (the real mic-steps-
-        # vib-flat signature, README package-8 D3/spec D1).
+        # vib-flat signature, per the README).
         prepared[(name, "vibration")] = _blob_prepared(
             t0, seed=800 + i, names=_VIB_NAMES, locs=[-40.0] * 3
         )
@@ -563,7 +563,7 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # 270626 (sentinel-only, drifted) fires s1 (drifted audio-beats blob) AND
     # s2 (drifted mic) -> recalibrate decision, "instrumentation" attribution
-    # (vib stayed flat) -- but NO far/GT row (A1.2).
+    # (vib stayed flat) -- but NO far/GT row.
     sentinel_row = by_run["270626-pu_ph_pu_ph_pu_ph-1"]
     assert sentinel_row["decision"] == "recalibrate"
     assert sentinel_row["s1_fired"] is True

@@ -1,8 +1,8 @@
-"""Reconstruction anomaly scorers (package-3 spec D2): MLP-AE on any feature
+"""Reconstruction anomaly scorers: MLP-AE on any feature
 vector; LSTM-AE / Conv-AE on `logmel` patches, reshaped internally so the
 window-internal time axis is the sequence (no cross-window contiguity; the
 `Scorer` protocol holds unchanged). Score = per-window reconstruction MSE,
-higher = more anomalous (explicit polarity by construction, spec D1 note --
+higher = more anomalous (explicit polarity by construction:
 an autoencoder trained on normal windows reconstructs a normal window well
 (low MSE) and an anomalous one poorly (high MSE), so no sign flip is needed
 here unlike this package's own `OcSvmScorer`/`IsolationForestScorer`/
@@ -30,12 +30,12 @@ touch).
 fit()")` -- the same exception type, precondition, and message shape as
 `rowii.anomaly.scorers`' own scorers (`KnnScorer.score`,
 `MahalanobisScorer.score`), one convention across the whole Scorer family
-(Task-3 review follow-up; the first cut raised AssertionError here).
+(the first cut raised AssertionError here).
 
 Device: `_device()` delegates to `rowii.signals.beats.best_device()` --
 identical `ROWII_FORCE_CPU` env > mps > cuda > cpu priority as the BEATs
 featurizer, so a CPU fallback always works even with no GPU backend present.
-Training determinism (spec D2): every class seeds BOTH `torch.manual_seed`
+Training determinism: every class seeds BOTH `torch.manual_seed`
 (weight init, called before its model is constructed) and
 `_train_autoencoder`'s own shuffle generator from the same `seed` argument.
 This is a deterministic GUARANTEE only on CPU -- verified by this module's
@@ -91,7 +91,7 @@ def _train_autoencoder(
     device: torch.device,
 ) -> None:
     """Shared training loop for `MlpAeScorer`/`LstmAeScorer`/`ConvAeScorer.fit`
-    (orchestrator resolution 2 -- the one piece of `fit()` that does NOT vary
+    (the one piece of `fit()` that does NOT vary
     per class; only the encoder/decoder architecture differs). Adam + MSE
     loss, `epochs` full passes over *reference_t*, each pass shuffled into
     `batch_size`-row mini-batches by a *seed*-seeded `torch.Generator`.
@@ -147,8 +147,8 @@ def _train_autoencoder(
 
 
 class MlpAeScorer:
-    """MLP autoencoder baseline reconstruction scorer (package-3 spec D2;
-    architecture: `rowii.anomaly._recon_models._MlpAe`) -- see module
+    """MLP autoencoder baseline reconstruction scorer (architecture:
+    `rowii.anomaly._recon_models._MlpAe`) -- see module
     docstring for score polarity/definition and the lazy-torch story.
 
     Works on ANY `(N, F)` feature vector (embeddings, handcrafted stats, or a
@@ -250,13 +250,13 @@ class MlpAeScorer:
 
 class LstmAeScorer:
     """LSTM autoencoder baseline reconstruction scorer for `logmel` patches
-    (package-3 spec D2; architecture: `rowii.anomaly._recon_models._LstmAe`)
+    (architecture: `rowii.anomaly._recon_models._LstmAe`)
     -- see module docstring for score polarity/definition and the lazy-torch
     story.
 
     Reshapes each `(F,)` flattened logmel row back into its own `(n_frames,
     n_mels)` patch (`n_frames = F // n_mels`, frame-major -- `rowii.signals.
-    logmel.LogmelFeaturizer`'s own flatten order, Task 2) and treats the
+    logmel.LogmelFeaturizer`'s own flatten order) and treats the
     WINDOW-INTERNAL frame axis as the sequence: an encoder LSTM consumes the
     `n_frames` mel-vectors in order; its final hidden state is repeated
     across `n_frames` steps and fed through a decoder LSTM, then a per-step
@@ -288,7 +288,7 @@ class LstmAeScorer:
             seed: Seeds both `torch.manual_seed` (weight init, in `fit`) and
                 the per-epoch shuffle generator (`_train_autoencoder`).
             n_mels: Mel-bin count of the logmel geometry *reference*/`x` were
-                built from (Task 2 default 64) -- used to recover `n_frames =
+                built from (default 64) -- used to recover `n_frames =
                 F // n_mels` from the flattened row width; `fit` raises if
                 `F` is not an exact multiple (see `fit`).
         """
@@ -375,12 +375,12 @@ class LstmAeScorer:
 
 class ConvAeScorer:
     """2-D convolutional autoencoder baseline reconstruction scorer for
-    `logmel` patches (package-3 spec D2; architecture:
+    `logmel` patches (architecture:
     `rowii.anomaly._recon_models._ConvAe`) -- see module docstring for score
     polarity/definition and the lazy-torch story.
 
     Reshapes each `(F,)` flattened logmel row back into its own `(n_frames,
-    n_mels)` patch (Task 2's frame-major flatten order, same as
+    n_mels)` patch (the frame-major flatten order, same as
     `LstmAeScorer`) and treats it as a single-channel `(1, n_mels, n_frames)`
     image -- mel (frequency) as height, frame (window-internal time) as
     width. A 2-layer strided `Conv2d` encoder downsamples this to a small
@@ -417,7 +417,7 @@ class ConvAeScorer:
             seed: Seeds both `torch.manual_seed` (weight init, in `fit`) and
                 the per-epoch shuffle generator (`_train_autoencoder`).
             n_mels: Mel-bin count of the logmel geometry *reference*/`x` were
-                built from (Task 2 default 64) -- used to recover `n_frames =
+                built from (default 64) -- used to recover `n_frames =
                 F // n_mels` from the flattened row width; `fit` raises if
                 `F` is not an exact multiple (see `fit`).
         """

@@ -1,4 +1,4 @@
-"""Reconstruction-scorer tests (package-3 spec D2). CPU-forced, seeded."""
+"""Reconstruction-scorer tests. CPU-forced, seeded."""
 from __future__ import annotations
 
 import numpy as np
@@ -66,8 +66,8 @@ class TestPatchAes:
 # ---------------------------------------------------------------------------
 # score() before fit() -> ValueError, wording-consistent with
 # rowii.anomaly.scorers' own precondition errors ("<Class>.score() called
-# before fit()", e.g. KnnScorer.score) -- Task-3 review follow-up (the first
-# cut raised AssertionError here; one convention across the Scorer family now).
+# before fit()", e.g. KnnScorer.score) -- the first
+# cut raised AssertionError here; one convention across the Scorer family now.
 # ---------------------------------------------------------------------------
 
 
@@ -87,11 +87,11 @@ class TestScoreBeforeFit:
 
 # ---------------------------------------------------------------------------
 # Conv-AE decoder hits the input patch shape EXACTLY via closed-form
-# output_padding (Task-3 review refinement; replaces the earlier
+# output_padding (replaces the earlier
 # interpolate-based resize) -- asserted on the RAW decoder output, layer by
 # layer, so no resampling step could mask a mismatch. Covers both the test
 # geometry (8 mels x 7 frames) and the real logmel geometry (64 mels x 49
-# frames, Task 2).
+# frames).
 # ---------------------------------------------------------------------------
 
 

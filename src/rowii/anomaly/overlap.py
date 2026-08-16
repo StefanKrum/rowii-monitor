@@ -25,7 +25,7 @@ ascending -- is `np.lexsort((window, -score, p_value))`, the IDENTICAL conventio
 already used by `rowii.anomaly.sweep.scores_and_candidates` and `scripts/
 run_step2.py::_cross_day_sweep` (both build one sweep's own top-k candidate
 register this same way); this module reuses it rather than inventing a second
-ranking rule for the same kind of table (orchestrator resolution, Task 7). See
+ranking rule for the same kind of table. See
 `scores_and_candidates`'s own docstring for why the score-descending tie-break
 matters (conformal p-values collapse to the same achievable minimum for every
 window past the calibration maximum, so p-value alone under-ranks the most extreme

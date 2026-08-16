@@ -1,4 +1,4 @@
-"""Tests for `scripts/quantize_beats.py` (Step-2 package-5 spec D6, Task 5):
+"""Tests for `scripts/quantize_beats.py`:
 post-training INT8 dynamic quantization of the frozen BEATs encoder.
 
 CLI-level end-to-end tests against a monkeypatched `load_beats_model` (mirrors
@@ -7,7 +7,7 @@ pattern -- no real BEATs checkpoint, no network anywhere in this file), built
 on the SAME tiny-REAL-BEATs recipe `tests/test_beats.py` uses for its own
 `select_quantized_engine`/`load_quantized_beats_model`/`BeatsFeaturizer`
 int8-branch tests, plus focused unit tests for `cosine_drift`, the
-embedding-drift helper exposed for the execution phase (design spec D6/D9).
+embedding-drift helper exposed for the execution phase.
 
 `-m "not data"` only; no real checkpoint, no network anywhere in this file.
 """
@@ -132,7 +132,7 @@ def test_main_saves_a_reloadable_forward_running_quantized_module(
     assert rc == 0
     assert out_path.is_file()
 
-    # Reloads and forward-runs on CPU (contract item 4, bullet 1).
+    # Reloads and forward-runs on CPU.
     reloaded = torch.load(out_path, map_location="cpu", weights_only=False)
     reloaded.eval()
     probe = torch.randn(2, 16_000)
@@ -154,7 +154,7 @@ def test_main_saves_a_reloadable_forward_running_quantized_module(
     assert sidecar["size_int8_bytes"] > 0
     assert isinstance(sidecar["created_at"], str) and sidecar["created_at"]
 
-    # Parameter count and both on-disk sizes logged (contract item 1).
+    # Parameter count and both on-disk sizes logged.
     messages = [r.getMessage() for r in caplog.records]
     assert any("quantize_beats" in m for m in messages)
     assert any("parameter" in m.lower() for m in messages)

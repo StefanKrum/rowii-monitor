@@ -6,8 +6,8 @@ preprocessing) is Microsoft's published implementation
 (`BEATs: Audio Pre-Training with Acoustic Tokenizers`,
 https://arxiv.org/abs/2212.09058, https://github.com/microsoft/unilm/tree/master/beats,
 MIT-licensed) -- not something this project reimplements from scratch. That
-reference code has no `pip install`-able package; the Task 14 brief
-sanctions two paths for using it: a minimal fresh reimplementation of only
+reference code has no `pip install`-able package; two paths are
+sanctioned for using it: a minimal fresh reimplementation of only
 the inference-time pieces, or vendoring the reference module with
 attribution. A fresh reimplementation was attempted first and rejected: the
 encoder alone (`rowii.vendor.beats.backbone.TransformerEncoder`) implements
@@ -53,7 +53,7 @@ _QUANTIZED_ENGINE_PREFERENCE: tuple[str, ...] = ("fbgemm", "x86", "qnnpack")
 """Preference order for `torch.backends.quantized.engine` (`select_quantized_
 engine`): `"fbgemm"`/`"x86"` are the x86 CPU kernels PyTorch ships for
 `torch.ao.quantization.quantize_dynamic` -- this project's actual deployment
-target (an x86-64 on-premise server, design spec D6); `"qnnpack"` (ARM/
+target (an x86-64 on-premise server); `"qnnpack"` (ARM/
 mobile-oriented) is the fallback that lets the SAME code path work on this
 project's own Apple Silicon dev machines. `torch.backends.quantized.engine`
 defaults to `"none"`, and BOTH quantizing (`scripts/quantize_beats.py`) and
@@ -154,7 +154,7 @@ def load_beats_model(checkpoint: Path, device: torch.device) -> BEATs:
 
 def load_quantized_beats_model(checkpoint: Path) -> BEATs:
     """Load a `scripts/quantize_beats.py`-produced quantized-module pickle
-    from *checkpoint*, in eval mode, on CPU (design spec D6).
+    from *checkpoint*, in eval mode, on CPU.
 
     Unlike `load_beats_model` (which reconstructs a `BEATs` instance from a
     `{"cfg", "model"}` state-dict checkpoint), this function `torch.load`s the
@@ -173,7 +173,7 @@ def load_quantized_beats_model(checkpoint: Path) -> BEATs:
     quantized Linear kernels are a CPU-only PyTorch backend (no MPS/CUDA
     dynamic-quantization support in eager mode), which happens to match this
     project's own deployment target for the compact/quantized pole (an
-    on-premise server with no GPU, design spec D6) -- there is no other
+    on-premise server with no GPU) -- there is no other
     device this loader could sensibly target.
 
     Sets `torch.backends.quantized.engine` (`select_quantized_engine`) BEFORE

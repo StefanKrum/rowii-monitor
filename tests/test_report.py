@@ -178,7 +178,8 @@ def test_write_report_accepts_optional_gt_keyword_and_still_writes_all_files(
     # optional, keyword-only extra (mirroring the documented, controller-approved
     # `run_detection(..., k=...)` precedent in rowii.state.detect) so the timeline's
     # GT-states panel can be populated with real data when the caller has `gt` in
-    # scope (Task 12's CLI does, right before its own `evaluate` call), while every
+    # scope (`scripts/run_step1.py`'s CLI does, right before its own `evaluate`
+    # call), while every
     # positional-only call from the exact brief-given signature keeps working
     # unchanged (see the other tests in this module, none of which pass `gt`).
     det, ev, grid, scada = _det_and_ev()
@@ -442,7 +443,7 @@ def test_predicted_timeline_panel_uses_state_mapping_not_strict_mapping(
 
 
 # ---------------------------------------------------------------------------
-# "Do sub-clusters track load levels?" section (Task 13b item 2)
+# "Do sub-clusters track load levels?" section
 # ---------------------------------------------------------------------------
 
 

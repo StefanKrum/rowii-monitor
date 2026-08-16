@@ -244,13 +244,13 @@ The complete Step-1 grid ran against the real June-25 Rodundwerk II delivery
 clusterers, plus the TU fusion KMeans k-sweep — `results/summary.csv` was
 deleted and fully regenerated from scratch (30 rows: 26 combinations + 4
 k-sweep rows, each combination exactly once). All KMeans numbers reproduce
-the earlier Task-13/13b/14 values bit-for-bit (fixed `random_seed = 7`).
+the earlier grid run's values bit-for-bit (fixed `random_seed = 7`).
 Parameter verification (`scripts/verify_parameters.py`,
 `results/parameter_verification.md`) measured every machine-parameter
 hypothesis directly from this data rather than carrying over pre-delivery
 guesses. **Measured nominal speed: 378.832 rpm** (`GT_CHANNELS["speed"]` =
-`"1_Drehzahl UPM"`, the genuine rpm channel -- Task 13 originally measured
-this off the wrong channel, `"1_Drehzahl_Ist"`, and got ~101 rpm; see
+`"1_Drehzahl UPM"`, the genuine rpm channel -- the earlier grid run originally
+measured this off the wrong channel, `"1_Drehzahl_Ist"`, and got ~101 rpm; see
 `results/parameter_verification.md`'s Revision 2026-07-07 section for the
 full derivation). The three `MACHINE_HZ` spectral centres were confirmed
 as-is, and one plant-specific sign convention had a genuine bug (pump-mode
@@ -308,7 +308,7 @@ nothing for BEATs: all four TU beats x gmm rows keep state ARI at exactly
 0.000 with the same degenerate all-turbine majority mapping as kmeans.
 
 **Strict (1:1 Hungarian) metrics** -- secondary, kept for continuity with
-Task 13's original numbers and as an over-segmentation diagnostic (a large
+the earlier grid run's original numbers and as an over-segmentation diagnostic (a large
 state-level vs. strict gap means the detector's extra clusters are
 sub-modes, not confusion):
 
@@ -379,10 +379,10 @@ not a genuine 3-state recovery; PU-afternoon has no GT to evaluate against
 at all.
 
 **Honest reading.** State-level metrics change the story dramatically from
-Task 13's strict-only view: TU fusion's strict ARI (0.153) looked like
+the earlier grid run's strict-only view: TU fusion's strict ARI (0.153) looked like
 near-total failure, but its state ARI (0.687) shows the detector recovers
 the correct mode most of the time once load-level sub-clusters are
-credited instead of penalized -- confirming Task 13's own qualitative
+credited instead of penalized -- confirming the earlier grid run's own qualitative
 read (the timeline visually tracked the SCADA power curve) was closer to
 the truth than the strict ARI number suggested. Audio and fusion remain
 close on TU (state ARI 0.684 vs. 0.687 with KMeans; 0.691 vs. 0.704 with
@@ -463,12 +463,12 @@ pipeline for the first time (see commit history, one fix per commit):
    turbine mode), but the nominal-speed gate compared signed speed against
    a positive threshold, so it silently classified the entire pump run as
    "transition" regardless of `speed_nominal_rpm`.
-5. **Speed channel** (Task 13b): `GT_CHANNELS["speed"]` was wired to
+5. **Speed channel**: `GT_CHANNELS["speed"]` was wired to
    `"1_Drehzahl_Ist"`, a channel that is NOT rpm (a percent-of-nominal-ish
    quantity, ~3.75x smaller than the genuine rpm channel on the same
    file) -- every downstream `_base_state` rule is dimensionless (fractions
    of whatever `speed_nominal_rpm` is configured as), so the pipeline ran
-   end-to-end throughout Task 13 without any test catching the mismatch.
+   end-to-end throughout the earlier grid run without any test catching the mismatch.
    Corrected to `"1_Drehzahl UPM"`; `speed_nominal_rpm` remeasured as
    378.832 rpm (was 101.0).
 

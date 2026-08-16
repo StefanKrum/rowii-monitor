@@ -57,13 +57,12 @@ _ALARM_COLUMNS = [
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
     "threshold_source", "near_transition", "state_name",
 ]
-"""The plan's exact alarms.parquet column contract (order included) --
-`threshold_source` appended by package-7 Task 5 (spec D7/A3.2): per-window
+"""The exact alarms.parquet column contract (order included) --
+`threshold_source` appended: per-window
 `rolling`/`fit_day_fallback` on rolling-mode scored rows, the constant mode name in
 the other modes, so the column exists uniformly. `near_transition`/`state_name`
-appended at the END by package-9 Task 3 (spec D3c/D2(c)/A1.4): BOTH ALWAYS present,
-regardless of whether the snapshot carries `state_names` (A1.3 test-contract
-update)."""
+appended at the END: BOTH ALWAYS present,
+regardless of whether the snapshot carries `state_names`."""
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +103,7 @@ def _lone_high_state_prepared(t0_ns: int, seed: int) -> PreparedRun:
     """A monitor day whose 20-blob appears in exactly ONE segment, chosen (at test
     time, from `split_by_segments` itself) to land on the SCORING side of the
     monitor's recalibration split -- so the 20-blob's detected label has zero
-    calibration-side windows and must take the `no_conformal_data` path (A1.3)."""
+    calibration-side windows and must take the `no_conformal_data` path."""
     seg_ids = np.repeat(np.arange(_N_SEGMENTS, dtype=np.int64), _SEG_LEN)
     valid = np.ones(_N_SEGMENTS * _SEG_LEN, dtype=bool)
     cfg = SweepConfig()  # the snapshot carries these exact defaults
@@ -172,7 +171,7 @@ def _install_common_monkeypatches(
 
 
 # ---------------------------------------------------------------------------
-# 1. Recalibrate mode end to end (the DEFAULT mode -- plan Task 2 test 1)
+# 1. Recalibrate mode end to end (the DEFAULT mode)
 # ---------------------------------------------------------------------------
 
 
@@ -210,8 +209,8 @@ def test_recalibrate_mode_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
     roles = set(alarms["role"].unique().tolist())
     assert roles == {"scored", "consumed_for_calibration"}
 
-    # T5 column contract: outside rolling mode, threshold_source is the constant
-    # mode name on EVERY row (spec D7/A3.2 uniform-column rule).
+    # Outside rolling mode, threshold_source is the constant
+    # mode name on EVERY row (uniform-column rule).
     assert (alarms["threshold_source"] == "recalibrate").all()
 
     scored = alarms[alarms["role"] == "scored"]
@@ -221,7 +220,7 @@ def test_recalibrate_mode_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
     for _state, group in scored.groupby("state"):
         assert group["alarm"].mean() <= 3 * snapshot.alpha
 
-    # Calibration-bias rule (A1.3): consumed windows are NEVER alarmed, no p-value.
+    # Calibration-bias rule: consumed windows are NEVER alarmed, no p-value.
     consumed = alarms[alarms["role"] == "consumed_for_calibration"]
     assert len(consumed) > 0
     assert not consumed["alarm"].any()
@@ -230,7 +229,7 @@ def test_recalibrate_mode_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
     notes = (out_dir / "monitor_notes.md").read_text()
     assert "recalibrate" in notes
     assert "did NOT hold" not in notes  # the frozen-mode warning must not leak here
-    assert "no fault labels" in notes.lower()  # spec §4 honesty framing
+    assert "no fault labels" in notes.lower()  # honesty framing
     assert "candidate" in notes.lower()
     assert snapshot.fit_run in notes
 
@@ -242,8 +241,8 @@ def test_recalibrate_mode_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 # ---------------------------------------------------------------------------
-# 2. Frozen mode: verdict for EVERY valid known-state window + the package-2
-#    distribution-shift warning (plan Task 2 test 2)
+# 2. Frozen mode: verdict for EVERY valid known-state window + the
+#    distribution-shift warning
 # ---------------------------------------------------------------------------
 
 
@@ -270,12 +269,12 @@ def test_frozen_mode_flags_shift_warning(
     assert len(alarms) == int(mon_prepared.valid_mask.sum())
     assert (alarms["role"] == "scored").all()
     assert ((alarms["p_value"] > 0.0) & (alarms["p_value"] <= 1.0)).all()
-    # T5 column contract: constant mode name outside rolling mode (D7/A3.2).
+    # Constant mode name outside rolling mode.
     assert (alarms["threshold_source"] == "frozen").all()
 
     notes = (out_dir / "monitor_notes.md").read_text()
     assert "frozen" in notes
-    assert "did NOT hold" in notes  # the package-2 warning, verbatim phrase
+    assert "did NOT hold" in notes  # the warning, verbatim phrase
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +354,7 @@ def test_geometry_missing_snapshot_column_exits_2(
 
 # ---------------------------------------------------------------------------
 # 4. Unknown detected state (absent from the snapshot) -> role="unknown_state",
-#    counted in the notes (plan Task 2 test 4: force it by stripping one label)
+#    counted in the notes (force it by stripping one label)
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +407,7 @@ def test_unknown_state_windows_counted(
 
 # ---------------------------------------------------------------------------
 # 5. A snapshot-known state with ZERO calibration-side windows on the new run ->
-#    ALL its windows role="no_conformal_data", no verdicts (A1.3 binding rule)
+#    ALL its windows role="no_conformal_data", no verdicts (binding rule)
 # ---------------------------------------------------------------------------
 
 
@@ -507,7 +506,7 @@ def test_unknown_run_name_exits_2_and_lists_available_runs(
 
 
 # ---------------------------------------------------------------------------
-# 8. --help documents every flag (plan Task 2 test 6)
+# 8. --help documents every flag
 # ---------------------------------------------------------------------------
 
 
@@ -618,7 +617,7 @@ def test_missing_snapshot_file_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# T4: --session-norm (package-7 Task 4, spec D3/A3.5) -- refusal on stats-less
+# --session-norm -- refusal on stats-less
 #     snapshots, scoring-space-only wiring, detector-RAW invariance
 # ---------------------------------------------------------------------------
 
@@ -627,7 +626,7 @@ def _stats_snapshot(
     tmp_path: Path, *, norm_minutes: float = 20.0
 ) -> tuple[Path, MonitorSnapshot]:
     """A REAL fit_snapshot product upgraded with fit-day session stats (the
-    monitor's reference-side transform, D3/A3.5) -- the 300 s fixture sits entirely
+    monitor's reference-side transform) -- the 300 s fixture sits entirely
     inside the default 20-minute prefix, so the stats cover every valid window."""
     fit_prepared = _two_state_prepared(_FIT_T0_NS, seed=0)
     snapshot, _ = fit_snapshot(
@@ -652,7 +651,7 @@ def test_session_norm_refuses_snapshot_without_stats(
 ) -> None:
     """A snapshot with `session_stats=None` (a v1 FILE or any snapshot fitted
     without session stats) must be REFUSED under --session-norm with exit 2 and a
-    message naming the v1/no-stats cause (spec A3.5, binding)."""
+    message naming the v1/no-stats cause."""
     import monitor
 
     snapshot_path, _ = _make_snapshot(tmp_path)  # no session stats
@@ -677,7 +676,7 @@ def test_session_norm_refuses_snapshot_without_stats(
 def test_session_norm_removes_global_shift_in_recalibrate_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The D3 property end to end: a GLOBAL affine shift of the monitored run is
+    """The property end to end: a GLOBAL affine shift of the monitored run is
     absorbed by --session-norm -- (shifted run + norm) produces the SAME states,
     roles and alarm set as (unshifted run + norm), because each run's own first-N
     median/MAD stats map both into the same normalized scoring space."""
@@ -744,7 +743,7 @@ def test_session_norm_removes_global_shift_in_recalibrate_mode(
 def test_session_norm_detector_labels_bitwise_invariant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A3.5 binding boundary: the DETECTOR always consumes RAW features -- the
+    """Binding boundary: the DETECTOR always consumes RAW features -- the
     state column (and segments.csv) must be bitwise identical with and without
     --session-norm on the same run."""
     import monitor
@@ -815,20 +814,20 @@ def test_help_documents_session_norm(capsys: pytest.CaptureFixture[str]) -> None
 
 
 # ---------------------------------------------------------------------------
-# T7: --level-recal (package-8 Task 7, spec D2/A1.4/A1.10/A1.11) -- refusal on
+# --level-recal -- refusal on
 #     medians-less snapshots, mutual exclusion with --session-norm, applying
 #     AFTER the snapshot-contract projection with a shape-preserving recentre
 # ---------------------------------------------------------------------------
 
 _LEVEL_FEATURE_NAMES = ["f0_log_rms", "f1_octave_125"]
 """Level-bearing column names (both match `rowii.anomaly.levelrecal`'s
-`_LEVEL_SUBSTRINGS`) -- the T7 fixture needs a snapshot whose feature_names
+`_LEVEL_SUBSTRINGS`) -- the fixture needs a snapshot whose feature_names
 actually carry a level column, unlike the module's default `f0`/`f1` names."""
 
 
 def _level_prepared(t0_ns: int, seed: int) -> PreparedRun:
     """`_two_state_prepared`'s exact blob/segment layout (module docstring sizing
-    note applies unchanged), with LEVEL-bearing feature names (T7 fixture)."""
+    note applies unchanged), with LEVEL-bearing feature names."""
     return replace(_two_state_prepared(t0_ns, seed), feature_names=list(_LEVEL_FEATURE_NAMES))
 
 
@@ -836,7 +835,7 @@ def _level_snapshot(
     tmp_path: Path, *, medians: dict[str, float] | None
 ) -> tuple[Path, MonitorSnapshot]:
     """A REAL fit_snapshot product optionally upgraded with level-recal reference
-    medians (`level_recal_medians`, D2/A1.4/A1.10) -- `medians=None` reproduces the
+    medians (`level_recal_medians`) -- `medians=None` reproduces the
     v1/no-recal refusal fixture; a concrete dict reproduces a `run_step2
     --level-recal --save-snapshot` artifact (`_stats_snapshot`'s own device,
     injecting the field `fit_snapshot` itself never sets)."""
@@ -856,7 +855,7 @@ def _level_snapshot(
 def test_monitor_level_recal_refuses_snapshot_without_medians(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A1.10: a snapshot with `level_recal_medians=None` (a v1 file, or any
+    """A snapshot with `level_recal_medians=None` (a v1 file, or any
     snapshot fitted without --level-recal) must be REFUSED under --level-recal
     with exit 2 -- never a silent raw-space fallback (mirrors --session-norm's
     stats-less refusal, `test_session_norm_refuses_snapshot_without_stats`)."""
@@ -902,12 +901,12 @@ def test_monitor_level_recal_and_session_norm_mutually_exclusive(
 def test_monitor_level_recal_applies_after_projection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A1.11: --level-recal computes its run-side median AFTER the snapshot-
+    """--level-recal computes its run-side median AFTER the snapshot-
     contract projection, name-keyed against the PROJECTED feature_names -- an
     extra prepared column beyond the snapshot's own 2 must be dropped BEFORE the
     recal runs (else column_medians/apply_level_recal would see the wrong width
-    and the run would wrongly exit 2). The recentring property mirrors D3's own
-    shift-removal test: additively shifting the monitored run's LEVEL columns and
+    and the run would wrongly exit 2). The recentring property mirrors the
+    session-norm shift-removal test: additively shifting the monitored run's LEVEL columns and
     recentring with --level-recal reproduces the UNSHIFTED run's alarm set."""
     import monitor
 
@@ -928,7 +927,7 @@ def test_monitor_level_recal_applies_after_projection(
     extended = replace(
         base,
         # An EXTRA prepared column beyond the snapshot's 2 -- must be projected
-        # away BEFORE level-recal ever sees it (A1.11); plus a +5.0 shift on
+        # away BEFORE level-recal ever sees it; plus a +5.0 shift on
         # ONLY the two level columns (never touching the extra column).
         features=np.hstack(
             [base.features + 5.0, rng.normal(5.0, 1.0, (len(base.features), 1))]
@@ -1023,7 +1022,7 @@ def test_first_n_minutes_rows_matches_fit_session_stats_window_membership() -> N
 
 
 # ---------------------------------------------------------------------------
-# T5: --thresholds rolling (package-7 Task 5, spec D7 as amended by A3.2) --
+# --thresholds rolling --
 #     per-window trailing thresholds with conformal-floor fallback, the
 #     threshold_source column, coverage stats, and the all-invalid guard
 # ---------------------------------------------------------------------------
@@ -1043,7 +1042,7 @@ _ROLLING_M_NS = 60 * 1_000_000_000
 """1 minute (--rolling-minutes 1) in grid nanoseconds."""
 
 _ROLLING_FLOOR = 3
-"""ceil(1 / _ROLLING_ALPHA) - 1 (A3.2's conformal floor at alpha=0.30)."""
+"""ceil(1 / _ROLLING_ALPHA) - 1 (the conformal floor at alpha=0.30)."""
 
 
 def _run_rolling(
@@ -1074,7 +1073,7 @@ def _run_rolling(
 def test_rolling_mode_fallback_and_rolling_branches_bitwise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The core D7/A3.2 semantics, verified from first principles: for EVERY scored
+    """The core semantics, verified from first principles: for EVERY scored
     window, the trailing set is recomputed here from the parquet's own consumed rows
     (same state, window start in [t_w - M, t_w)) and the emitted threshold_source,
     alarm bit, p-value and low_confidence must match the branch that trailing count
@@ -1093,7 +1092,7 @@ def test_rolling_mode_fallback_and_rolling_branches_bitwise(
     assert list(alarms.columns) == _ALARM_COLUMNS
 
     # Same roles as recalibrate mode: rolling replaces HOW thresholds are derived,
-    # not WHICH windows get verdicts (calibration side stays consumed, A1.3).
+    # not WHICH windows get verdicts (calibration side stays consumed).
     assert set(alarms["role"].unique().tolist()) == {"scored", "consumed_for_calibration"}
     consumed = alarms[alarms["role"] == "consumed_for_calibration"]
     scored = alarms[alarms["role"] == "scored"]
@@ -1152,9 +1151,9 @@ def test_rolling_mode_fallback_and_rolling_branches_bitwise(
 def test_rolling_coverage_stats_in_notes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A3.2 MANDATORY output: the notes carry a per-state trailing-coverage table
+    """MANDATORY output: the notes carry a per-state trailing-coverage table
     whose counts/fractions match the parquet, the motivating measurement as the
-    rationale line, and the D7 double-reference honesty note (slow-fault
+    rationale line, and the double-reference honesty note (slow-fault
     absorption; the threshold_source column as the visibility)."""
     import monitor
 
@@ -1175,11 +1174,11 @@ def test_rolling_coverage_stats_in_notes(
             f"| {n_roll / n_scored:.4f} |"
         )
         assert expected_row in notes
-    # The A3.2 motivating measurement is cited as the rationale.
+    # The motivating measurement is cited as the rationale.
     assert "46.8%" in notes
     assert "M=20" in notes
     assert "290626" in notes
-    # The D7 double-reference honesty note.
+    # The double-reference honesty note.
     assert "absorb" in notes.lower()
     assert "side by side" in notes.lower()
     assert "fit_day_fallback" in notes
@@ -1223,7 +1222,7 @@ def test_rolling_composes_with_session_norm(
 def test_rolling_default_minutes_is_60(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without --rolling-minutes, M defaults to 60 (A3.2 binding). The 300-s
+    """Without --rolling-minutes, M defaults to 60 (binding). The 300-s
     fixture sits entirely inside 60 minutes, so every scored window's trailing set
     is its state's FULL earlier calibration side (>= 30 windows >= floor 3) -- all
     sources must be `rolling` and the notes must name M = 60."""
@@ -1437,7 +1436,7 @@ def test_rolling_zero_calibration_state_all_fallback(
 ) -> None:
     """A snapshot-known state with zero calibration-side
     windows on the monitored run takes the flagged fallback for ALL its scored
-    windows in rolling mode (the designed A3.2 behavior)."""
+    windows in rolling mode (the designed behavior)."""
     import monitor
 
     snapshot_path, snapshot = _make_snapshot(tmp_path)
@@ -1477,7 +1476,7 @@ def test_rolling_minutes_overflow_guard_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# 10. --exclude-calibration-events (spec A2.3.3): induced-event intervals are
+# 10. --exclude-calibration-events: induced-event intervals are
 #     BANNED from the calibration side and rescued into the scoring side, so
 #     strike days calibrate on strike-free windows and every event is evaluable.
 # ---------------------------------------------------------------------------
@@ -1534,8 +1533,8 @@ def test_exclude_calibration_events_rescues_and_alarms_event_windows(
     excl = pd.read_parquet(excl_dir / "alarms.parquet", engine="pyarrow")
     burst = base["window"].isin(range(5, 10))
 
-    # Without exclusion the burst is CONSUMED into calibration: never alarmed
-    # (A1.3), and it silently inflates the state's threshold.
+    # Without exclusion the burst is CONSUMED into calibration: never alarmed,
+    # and it silently inflates the state's threshold.
     assert (base.loc[burst, "role"] == "consumed_for_calibration").all()
     assert not base.loc[burst, "alarm"].any()
 
@@ -1586,7 +1585,7 @@ def test_exclude_events_covering_all_of_a_states_calibration_goes_no_conformal(
     alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
     zero_state = int(alarms.loc[alarms["window"] == 0, "state"].iloc[0])
     zero_rows = alarms["state"] == zero_state
-    # Every calibration window of the 0-blob state was excluded -> A1.3's
+    # Every calibration window of the 0-blob state was excluded -> the
     # no-conformal path for ALL its windows (rescued ones included).
     assert (alarms.loc[zero_rows, "role"] == "no_conformal_data").all()
     # The other state still calibrates and scores normally.
@@ -1682,15 +1681,14 @@ def test_exclude_events_rolling_mode_scores_rescued_windows_via_fallback(
 
 
 # ---------------------------------------------------------------------------
-# 11. Named states (D2 surfacing) + near_transition / --suppress-transition-alarms
-#     (package-9 Task 3, spec D2(c)/D3c, amendment A1.4)
+# 11. Named states + near_transition / --suppress-transition-alarms
 # ---------------------------------------------------------------------------
 
 
 def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
     import monitor
     # labels: run of 0s, an invalid gap (-1), run of 1s. The 0->1 change is at the
-    # FIRST valid 1 (index 6); invalid window 3 is NOT a change (A1.8).
+    # FIRST valid 1 (index 6); invalid window 3 is NOT a change.
     labels = np.array([0, 0, 0, -1, 1, 1, 1, 1], dtype=np.int64)
     valid = np.array([1, 1, 1, 0, 1, 1, 1, 1], dtype=bool)
     mask = monitor._near_transition_mask(labels, valid, window_ns=1_000_000_000, w_seconds=1.0)
@@ -1701,7 +1699,7 @@ def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
 
 
 def test_near_transition_mask_floors_w_windows_at_one() -> None:
-    """P9 hardening T3a: `_near_transition_mask` must floor its w_windows
+    """`_near_transition_mask` must floor its w_windows
     conversion at 1, for literal parity with `FittedDetector._finish`'s own
     `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
     `round()` truncates to 0 steps must still flag the immediate (+-1 step)
@@ -1733,7 +1731,7 @@ def test_state_name_column_always_present_fallback_cluster_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import monitor
-    # snapshot WITHOUT state_names -> every alarm row's state_name is cluster-<id> (A1.4).
+    # snapshot WITHOUT state_names -> every alarm row's state_name is cluster-<id>.
     snapshot_path, _snapshot = _make_snapshot(tmp_path)
     mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
     _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
@@ -1765,7 +1763,7 @@ def test_named_snapshot_surfaces_state_name_and_mapped_mode(
     alarms = pd.read_parquet(out_dir / "alarms.parquet")
     assert set(alarms["state_name"].unique()) <= {"turbine", "pump"}
     segments = pd.read_csv(out_dir / "segments.csv")
-    assert "mapped_mode" in segments.columns  # D2(c): present because state_names present
+    assert "mapped_mode" in segments.columns  # present because state_names present
     timeline = (out_dir / "timeline.md").read_text()
     assert "(turbine)" in timeline or "(pump)" in timeline
 

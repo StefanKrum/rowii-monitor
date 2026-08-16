@@ -1,4 +1,4 @@
-"""Tests for handcrafted audio/vibration featurizers (Task 6)."""
+"""Tests for handcrafted audio/vibration featurizers."""
 from __future__ import annotations
 
 import logging
@@ -340,7 +340,7 @@ def test_vib_featurizer_dead_channel_dropped_with_warning_and_feature_count_shri
 
 
 def test_vib_featurizer_dead_channel_detection_immune_to_float32_summation_noise() -> None:
-    # Real-data crash (2026-07-01 TU1, RAWTurbineVib__3, addendum Item 5): channels
+    # Real-data crash (2026-07-01 TU1, RAWTurbineVib__3): channels
     # 0-2 are exactly constant at -7.0 in every sample of every file, but computing
     # the batch std in float32 picks up pairwise-summation ROUNDING NOISE whose
     # magnitude depends on the batch's total element count -- ~4.77e-07 (= |c|*eps/2
@@ -491,7 +491,7 @@ def test_zscore_output_dtype_is_float64() -> None:
 
 
 def test_zscore_a_few_nan_rows_do_not_zero_out_the_whole_column() -> None:
-    # Task 13 real-data finding (TU/fusion run): a real feature matrix always has a
+    # Real-data finding (TU/fusion run): a real feature matrix always has a
     # handful of NaN rows (invalid windows, ~11/8286 on the real run) -- plain
     # `np.std` propagates NaN into the column's std, and `NaN >= 1e-12` is ALWAYS
     # False (IEEE-754), so the OLD zero-std guard (`safe = std >= 1e-12`) silently
@@ -540,7 +540,7 @@ def test_fuse_is_zscored_concatenation_of_both_inputs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# zscore_stats / apply_zscore (package-2 transfer primitives)
+# zscore_stats / apply_zscore (transfer primitives)
 # ---------------------------------------------------------------------------
 
 

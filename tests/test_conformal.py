@@ -100,7 +100,7 @@ def _per_rep_upper_bound(n: int, level: float, n_test: int, tail_prob: float) ->
 
 
 # ---------------------------------------------------------------------------
-# Validity simulation (item 1): FAR within exact-theory bands + p-value uniformity
+# Validity simulation: FAR within exact-theory bands + p-value uniformity
 # ---------------------------------------------------------------------------
 
 
@@ -175,7 +175,7 @@ def test_p_values_are_super_uniform(n: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Exact boundary: n=19 vs n=18 at alpha=0.05, achievable_alpha_floor (item 2)
+# Exact boundary: n=19 vs n=18 at alpha=0.05, achievable_alpha_floor
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +217,7 @@ def test_achievable_alpha_floor_is_exactly_one_over_n_plus_one(n: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hand-computed 5-score case (item 3)
+# Hand-computed 5-score case
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ def test_p_values_hand_computed_matches_dispatch_example() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tie handling: brute-force cross-check on random small cases (item 4)
+# Tie handling: brute-force cross-check on random small cases
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +390,7 @@ def test_calibrate_extreme_alpha_near_one_does_not_crash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Error paths (item 5)
+# Error paths
 # ---------------------------------------------------------------------------
 
 

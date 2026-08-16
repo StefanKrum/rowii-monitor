@@ -1,5 +1,5 @@
-"""Per-mode model bank (Stefan's idea, Package-8 D1 core, spec §3.D1 + Amendment
-A1.5): SCADA ground-truth modes on the FIT days train one small model per mode
+"""Per-mode model bank (Stefan's idea): SCADA ground-truth modes on the FIT days
+train one small model per mode
 (three families: diagonal Gaussian/Mahalanobis on standardized features, per-mode
 cosine-kNN on RAW features, 2-component diagonal GMM on standardized features).
 At apply time the bank runs LABEL-FREE: argmin distance / argmax likelihood
@@ -8,7 +8,7 @@ anomaly.conformal.calibrate`) on that mode's own calibration-side scores flags a
 window rejected by EVERY member as `no_mode_fits` (the "keins passt" novelty
 signal, reported as a rate, never a detector without induced-event evidence).
 
-Standardization (A1.5): `gaussian`/`gmm` standardize with the GLOBAL pool-FIT-side
+Standardization: `gaussian`/`gmm` standardize with the GLOBAL pool-FIT-side
 mean/std (`rowii.signals.features.zscore_stats` over every surviving mode's fit
 rows pooled together, stored on the bank) -- a single shared scale, not a
 per-mode one, so per-mode Mahalanobis/GMM distances stay comparable to each
@@ -16,9 +16,9 @@ other. `knn` scores raw (unstandardized) features directly, mirroring the
 existing Step-2 `KnnScorer` cosine contract.
 
 GT `unknown` AND `transition` windows are excluded from bank TRAINING on both
-the fit and calibration sides (A1.5) -- narrower than `rowii.eval.metrics.
+the fit and calibration sides -- narrower than `rowii.eval.metrics.
 evaluate`'s `unknown`-only mask, which callers must account for when comparing
-ARI against the unsupervised clusterer arm (see spec A1.5's noted delta).
+ARI against the unsupervised clusterer arm.
 
 A mode surviving to become a bank member needs BOTH a fit-side reference of at
 least `min_ref` windows AND at least one calibration-side window to calibrate a
@@ -43,18 +43,18 @@ from rowii.signals.features import apply_zscore, zscore_stats
 logger = logging.getLogger(__name__)
 
 _FAMILIES = ("gaussian", "knn", "gmm")
-"""The three bank-member families (spec D1): diagonal Gaussian/Mahalanobis, per-mode
+"""The three bank-member families: diagonal Gaussian/Mahalanobis, per-mode
 cosine-kNN, and diagonal 2-component GMM -- see module docstring for the
 standardization each one scores under."""
 
 _EXCLUDED_GT = ("unknown", "transition")
-"""GT state labels never trained on and never a bank member (spec A1.5) -- excluded
+"""GT state labels never trained on and never a bank member -- excluded
 from BOTH the fit and calibration sides before anything else in `ModeBank.fit`."""
 
 
 class GmmModeScorer:
-    """Per-mode 2-component diagonal GMM scorer on the shared `Scorer` contract
-    (spec D1(c)): `score = -GaussianMixture.score_samples(x)`, i.e. negative
+    """Per-mode 2-component diagonal GMM scorer on the shared `Scorer` contract:
+    `score = -GaussianMixture.score_samples(x)`, i.e. negative
     log-likelihood under the fitted mixture -- higher = more anomalous = less
     likely, matching every other scorer in this package. Polarity is fixed by
     construction here (mirrors `rowii.anomaly.scorers`'s OcSvm/IsolationForest/Lof
@@ -65,7 +65,7 @@ class GmmModeScorer:
 
     def __init__(self, n_components: int = 2, random_seed: int = 7) -> None:
         """Args:
-            n_components: Number of mixture components (spec D1(c): 2).
+            n_components: Number of mixture components (2).
             random_seed: `GaussianMixture`'s own `random_state`, for deterministic
                 EM initialization given the same reference.
         """
@@ -152,7 +152,7 @@ class ModeBank:
     `thresholds[mode].low_confidence` is True -- too few calibration scores for
     `alpha` (`rowii.anomaly.conformal.calibrate`), so `threshold` is `+inf` and
     the member can NEVER contribute a rejection to `assign`'s whole-bank
-    `no_mode_fits` AND-conjunction (review finding, T2: this used to be silent --
+    `no_mode_fits` AND-conjunction (this used to be silent --
     see `fit`'s WARNING log and `assign`'s docstring caveat). Empty when every
     surviving member calibrated with enough data."""
     feature_names: list[str]
@@ -193,7 +193,7 @@ class ModeBank:
         random_seed: int = 7,
     ) -> ModeBank:
         """Fit one scorer + one conformal threshold per GT mode present in
-        *fit_features*/*fit_labels* (spec D1, A1.5).
+        *fit_features*/*fit_labels*.
 
         Chain: exclude `_EXCLUDED_GT` from BOTH sides; for `gaussian`/`gmm`,
         compute the GLOBAL pool-fit-side `zscore_stats` over every surviving
@@ -217,7 +217,7 @@ class ModeBank:
             feature_names: Column names of *fit_features*/*calib_features`, in
                 order -- stored for `assign`'s width check.
             min_ref: Minimum fit-side row count a mode needs to become a bank
-                member (spec A1.5 default: 20).
+                member (default: 20).
             k: `KnnScorer`'s `k` (`knn` family only).
             gmm_components: `GmmModeScorer`'s component count (`gmm` family
                 only).
@@ -350,7 +350,7 @@ class ModeBank:
             sorted(mode for mode, t in thresholds.items() if t.low_confidence)
         )
         if low_confidence_modes:
-            # review finding, T2: `rejected &= scores[:, j] > threshold` in `assign`
+            # `rejected &= scores[:, j] > threshold` in `assign`
             # means a member whose threshold is +inf (low_confidence) can NEVER
             # contribute a rejection -- it silently makes the whole-bank
             # no_mode_fits signal under-fire for every window instead of raising
@@ -395,7 +395,7 @@ class ModeBank:
         rejected as an outlier by all of them simultaneously, not merely by its
         closest match.
 
-        Caveat (review finding, T2): a member listed in `self.low_confidence_modes`
+        Caveat: a member listed in `self.low_confidence_modes`
         has `self.thresholds[mode].threshold == +inf` (too few calibration scores
         for `alpha`, see `rowii.anomaly.conformal.calibrate`), so `scores[:, j] >
         threshold` is `False` for every finite score -- that member can NEVER

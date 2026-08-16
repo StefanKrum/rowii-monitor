@@ -44,7 +44,7 @@ def build_gantner_file(
     """Build a synthetic container. Each token's length prefix counts the payload PLUS its
     NUL terminator (`len(payload) + 1`) -- this matches the real V2.17/V2.18 delivery's
     on-disk convention (see `rowii.io.gantner` module docstring), verified against actual
-    Betriebsdaten and TU vib files during Task 13.
+    Betriebsdaten and TU vib files.
 
     *filler_bytes* inserts N pseudo-random non-token bytes between a channel's unit token and
     its UUID token (models generic unknown filler). *raw_filler*, if given, inserts those exact

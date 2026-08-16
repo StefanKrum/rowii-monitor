@@ -1,6 +1,6 @@
-"""Compact CNN student encoder for `rowii.adapt.student` (Step-2 package-5 spec
-D5, plan Task 4): the ONE module under `rowii.adapt` -- alongside `lora.py`/
-`objective.py` -- that imports torch at module level, mirroring
+"""Compact CNN student encoder for `rowii.adapt.student`: the ONE module under
+`rowii.adapt` -- alongside `lora.py`/`objective.py` -- that imports torch at
+module level, mirroring
 `rowii.anomaly._recon_models`'s/`rowii.tfc.model`'s identical role in their own
 packages (those modules' own docstrings explain why: a lazily-acquired torch
 handle can only be typed `Any`, and mypy rejects subclassing a value of type
@@ -10,7 +10,7 @@ it). This module is therefore imported ONLY lazily, from inside
 `_RealStudentEncoder.embed`) -- never at `student.py`'s own top level, and never
 at this package's `__init__.py`.
 
-Architecture (spec D5, binding contract): three stride-2 `Conv2d` blocks
+Architecture (binding contract): three stride-2 `Conv2d` blocks
 (`1 -> 32 -> 64 -> 128` channels by default, `kernel=3, stride=2, padding=1`,
 `BatchNorm2d` + `ReLU` after each -- mirroring `rowii.tfc.model._Cnn1d`'s own
 conv-then-norm-then-activation order, just in 2-D) over the `(1, n_mels,

@@ -89,8 +89,8 @@ EXACT mel filterbank geometry the cache was built with."""
 
 _LOGMEL_PRIMARY_STREAM = "RAWGeneratorMic__0"
 """The one stream `rowii.pipeline`'s `"logmel"` variant ever featurizes (its
-own private `_LOGMEL_STREAMS` constant -- primary/generator mic only, package-3
-spec D3 size bound) -- duplicated here since `rowii.pipeline` does not export
+own private `_LOGMEL_STREAMS` constant -- primary/generator mic only,
+size bound) -- duplicated here since `rowii.pipeline` does not export
 it (same module-sibling-duplication precedent as `_LOGMEL_FMIN_HZ`)."""
 
 _LOGMEL_LOCAL_NAME_RE = re.compile(r"^logmel_f(\d+)_m(\d+)$")

@@ -1,5 +1,4 @@
-"""Masked-reconstruction objective tests (Step-2 package-5 spec D1 as amended
-by Amendment A1, Task 1 + Task 3 rework): the frame-level `masked_patch_loss`
+"""Masked-reconstruction objective tests: the frame-level `masked_patch_loss`
 (retained for position-preserving encoders) and the native token-level
 `masked_token_loss` (the BEATs adaptation objective). CPU-forced, eager-torch
 target module -- same `pytest.importorskip("torch")`-at-module-scope
@@ -56,7 +55,7 @@ def test_loss_decreases_with_training():
 
 
 # ---------------------------------------------------------------------------
-# masked_token_loss (spec D1 as amended by Amendment A1, Task-3 rework): the
+# masked_token_loss: the
 # native token-level latent-target MAE actually used for BEATs adaptation.
 # ---------------------------------------------------------------------------
 

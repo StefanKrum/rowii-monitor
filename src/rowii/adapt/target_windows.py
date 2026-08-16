@@ -1,15 +1,14 @@
 """Leakage-aware target-normal training-window iterator.
 
 `iter_target_windows` feeds `scripts/adapt_beats.py`'s masked-token
-adaptation objective (Task 1 as amended by spec Amendment A1,
-`rowii.adapt.objective.masked_token_loss`)
+adaptation objective (`rowii.adapt.objective.masked_token_loss`)
 1-second windows of a run's PRIMARY MIC stream (`RAWGeneratorMic__0` --
 `PreparedRun.segment_ids`'s own primary-stream convention for the "audio"
 variant), resampled to BEATs' 16 kHz input rate, drawn ONLY from the
 CALIBRATION side of the top split every Step-2 sweep already uses --
 `split_by_segments(segment_ids, valid_mask, 0.5, seed=7)`
-(`rowii.anomaly.references`). This is the package's leakage rule (spec D3,
-restated wherever adapted-model evidence appears): adaptation must never see
+(`rowii.anomaly.references`). This is the package's leakage rule (restated
+wherever adapted-model evidence appears): adaptation must never see
 a scoring-side segment, or the LATER evaluation of the adapted encoder on
 that same segment would be contaminated by having trained on it.
 
@@ -29,7 +28,7 @@ pipeline NEVER concatenates a whole stream into memory"; at a file-boundary
 window at most TWO files are transiently resident here, see
 `_iter_indexed_windows`).
 
-Content-source verification (Task-2 review HIGH): `PreparedRun.segment_ids`
+Content-source verification: `PreparedRun.segment_ids`
 attributes a window to the EARLIEST file with ANY sample overlap
 (`_extract_stream_features`'s documented convention) -- which, for a window
 straddling a file boundary inside the jitter band, is NOT necessarily the
@@ -44,8 +43,8 @@ failure the NEXT file is probed, and a window no file covers fully is
 SKIPPED with a debug log, never yielded as padded content.
 
 Torch-free by design (numpy/scipy only): `scripts/adapt_beats.py` (an eager-
-torch script, Task 3) consumes this module's output, but `target_windows.py`
-itself is NOT on the plan's Global-Constraints eager-torch module list
+torch script) consumes this module's output, but `target_windows.py`
+itself is NOT on the eager-torch module list
 (`objective.py`/`lora.py`/`student.py`'s model part/`fusionx/model.py`) -- it
 has no reason to import torch at all, so it stays importable (and
 independently testable) without the optional `[beats]` extra installed.
@@ -71,7 +70,7 @@ from rowii.io.gantner import read_gantner
 # duplicated: this module's full-window acceptance test must stay in exact
 # lockstep with `_extract_stream_features`'s own -- a drifted copy would
 # silently re-open the very content-misattribution bug class the check
-# exists to close (Task-2 review HIGH; module docstring).
+# exists to close (module docstring).
 from rowii.pipeline import _SAMPLE_JITTER_TOLERANCE, prepare_run
 from rowii.signals.windows import window_slices
 
@@ -92,7 +91,7 @@ pipeline's own value, hence imported)."""
 
 _TOP_SPLIT_FRAC = 0.5
 """Calibration fraction of the top split -- fixed across every Step-2 sweep
-and every package-5 adaptation consumer (spec D3), never a caller-tunable
+and every adaptation consumer, never a caller-tunable
 knob (unlike `seed`, which a caller may deliberately vary)."""
 
 
@@ -196,7 +195,7 @@ def _iter_indexed_windows(
     `iter_target_windows` itself strips the index off unless the caller asks
     for it (`return_indices=True`).
 
-    Content-source verification (module docstring, Task-2 review HIGH): for
+    Content-source verification (module docstring): for
     each selected window `w`, candidate source files are probed in the order
     `(segment_ids[w], segment_ids[w] + 1)` and the FIRST one whose slice for
     `w` is full -- `abs(len - expected) <= _SAMPLE_JITTER_TOLERANCE`, the
@@ -329,8 +328,8 @@ def iter_target_windows(
     return_indices: bool = False,
 ) -> Iterator[np.ndarray] | Iterator[tuple[int, np.ndarray]]:
     """1-s target-NORMAL windows of *run*'s primary mic stream, resampled to
-    *target_hz*, drawn ONLY from the top split's calibration side (spec D3
-    leakage rule -- module docstring).
+    *target_hz*, drawn ONLY from the top split's calibration side (leakage
+    rule -- module docstring).
 
     Pipeline per selected window: locate the file actually holding its FULL
     sample slice (verified against the pipeline's own jitter band -- see
@@ -442,7 +441,7 @@ def _iter_windows_multi(
                 # calibration-side window exactly once). A run that never
                 # contributed ANY window is warned about here
                 # (sidecar-only visibility is not a runtime signal),
-                # matching the A4.1 nothing-drops-silently posture.
+                # matching the nothing-drops-silently posture.
                 if yielded_per_run[name] == 0:
                     logger.warning(
                         "iter_target_windows_multi: pool run %s contributed ZERO "
@@ -496,7 +495,7 @@ def iter_target_windows_multi(
     rotation pass (a, b, c, a, b, c, ...), stopping after *max_windows*
     TOTAL windows.
 
-    Budget semantics (A3.11, binding): *max_windows* is the TOTAL pool
+    Budget semantics (binding): *max_windows* is the TOTAL pool
     budget, NOT a per-run cap. Round-robin is what makes a total budget
     meaningful for a pool: a sequential chain (all of run 1, then run 2,
     ...) under the same total would exhaust the budget almost entirely on
@@ -512,8 +511,8 @@ def iter_target_windows_multi(
     *max_windows* windows in total is not an error here -- the CLI layer
     decides whether an empty/short pool is fatal).
 
-    Leakage rule, inherited PER RUN (package-5 spec D3, restated by P7's
-    D6): each run's windows come from that run's OWN `iter_target_windows`
+    Leakage rule, inherited PER RUN: each run's windows come from that
+    run's OWN `iter_target_windows`
     iterator and therefore from that run's OWN top-split calibration side
     (`split_by_segments`, `_TOP_SPLIT_FRAC`, *seed*) -- no run's
     scoring-side windows are ever touched. *seed* is forwarded UNCHANGED as
@@ -546,7 +545,7 @@ def iter_target_windows_multi(
         seed: Per-run SPLIT seed (see the leakage paragraph above).
         return_run_names: If `True`, yield `(run_name, window)` pairs --
             the intended way for a caller (`scripts/adapt_beats.py`'s
-            sidecar) to record the per-run window counts A3.11 requires,
+            sidecar) to record the per-run window counts for provenance,
             without a second, parallel computation of the rotation.
             `False` (default) yields bare arrays, matching
             `iter_target_windows`'s own base contract.

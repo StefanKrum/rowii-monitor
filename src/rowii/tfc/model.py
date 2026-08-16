@@ -1,6 +1,5 @@
-"""Compact TF-C (Time-Frequency Consistency -- Zhang et al. 2022) model +
-loss (package-4 spec D1): the ONE module under `rowii.tfc` that imports
-torch at module level, mirroring
+"""Compact TF-C (Time-Frequency Consistency -- Zhang et al. 2022) model + loss:
+the ONE module under `rowii.tfc` that imports torch at module level, mirroring
 `rowii.anomaly._recon_models`'s role in its own package (that module's own
 docstring explains why: a lazily-acquired torch handle can only be typed
 `Any`, and mypy rejects subclassing a value of type `Any`, so an
@@ -69,7 +68,7 @@ class _Cnn1d(torch.nn.Module):
 
 
 class TfcModel(torch.nn.Module):
-    """Time encoder + frequency encoder + projection heads (spec D1).
+    """Time encoder + frequency encoder + projection heads.
 
     `forward` returns both the pooled encoder outputs (`h_t`, `h_f` --
     `cfg.embed_dim`-wide, what `rowii.tfc.wrapper.TfcFeaturizer` actually

@@ -4,7 +4,7 @@ PREPARED-ONLY harness: no fault labels exist
 yet for any ROWII recording -- the induced-fault measurement campaign is pending.
 This module is the campaign-data interface, ready the day labeled fault intervals
 land; until then every invocation runs on synthetic intervals and is a workflow
-DEMO, never a detection result (spec §4 honesty rule).
+DEMO, never a detection result (honesty rule).
 
 Input contract (the campaign-data interface):
 
@@ -22,7 +22,7 @@ Input contract (the campaign-data interface):
   ambiguous by one-to-two hours around CET/CEST, exactly the error this loud
   refusal prevents); optional `kind` column, defaulting to `"fault"`.
 
-Semantics (spec D3, every edge pinned by `tests/test_events.py`):
+Semantics (every edge pinned by `tests/test_events.py`):
 
 - **Membership**: window start `t` lies inside event `e` iff
   `start_ns - tol_ns <= t < end_ns + tol_ns` -- inclusive start, EXCLUSIVE end,

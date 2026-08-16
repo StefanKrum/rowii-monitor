@@ -1,11 +1,10 @@
-"""Public-corpus window iterators (package-4 spec D2 Task 2, extended by
-Task 3's `iter_windows_paderborn_dir`): turn a directory tree of WAV (MIMII)
+"""Public-corpus window iterators: turn a directory tree of WAV (MIMII)
 or MAT (CWRU/Paderborn) files into the same 1-s, 8 kHz,
 per-window-standardized float32 windows `TfcFeaturizer` (`rowii.tfc.wrapper`)
-and the pretraining script (`scripts/pretrain_tfc.py`, Task 3) both expect --
+and the pretraining script (`scripts/pretrain_tfc.py`) both expect --
 these three functions -- together with the LABELED clip iterator appended at
-the bottom of this module (`iter_labeled_clips_wav_dir`, package-6 pillar-3
-spec D4) -- are the ONLY place this project reads a raw public corpus off
+the bottom of this module (`iter_labeled_clips_wav_dir`) -- are the ONLY
+place this project reads a raw public corpus off
 disk.
 
 All three iterators share one windowing/resample/standardize pipeline
@@ -31,7 +30,7 @@ assumed by any test here (all tests use a handful of synthetic fixture
 files, per this package's downloads-never-run-in-tests rule).
 
 The fourth, LABELED iterator (`iter_labeled_clips_wav_dir` + `LabeledClip`,
-appended for package-6 pillar-3's detection-scarcity harness) shares the same
+appended for pillar-3's detection-scarcity harness) shares the same
 private-helper pipeline and lazy-generator discipline but yields per-CLIP
 window bundles WITH labels and machine ids instead of loose unlabeled
 windows -- see its own section at the bottom of this module.
@@ -70,7 +69,7 @@ def _resample_windows(
     `window_s`-long clip at *native_hz* (`_cut_windows`'s contract), so all
     rows share the same `target_in`/pad math.
 
-    *window_s* (P6 combined review, HIGH-latent finding): this helper used to
+    *window_s*: this helper used to
     hardcode the 1-second assumption (`target_in = round(native_hz)`), which
     SILENTLY zero-padded every window a caller cut at `window_s != 1.0` up to
     a full second before resampling -- half-zero windows whose standardization
@@ -161,7 +160,7 @@ def iter_windows_wav_dir(
     """Recursively walk *root* for `*.wav` files (sorted, deterministic) and
     yield standardized, `target_hz`-resampled, non-overlapping `window_s`
     windows -- one `(target_hz,)` float32 array per window. Written for
-    MIMII's own layout (spec D2: `data/public/mimii/pump_0db/<machine>/
+    MIMII's own layout (`data/public/mimii/pump_0db/<machine>/
     id_<NN>/{normal,abnormal}/*.wav`) but makes no MIMII-specific path
     assumptions beyond the `exclude_substring` filter, so it walks any WAV
     tree.
@@ -251,9 +250,9 @@ def iter_windows_mat_dir(
     named after the file itself, e.g. a `Y` field of named sub-channels --
     NOT a flat top-level array). This function only ever matches a FLAT,
     top-level variable name (see `Args` below), so a genuine Paderborn
-    `.mat` file will hit this function's missing-key skip path as-is; the
-    Task-2 completion report documents this gap for whoever wires Paderborn
-    into `scripts/pretrain_tfc.py` (Task 3).
+    `.mat` file will hit this function's missing-key skip path as-is --
+    Paderborn support for `scripts/pretrain_tfc.py` needs a dedicated
+    loader instead (see `iter_windows_paderborn_dir` below).
 
     Args:
         root: Directory to walk recursively for `*.mat` files.
@@ -320,8 +319,8 @@ already uses for CWRU's 12 kHz (`native_hz`'s docstring there)."""
 _PADERBORN_VIBRATION_CHANNEL = "vibration_1"
 """The `Y[i].Name` this function searches for (substring match, mirroring
 `iter_windows_mat_dir`'s `key_substring` convention) -- Paderborn KAt's
-vibration accelerometer channel, per orchestrator resolution 2 and confirmed
-present (as exactly one of 7 named `Y` entries) in every real file this task
+vibration accelerometer channel, confirmed
+present (as exactly one of 7 named `Y` entries) in every real file
 inspected."""
 
 
@@ -331,11 +330,11 @@ def _extract_paderborn_vibration(path: Path) -> np.ndarray | None:
     module-level docstring section documents the confirmed real layout in
     full). Returns `None` -- NEVER raises -- for any file that does not match
     that layout in any of the ways checked below: a file that `loadmat`
-    itself cannot parse at all (Task 2's completion report flags a known
-    Paderborn v7.3/HDF5-format failure mode as a real possibility, on top of
+    itself cannot parse at all (a known Paderborn v7.3/HDF5-format failure
+    mode is a real possibility, on top of
     ordinary corruption/truncation), one whose root struct has no `Y` field,
     or one whose `Y` entries include no channel named `"vibration_1"` --
-    orchestrator resolution 2's explicit "skip file with logged warning on
+    the explicit "skip file with logged warning on
     failure -- NEVER crash the corpus build" requirement, which is why this
     function wraps the ENTIRE load-and-navigate sequence in one broad
     `except Exception`, deliberately broader than this module's other
@@ -401,9 +400,8 @@ def iter_windows_paderborn_dir(
     Paderborn `.mat` files nest their channels inside a struct (a per-file
     `Y` field, itself a struct ARRAY with `Name`/`Data` sub-fields), not a
     flat top-level variable `iter_windows_mat_dir`'s `key_substring` search
-    can match -- Task 2's own docstring/completion-report already flagged
-    this gap; `_extract_paderborn_vibration` (this function's only real
-    difference from `iter_windows_mat_dir`) closes it.
+    can match; `_extract_paderborn_vibration` (this function's only real
+    difference from `iter_windows_mat_dir`) resolves this.
 
     Confirmed real layout (a sanctioned read-only smoke check
     against `data/public/paderborn/K001/K001/N15_M07_F04_K001_1.mat` and 3
@@ -421,12 +419,11 @@ def iter_windows_paderborn_dir(
     at a measured ~64000.25 Hz (`_PADERBORN_NATIVE_HZ`'s docstring).
 
     Any file that does not match this layout -- including one `loadmat`
-    cannot parse at all (a plausible real failure mode per Task 2's
-    completion report: some Paderborn `.mat` files are reportedly v7.3/HDF5
+    cannot parse at all (a plausible real failure mode: some Paderborn
+    `.mat` files are reportedly v7.3/HDF5
     format) -- is SKIPPED with a WARNING naming the file
     (`_extract_paderborn_vibration`), never raised: this function must NEVER
-    crash the corpus build over one malformed file (orchestrator resolution
-    2's explicit contract).
+    crash the corpus build over one malformed file (explicit contract).
 
     Args:
         root: Directory to walk recursively for `*.mat` files.
@@ -462,7 +459,7 @@ def iter_windows_paderborn_dir(
             yield row.astype(np.float32)
 
 
-# --- Labeled clips (package-6 pillar-3, spec D4 + amendment A1.5) -------------
+# --- Labeled clips (pillar-3) -------------
 
 
 @dataclass(frozen=True)
@@ -529,8 +526,8 @@ def iter_labeled_clips_wav_dir(
             window under its `window_s == 1.0` assumption (its docstring);
             this project only ever uses the 1.0 default, as does the
             scarcity harness.
-        target_hz: Output sample rate. Default 16_000 -- BEATs-native
-            (amendment A1.5): every downstream featurizer resamples from its
+        target_hz: Output sample rate. Default 16_000 -- BEATs-native:
+            every downstream featurizer resamples from its
             `rate_hz` argument anyway, so 16 kHz simply spares the BEATs
             path a quality-losing down-then-up hop; the unlabeled iterators'
             8 kHz default was a TF-C pretraining choice
@@ -540,7 +537,7 @@ def iter_labeled_clips_wav_dir(
             (machine_id, class) pair, taken in sorted filename order. The
             kept/total counts are ALWAYS logged -- one INFO line per
             (machine_id, class) -- so a cap can never silently truncate the
-            corpus (spec D4's no-silent-truncation rule; a handful of lines
+            corpus (no-silent-truncation rule; a handful of lines
             per corpus, not the per-file flood `iter_windows_wav_dir`'s
             single summary line guards against).
         machine_ids: If given, only machine directories whose NAME is in
@@ -551,8 +548,8 @@ def iter_labeled_clips_wav_dir(
     Yields:
         `LabeledClip` per clip, `windows` shaped `(W, target_hz)` float32
         and PER-WINDOW standardized (mean 0 / std 1, `_standardize`) -- the
-        package-4 corpus convention, kept here deliberately (amendment
-        A1.5): it removes clip-gain confounds (recording-level loudness
+        corpus convention, kept here deliberately: it removes clip-gain
+        confounds (recording-level loudness
         differences between clips) but ALSO erases absolute-level anomaly
         cues, so a fault that manifests ONLY as an overall loudness change
         is invisible by construction -- the conservative choice, restated in
@@ -577,7 +574,7 @@ def iter_labeled_clips_wav_dir(
     # machine_id is the BARE leaf directory name: two physically distinct
     # machine dirs sharing an id_* name under different parents (e.g.
     # pump/id_00 and fan/id_00) would silently merge into one machine_id --
-    # and downstream, into one scarcity cell (P6 combined review, MEDIUM).
+    # and downstream, into one scarcity cell.
     # Refuse loudly instead of merging; point the caller at a machine-type
     # subdirectory root (the documented MIMII layout).
     by_name: dict[str, list[Path]] = {}

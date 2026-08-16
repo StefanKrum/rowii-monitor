@@ -5,14 +5,14 @@ for Step-2 mode-conditioned anomaly scoring.
 scoring side by shuffling whole 12-minute recording SEGMENTS (`PreparedRun.segment_ids`)
 rather than individual windows: a scorer calibrated on part of a segment and then scored
 on another part of the SAME segment would leak information across a boundary that,
-physically, sits inside one contiguous recording -- the design's leakage rule (spec §2:
-"calibration and scoring never share a 12-min recording segment").
+physically, sits inside one contiguous recording -- the design's leakage rule
+("calibration and scoring never share a 12-min recording segment").
 
 `build_references` then collapses one side's windows (typically calibration) into
 per-label normal reference matrices -- one reference matrix per label, plus a `pooled`
 (label-agnostic) reference spanning every drawn window regardless of label. `labels` is
-deliberately generic: the design's central mode-conditioning comparison (spec §2,
-`reference_labels: detected | gt`) calls this same function once with Step-1's DETECTED
+deliberately generic: the design's central mode-conditioning comparison
+(`reference_labels: detected | gt`) calls this same function once with Step-1's DETECTED
 cluster ids (run-time realism) and, for diagnostics only, once more with GT state names
 -- this module has no opinion on which, it only needs a `(W,)` array of int or str
 labels aligned with `features`' rows.

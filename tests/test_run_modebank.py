@@ -152,7 +152,7 @@ def test_run_modebank_writes_metrics_with_supervised_and_unsupervised_tags(
     # ari/accuracy's n_masked denominator above (module docstring's
     # raw/smoothed, masked/unmasked coexistence note).
     assert metrics["bank"]["n_valid"] == int(pt.valid_mask.sum())
-    # Mandatory addition (T2 finding 1): the field is ALWAYS present, empty when
+    # Mandatory addition: the field is ALWAYS present, empty when
     # every surviving member calibrated with enough data (this fixture's case).
     assert metrics["bank"]["low_confidence_modes"] == []
     assert (out / "confusion.csv").is_file()
@@ -169,12 +169,12 @@ def test_run_modebank_writes_metrics_with_supervised_and_unsupervised_tags(
 
 
 # ---------------------------------------------------------------------------
-# 2. _masked_ari drops BOTH unknown and transition (A1.5) -- plan's own RED test
+# 2. _masked_ari drops BOTH unknown and transition
 # ---------------------------------------------------------------------------
 
 
 def test_ari_mask_excludes_unknown_and_transition() -> None:
-    """The masked-ARI helper drops BOTH labels (A1.5), unlike eval.metrics.evaluate."""
+    """The masked-ARI helper drops BOTH labels, unlike eval.metrics.evaluate."""
     import run_modebank as rm
 
     gt = np.array(["turbine", "unknown", "transition", "pump", "pump"], dtype=object)
@@ -185,7 +185,7 @@ def test_ari_mask_excludes_unknown_and_transition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. --smooth = duration_filter ONLY (A1.3) -- plan's own RED test
+# 3. --smooth = duration_filter ONLY
 # ---------------------------------------------------------------------------
 
 
@@ -240,7 +240,7 @@ def test_low_confidence_modes_surfaced_in_metrics_and_warning(caplog) -> None:
 
 # ---------------------------------------------------------------------------
 # 5. Argument-shape guards (pure, no data touched -- parser.error/SystemExit,
-#    mirroring scripts/run_step2.py's cross-day-pooled A3.1/duplicate guards)
+#    mirroring scripts/run_step2.py's cross-day-pooled duplicate guards)
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +294,7 @@ def test_unknown_run_names_exit_2(tmp_path, monkeypatch, capsys) -> None:
 
 
 def test_day_group_overlap_between_fit_and_test_exits_2(tmp_path, monkeypatch, capsys) -> None:
-    """The A3.8-style day-group guard (plan Task 3 Binding note, duplicated from
+    """The day-group guard (duplicated from
     scripts/run_step2.py's `_run_day_groups`) fires on the REAL (unmocked)
     day-group computation this time -- fitA and testC share one calendar day."""
     import run_modebank as rm

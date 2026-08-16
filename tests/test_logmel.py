@@ -1,4 +1,4 @@
-"""LogmelFeaturizer unit tests (package-3 spec D3)."""
+"""LogmelFeaturizer unit tests."""
 from __future__ import annotations
 
 import numpy as np
@@ -55,7 +55,7 @@ class TestLogmelFeaturizer:
         fallback) must equal `feature_names()` after a real transform at that same
         geometry -- the cache/`_extract_stream_features` path calls it after
         transform, but nothing may depend on call order for the plant's own
-        geometry (orchestrator resolution 2)."""
+        geometry."""
         fresh_names = LogmelFeaturizer().feature_names()
 
         f = LogmelFeaturizer()

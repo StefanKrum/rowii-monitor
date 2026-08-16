@@ -1,7 +1,7 @@
-"""Tests for `scripts/apply_detector.py` (package-2 Task 9, D2 stretch): CLI-level
+"""Tests for `scripts/apply_detector.py`: CLI-level
 tests against a monkeypatched `discover`/`load_config`/`prepare_run` seam, feeding
 hand-built `PreparedRun`s directly -- no real ROWII data or synthetic gantner tree
-anywhere (orchestrator resolution 6: mirrors `tests/test_scarcity_cli.py`'s
+anywhere (mirrors `tests/test_scarcity_cli.py`'s
 established monkeypatch style, not `tests/test_step2_cli.py`'s synthetic-tree
 fixture).
 
@@ -34,7 +34,7 @@ _FIT_RUN = "fit-day"
 _APPLY_RUN = "apply-day"
 _FIT_T0_NS = 0
 _APPLY_T0_NS = 500_000_000_000
-"""Deliberately different from `_FIT_T0_NS` (orchestrator resolution 6: "give the
+"""Deliberately different from `_FIT_T0_NS` ("give the
 apply grid a different t0_ns to pin" that `segments.csv`'s UTC bounds come from the
 APPLY grid, not the fit grid)."""
 
@@ -47,7 +47,7 @@ sizing, which is already verified reliable in this exact codebase)."""
 
 
 # ---------------------------------------------------------------------------
-# Hand-built fixtures (no gantner tree -- orchestrator resolution 6)
+# Hand-built fixtures (no gantner tree)
 # ---------------------------------------------------------------------------
 
 
@@ -212,7 +212,7 @@ def test_segments_carry_fit_day_ids_and_apply_grid_utc_bounds_and_timeline_has_b
 
 
 # ---------------------------------------------------------------------------
-# 2. Fit day lacking SCADA -> every mapped_mode is "" (orchestrator resolution 2)
+# 2. Fit day lacking SCADA -> every mapped_mode is ""
 # ---------------------------------------------------------------------------
 
 
@@ -268,7 +268,7 @@ def test_unknown_run_name_exits_2_and_lists_available_runs(tmp_path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# audio-student variant (Step-2 package-5 spec D5): choices inclusion +
+# audio-student variant: choices inclusion +
 # _import_student_or_exit guard messages.
 # ---------------------------------------------------------------------------
 

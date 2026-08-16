@@ -1,10 +1,9 @@
-"""LoRA injection/merge tests (Step-2 package-5 spec D2, Task 1). CPU-forced,
+"""LoRA injection/merge tests. CPU-forced,
 eager-torch target module -- mirrors `tests/test_recon.py`'s
 `pytest.importorskip("torch")`-at-module-scope convention (this repo's core
 dependencies do not include torch; it is opt-in via the `[beats]` extra, and
-`rowii.adapt.lora` is declared an EAGER-torch module by the package-5 plan's
-Global Constraints, so there is no torch-free import path worth testing here,
-unlike `rowii.tfc.wrapper`).
+`rowii.adapt.lora` is declared an EAGER-torch module, so there is no
+torch-free import path worth testing here, unlike `rowii.tfc.wrapper`).
 """
 from __future__ import annotations
 
@@ -42,7 +41,7 @@ class _TinyAttnModel(torch.nn.Module):
 
 
 class _DecoyAttnModel(torch.nn.Module):
-    """Adversarial naming (Task-1 review): decoy parents whose names merely
+    """Adversarial naming: decoy parents whose names merely
     CONTAIN "self_attn" as a substring, each carrying a Linear child named
     `q_proj` -- only the REAL `self_attn`'s q_proj may be wrapped. The
     `self_attn_layer_norm` decoy name is not hypothetical: the vendored

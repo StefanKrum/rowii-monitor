@@ -13,26 +13,26 @@ cross-day-pooled` uses for its own (unsupervised) chain -- `rowii.state.detect.
 FittedDetector`'s cluster ids there, `ModeBank.assign`'s mode names here -- so the
 resulting `far_table.csv` is directly comparable, column-for-column
 (`_FAR_TABLE_COLUMNS`, duplicated from `scripts/run_step2.py`) and split-for-split
-(`_top_split`, BINDING split parity below), to that P7 chain's own
+(`_top_split`, BINDING split parity below), to that cross-day-pooled chain's own
 `far_table_frozen.csv`. GROUND TRUTH IS NEVER READ FOR THE TEST RUN: unlike
 `scripts/run_modebank.py` (which needs the test run's own GT to score bank
 accuracy/ARI), this probe's whole question is answered by an EXTERNAL comparison of
 two far_table.csv files -- SCADA is only ever loaded for `--fit-runs`, to train the
-bank in the first place (module docstring's deployment story, spec D1: "SCADA exists
-during the supervised commissioning window; ... the bank then runs LABEL-FREE ...
-GT is used for EVALUATION only" -- here there is no evaluation step at all, so no GT
-load on the held-out day).
+bank in the first place (`scripts/run_modebank.py`'s own deployment story: "SCADA
+exists during the supervised commissioning window; ... the bank then runs LABEL-FREE
+... GT is used for EVALUATION only" -- here there is no evaluation step at all, so no
+GT load on the held-out day).
 
-Split parity (BINDING, spec D1 + plan Task 4): `_top_split` reproduces
+Split parity (BINDING): `_top_split` reproduces
 `scripts/run_step2.py`'s cross-day-pooled top split
 (`split_by_segments(prepared_test.segment_ids, prepared_test.valid_mask,
 calibration_frac=0.5, seed=7)`, its `SweepConfig`'s own defaults) with two HARD-CODED
 literals rather than reading them off this script's own `SweepConfig` -- so the
-held-out day's scoring-window SET is byte-identical to the P7 chain's regardless of
-any future flag here that might otherwise perturb this script's own `SweepConfig`
-construction. Only the SCORING side of that split is used (frozen-threshold
-comparison only, spec D1's chain probe is not a recalibrate/frozen quad like D2 --
-plan Task 4's own Produces text names exactly one `far_table.csv`).
+held-out day's scoring-window SET is byte-identical to the cross-day-pooled chain's
+regardless of any future flag here that might otherwise perturb this script's own
+`SweepConfig` construction. Only the SCORING side of that split is used
+(frozen-threshold comparison only -- this chain probe is not a recalibrate/frozen
+quad like the cross-day-pooled protocol; it produces exactly one `far_table.csv`).
 
 Per-mode reference/threshold assembly (`_build_far_table`) mirrors
 `scripts/run_step2.py`'s `_cross_day_pooled_tables` dispatch (`rowii.anomaly.sweep`'s
@@ -46,7 +46,7 @@ rows gets an empty-scoring row; otherwise a real scored row. A trailing `"pooled
 aggregate row closes the table, identical convention to every other Step-2 FAR table
 in this project.
 
-Attribution (spec §4): per-mode model bank inspired by the partner's per-state
+Attribution: per-mode model bank inspired by the partner's per-state
 modeling; all numbers in this script are computed from OUR OWN caches -- no partner
 JSON/number is read anywhere in this module.
 """
@@ -94,19 +94,18 @@ from rowii.state.modebank import ModeBank  # noqa: E402
 logger = logging.getLogger(__name__)
 
 _VARIANT_CHOICES: tuple[str, ...] = ("fusion", "vibration", "audio-beats")
-"""Duplicated from `scripts/run_modebank.py`'s own tuple (D1's "Representations"
-bullet, spec §3.D1) -- script-sibling rule. The chain probe's OWN pinned binding
-(plan Task 4, spec D1) runs `fusion` only; the other two stay selectable for the
-pillar-3-adjacent reuse the same D1 section anticipates, exactly as
+"""Duplicated from `scripts/run_modebank.py`'s own tuple -- script-sibling rule.
+The chain probe's OWN pinned binding runs `fusion` only; the other two stay
+selectable for anticipated pillar-3-adjacent reuse, exactly as
 `run_modebank.py`'s three-representation rotation matrix does."""
 _FAMILY_CHOICES: tuple[str, ...] = ("gaussian", "knn", "gmm")
 """Duplicated from `rowii.state.modebank._FAMILIES` (never imported: private
 symbol, matches `run_modebank.py`'s own `_FAMILY_CHOICES` duplication rationale)."""
 _SCORER_CHOICES: tuple[str, ...] = ("knn",)
 """This CLI's `--scorer` choices -- narrower than `scripts/run_step2.py`'s full
-eight-scorer `_SCORER_CHOICES` by design: Task 4's own Consumes list names only
-`rowii.anomaly.scorers.KnnScorer` (the design spec's own D1(b) kNN scorer, the same
-default `scripts/run_step2.py --protocol cross-day-pooled` uses for its P7 chain),
+eight-scorer `_SCORER_CHOICES` by design: this chain probe only ever needs
+`rowii.anomaly.scorers.KnnScorer` (the same default `scripts/run_step2.py
+--protocol cross-day-pooled` uses for its own cross-day-pooled chain),
 so `_make_scorer` below implements exactly that one case. Kept as a real dispatch
 (not a hard-coded `KnnScorer()` call) so a future scorer only needs a new `elif`
 branch here plus a `_SCORER_CHOICES` entry, matching every other scorer-name
@@ -119,7 +118,7 @@ _FAR_TABLE_COLUMNS: tuple[str, ...] = (
 """Duplicated from `scripts/run_step2.py`'s own `_FAR_TABLE_COLUMNS` (script-sibling
 rule) -- matches `rowii.anomaly.sweep.SweepResult.far_table`'s documented column
 contract, so this script's `far_table.csv` is directly comparable, column-for-column,
-to the P7 chain's own `far_table_frozen.csv` (module docstring)."""
+to the cross-day-pooled chain's own `far_table_frozen.csv` (module docstring)."""
 
 _BEATS_INSTALL_HINT = (
     'install extra: pip install -e ".[beats]" and set ROWII_BEATS_CHECKPOINT'
@@ -133,13 +132,14 @@ needs."""
 _TOP_SEED = 7
 _TOP_FRAC = 0.5
 """The held-out test run's top calibration/scoring split -- BINDING split parity
-with `scripts/run_step2.py`'s cross-day-pooled protocol (module docstring, plan
-Task 4). That protocol's own `SweepConfig` construction (`SweepConfig(alpha=alpha,
+with `scripts/run_step2.py`'s cross-day-pooled protocol (module docstring).
+That protocol's own `SweepConfig` construction (`SweepConfig(alpha=alpha,
 top_k=top_k, scorer=scorer_name)`) never overrides `calibration_frac`/`seed`, so its
 effective top split is always `(0.5, 7)` -- the two literals here, rather than this
 script's own locally-constructed `SweepConfig`'s fields, so the held-out day's
-scoring-window SET stays byte-identical to the P7 chain's regardless of any future
-flag added to THIS script that might otherwise perturb its own `SweepConfig`.
+scoring-window SET stays byte-identical to the cross-day-pooled chain's regardless of
+any future flag added to THIS script that might otherwise perturb its own
+`SweepConfig`.
 Tripwire: `tests/test_run_modebank_chain.py::test_top_split_literals_match_sweepconfig_defaults`
 pins these two literals against `SweepConfig`'s own defaults, so a future default
 drift fails loudly there instead of silently rotting this parity claim."""
@@ -173,7 +173,7 @@ def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
 
 
 def _run_day_groups(run: Run) -> set[str]:
-    """The A3.8-style day groups of *run* -- duplicated VERBATIM from
+    """The day groups of *run* -- duplicated VERBATIM from
     `scripts/run_modebank.py`'s (originally `scripts/run_step2.py`'s) helper of the
     same name (script-sibling rule).
 
@@ -225,8 +225,8 @@ def _run_gt_states(
     (module docstring): the held-out `--test-run` never needs GT here -- the chain
     probe's whole question ("does better state assignment translate into better FAR
     control?") is answered by an EXTERNAL comparison against a separately-produced
-    P7 `far_table_frozen.csv`, not by this script scoring against the test run's own
-    ground truth.
+    cross-day-pooled `far_table_frozen.csv`, not by this script scoring against the
+    test run's own ground truth.
 
     Raises:
         ValueError: if *run*'s day has no Betriebsdaten coverage overlapping its
@@ -417,7 +417,7 @@ def _notes_markdown(
     scorer_name: str,
     bank: ModeBank,
 ) -> str:
-    """Pool composition + the spec's D1 attribution line (spec §4)."""
+    """Pool composition + the attribution line."""
     lines = [
         f"# Mode-bank Step-2 chain probe: {test_run} ({variant}-{family})",
         "",

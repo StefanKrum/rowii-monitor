@@ -8,8 +8,7 @@ merges every detected run shorter than that into a neighbour -- precisely the
 mechanism that removes Stefan's "1-second modes" at Step-1. This is Stefan's own
 data-grounding motivation (like `rotations-heatmap`/`pillar3-figure` in
 `scripts/analyze_days.py`), NOT a replicated partner analysis type -- no
-attribution line, and no partner numeric constant is asserted anywhere (A1.8
-firewall).
+attribution line, and no partner numeric constant is asserted anywhere.
 
 For ONE (fit pool, held-out test run, variant) rotation and each swept
 `min_dwell_s` value, this CLI:
@@ -18,11 +17,11 @@ For ONE (fit pool, held-out test run, variant) rotation and each swept
    refits the pooled DETECTOR arm (`FittedDetector.fit_pooled`) on the pool's
    own FIT side (`rowii.anomaly.pools.build_pool`), and reports Step-1
    `state_ari` on the held-out test run -- the SAME majority-mapped metric as
-   the P7 k-selection (`rowii.eval.metrics.evaluate(...).state_ari`), so
-   results read alongside the k-sweep. Detector arm ONLY: the mode bank
-   (`rowii.state.modebank.ModeBank`) is dwell-free by construction except
-   under its own `--smooth` flag (P8 A1.3: duration-filter only), which this
-   sweep never touches.
+   `scripts/run_step1.py`'s own `--k-sweep` (`rowii.eval.metrics.
+   evaluate(...).state_ari`), so results read alongside it. Detector arm
+   ONLY: the mode bank (`rowii.state.modebank.ModeBank`) is dwell-free by
+   construction except under its own `--smooth` flag (duration-filter only),
+   which this sweep never touches.
 2. Runs ONE Step-2 chain FAR spot-check per swept value (e.g. B1->290626-tu
    fusion recalibrate): a trimmed, RECALIBRATE-ONLY duplication of
    `scripts/run_step2.py::_cross_day_pooled_tables`'s recalibrate branch
@@ -34,11 +33,11 @@ For ONE (fit pool, held-out test run, variant) rotation and each swept
    choice in downstream FAR, not just Step-1 ARI.
 
 Neither `DetectConfig.min_dwell_s`'s default, nor `scripts/monitor.py`'s
-`near_transition` window `W` (which reuses the very SAME default, package-9
-D3(c)) or `--smooth`'s duration filter, is changed by this script -- the swept
+`near_transition` window `W` (which reuses the very SAME default) or
+`--smooth`'s duration filter, is changed by this script -- the swept
 values feed a REPORTED verdict only (`_min_dwell_verdict`), the transplantation
 from this sweep's own grounding to those OTHER call sites is a stated, NOT
-separately re-optimized, decision (spec A1.8). Output:
+separately re-optimized, decision. Output:
 `results/step2/min-dwell-sweep/<test_run>/<variant>.{csv,json}`.
 """
 from __future__ import annotations
@@ -189,8 +188,7 @@ def _pool_row_labels(pool: PoolResult, labels_per_run: dict[str, np.ndarray]) ->
 
 def _min_dwell_windows(min_dwell_s: float, window_s: float) -> int:
     """`max(1, round(min_dwell_s / window_s))` -- the exact `FittedDetector.
-    _finish` conversion, duplicated here for the sweep's own reporting/testing
-    (spec §3.D3(b))."""
+    _finish` conversion, duplicated here for the sweep's own reporting/testing."""
     return max(1, round(min_dwell_s / window_s))
 
 
@@ -215,12 +213,12 @@ def _sweep_state_ari(
     k: int,
     min_dwells: Sequence[float],
 ) -> dict[float, float]:
-    """D3b's core deliverable: per swept `min_dwell_s`, refit the pooled
+    """Per swept `min_dwell_s`, refit the pooled
     detector (`FittedDetector.fit_pooled`, `dataclasses.replace` on
     `Config.detect.min_dwell_s`) and report Step-1 `state_ari` on the held-out
     TEST run (`rowii.eval.metrics.evaluate(...).state_ari`, the SAME
-    majority-mapped metric as the P7 k-selection). Detector arm ONLY (module
-    docstring).
+    majority-mapped metric as `scripts/run_step1.py`'s own `--k-sweep`).
+    Detector arm ONLY (module docstring).
 
     Raises:
         RuntimeError: `FittedDetector.fit_pooled` could not assign every
@@ -356,10 +354,10 @@ def _sweep_table(
 def _min_dwell_verdict(ari_by_dwell: dict[float, float], current_default_s: float) -> str:
     """Plain-language verdict on whether this ONE rotation's `state_ari`
     argues for changing `DetectConfig.min_dwell_s`'s default -- reported
-    either way (spec §3.D3(b): "no DetectConfig default is changed unless the
+    either way ("no DetectConfig default is changed unless the
     data argues for it"). This script never changes the default itself; the
-    orchestrator's cross-rotation synthesis (plan Task 7) reads this verdict
-    across all six P7/P8 rotations before any change is considered."""
+    orchestrator's cross-rotation synthesis reads this verdict
+    across all six rotations before any change is considered."""
     finite = {d: v for d, v in ari_by_dwell.items() if np.isfinite(v)}
     if not finite:
         return "no finite state_ari value was computed at any swept min_dwell_s -- no verdict."
@@ -383,9 +381,8 @@ def _min_dwell_verdict(ari_by_dwell: dict[float, float], current_default_s: floa
 
 
 def _out_dir(results_root: Path, test_run: str) -> Path:
-    """`results/step2/min-dwell-sweep/<test_run>/` (plan's literal Task 4
-    layout) -- keyed by the HELD-OUT run, mirroring `scripts/run_modebank.py`'s
-    own `_out_dir` convention."""
+    """`results/step2/min-dwell-sweep/<test_run>/` -- keyed by the HELD-OUT run,
+    mirroring `scripts/run_modebank.py`'s own `_out_dir` convention."""
     return results_root / "step2" / "min-dwell-sweep" / test_run
 
 

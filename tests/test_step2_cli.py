@@ -1,4 +1,4 @@
-"""Smoke tests for `scripts/run_step2.py` (Step-2 Task S6): synthetic fixture tree, no
+"""Smoke tests for `scripts/run_step2.py`: synthetic fixture tree, no
 real ROWII data anywhere -- mirrors `tests/test_cli_smoke.py`'s established pattern for
 `scripts/run_step1.py`.
 
@@ -120,7 +120,7 @@ def _build_day_tree_too_sparse(day_dir: Path, *, day_label: str, t0_ns: int = _T
     them (>5% of windows invalid), reproducing the `RuntimeError`
     `rowii.pipeline.compute_validity_mask` raises for a real, genuinely-short
     "stray file" run that is still SCADA-covered and still discovered as one run (no
-    >15-min gap to split on) -- e.g. the real `010726-tu1-afternoon` run (Task S7,
+    >15-min gap to split on) -- e.g. the real `010726-tu1-afternoon` run (found
     2026-07-09), which crashed `--protocol cross-day`'s `_run_cross_day` before its
     `prepare_run` call was guarded, since that loop had no `try/except` at all around a
     call the module docstring already documents can raise for other reasons.
@@ -206,7 +206,7 @@ def test_run_step2_help_exits_zero(capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1b. audio-student variant (Step-2 package-5 spec D5): choices inclusion +
+# 1b. audio-student variant: choices inclusion +
 # _import_student_or_exit guard messages.
 # ---------------------------------------------------------------------------
 
@@ -221,7 +221,7 @@ def test_audio_student_is_a_variant_choice() -> None:
 
 
 def test_student_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
-    """Mirrors run_step2's own tfc-extra guard shape (package-5 spec D5): torch
+    """Mirrors run_step2's own tfc-extra guard shape: torch
     missing -> SystemExit naming the shared `[beats]` extra, checked BEFORE the
     checkpoint."""
     import builtins
@@ -517,7 +517,7 @@ def test_cross_day_skips_run_that_fails_to_prepare(tmp_path, monkeypatch, caplog
     """A SCADA-covered day whose `prepare_run` raises `RuntimeError` must be excluded
     from cross-day (every pair touching it skipped), while pairs between the OTHER,
     healthy days still get written -- reproduces the real `--protocol cross-day
-    --variant fusion --scorer knn` crash Task S7 (2026-07-09) hit against
+    --variant fusion --scorer knn` crash (2026-07-09) hit against
     `010726-tu1-afternoon` (a real, SCADA-covered, single-run "two stray files" day):
     before this fix, `_run_cross_day`'s `prepared_by_run` prewarm loop had no
     `try/except` around `prepare_run` at all, so ONE bad day crashed the entire
@@ -609,8 +609,7 @@ def test_per_state_far_table_and_scores_label_dtypes_merge_cleanly(tmp_path, mon
     preserves the ORIGINAL int64 dtype unchanged. Before this fix, `pd.merge(scores,
     far_table, on="label")` on the two re-loaded artifacts raised a `ValueError` for a
     label-dtype mismatch (pandas: "You are trying to merge on int64 and object/str
-    columns") even though both files describe exactly the same labels (S6 review
-    finding).
+    columns") even though both files describe exactly the same labels.
     """
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
@@ -664,8 +663,8 @@ def test_append_summary_row_recovers_from_unbalanced_quote(tmp_path, monkeypatch
     malformed CSV (e.g. an unbalanced quote from a partially flushed field) --
     `pd.read_csv` then raises `pandas.errors.ParserError`. Before this fix,
     `_append_summary_row` let that exception propagate uncaught, losing every prior
-    invocation's rows and crashing the CURRENT one on a shared, append-only artifact
-    (S6 review finding). The corrupt file must be quarantined, never deleted.
+    invocation's rows and crashing the CURRENT one on a shared, append-only artifact.
+    The corrupt file must be quarantined, never deleted.
     """
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     import run_step2
@@ -705,8 +704,7 @@ def test_append_summary_row_recovers_from_truncated_header(tmp_path, monkeypatch
     opposed to a data row) -- `pd.read_csv` then parses SILENTLY (no exception raised),
     just with the wrong, truncated set of columns, since pandas has nothing of its own
     to compare against. `_append_summary_row` must catch this via an explicit
-    columns-match check rather than relying on `pd.read_csv` to raise (S6 review
-    finding).
+    columns-match check rather than relying on `pd.read_csv` to raise.
     """
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     import run_step2
@@ -754,7 +752,7 @@ def test_append_candidate_register_repairs_truncated_header(tmp_path, monkeypatc
     header-once guard never notices and would silently append a new section onto a
     header-less/garbled file. `_append_candidate_register` must instead check whether
     the file actually STARTS WITH the header's first line, and repair (quarantine +
-    rewrite fresh) if not (S6 review finding).
+    rewrite fresh) if not.
     """
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     import run_step2
@@ -793,7 +791,7 @@ def test_append_candidate_register_repairs_truncated_header(tmp_path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# 9. cross-day-per-state protocol (Task 3, package-2 spec D2)
+# 9. cross-day-per-state protocol
 # ---------------------------------------------------------------------------
 
 
@@ -801,7 +799,7 @@ class TestCrossDayPerStateSweep:
     """Unit coverage of `run_step2._cross_day_per_state_sweep` directly, against
     hand-built `PreparedRun`s -- mirrors `tests/test_sweep.py`'s own `_prepared_run`
     fixture-construction style, since this sweep composes the same public row builders
-    `run_sweep` does (Task 3 Step 1's rename). The CLI-level guard test at the bottom
+    `run_sweep` does. The CLI-level guard test at the bottom
     goes through `run_step2.main` on this file's usual synthetic-tree fixtures instead,
     since it exercises argument parsing, not the sweep itself.
     """
@@ -872,15 +870,15 @@ class TestCrossDayPerStateSweep:
         real_rows = far[(far["label"] != "pooled") & (~far["excluded"])]
         counts = dict(zip(real_rows["label"], real_rows["n_scored"], strict=True))
         assert max(counts.values()) >= 2.5 * min(counts.values())
-        # Runtime-honest (spec D2): day B's predicted labels live in day A's own
+        # Runtime-honest: day B's predicted labels live in day A's own
         # cluster-id space (here {0, 1}, n_states=2) -- never a day-B-only concept.
         assert set(np.unique(labels_b[labels_b >= 0])) <= {0, 1}
 
     def test_gt_labels_mode_rejected(self, tmp_path, monkeypatch, capsys) -> None:
-        """CLI-level guard (spec D2: the transfer runtime path is detected-labels
+        """CLI-level guard (the transfer runtime path is detected-labels
         only) -- `--protocol cross-day-per-state` combined with `--labels gt` must be
         rejected before any run is ever prepared. `parser.error(...)` is the simplest,
-        clearest rejection (orchestrator resolution 2): argparse writes a usage message
+        clearest rejection: argparse writes a usage message
         to stderr and raises `SystemExit(2)`, the same exit-code contract this file's
         own `test_run_step2_help_exits_zero` already asserts for `--help` (exit 0).
         """
@@ -904,10 +902,10 @@ class TestCrossDayPerStateSweep:
 
 def test_cross_day_per_state_end_to_end_and_summary_backfill(tmp_path, monkeypatch) -> None:
     """CLI-level end-to-end run of `--protocol cross-day-per-state`, on the SAME
-    two-day synthetic tree `test_cross_day_pooled_matrix` uses (Task 3 Step 5): the
+    two-day synthetic tree `test_cross_day_pooled_matrix` uses: the
     usual three per-combo files plus the GT-diagnostic `far_by_true_state.csv` exist
     for both pair directions, `summary.csv` gains real `"cross-day-per-state"` rows,
-    AND a `summary.csv` already on disk in the OLD (pre-package-2, no `protocol`
+    AND a `summary.csv` already on disk in the OLD (pre-existing, no `protocol`
     column) schema is backfilled -- not quarantined -- when this run's own append
     reads it back (`_read_summary_csv_or_none`'s backfill path).
     """
@@ -917,7 +915,7 @@ def test_cross_day_per_state_end_to_end_and_summary_backfill(tmp_path, monkeypat
 
     import run_step2
 
-    # Pre-seed a legacy (pre-package-2) summary.csv: one within-day-shaped row (bare
+    # Pre-seed a legacy summary.csv: one within-day-shaped row (bare
     # run name) and one cross-day-shaped row (`"__to__"` pair encoding), so this run's
     # own append exercises BOTH branches of `_infer_legacy_protocol`.
     results_root = tmp_path / "results"
@@ -1012,7 +1010,7 @@ def test_cross_day_per_state_end_to_end_and_summary_backfill(tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# 10. --run scoping: comma lists + cross-day pair filtering (Task 3 follow-up)
+# 10. --run scoping: comma lists + cross-day pair filtering
 # ---------------------------------------------------------------------------
 
 
@@ -1150,7 +1148,7 @@ def test_within_day_run_list_processes_each_named_run(tmp_path, monkeypatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# 11. --score-fusion view (Task 5, spec D5)
+# 11. --score-fusion view
 # ---------------------------------------------------------------------------
 
 
@@ -1203,7 +1201,7 @@ def test_score_fusion_view_end_to_end(tmp_path, monkeypatch) -> None:
 def test_score_fusion_requires_within_day_and_fusion_variant(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    """CLI-level guard (orchestrator resolution 4): `--score-fusion` combined with a
+    """CLI-level guard: `--score-fusion` combined with a
     non-`fusion` variant or a non-`within-day` protocol must be rejected before any
     run is ever prepared -- mirrors `test_gt_labels_mode_rejected`'s own
     `parser.error(...)` precedent for `--protocol cross-day-per-state --labels gt`."""
@@ -1216,8 +1214,8 @@ def test_score_fusion_requires_within_day_and_fusion_variant(
     with pytest.raises(SystemExit) as exc_info:
         run_step2.main(["--score-fusion", "--variant", "audio"])
     assert exc_info.value.code == 2
-    # Specific enough to only match main()'s own semantic parser.error (orchestrator
-    # resolution 4), not argparse's generic "unrecognized arguments" rejection.
+    # Specific enough to only match main()'s own semantic parser.error, not
+    # argparse's generic "unrecognized arguments" rejection.
     assert "requires --protocol within-day and --variant fusion" in capsys.readouterr().err
 
     with pytest.raises(SystemExit) as exc_info2:
@@ -1229,7 +1227,7 @@ def test_score_fusion_requires_within_day_and_fusion_variant(
 
 
 # ---------------------------------------------------------------------------
-# 12. --states K conditioning-granularity flag (within-day, package-3 Task 6)
+# 12. --states K conditioning-granularity flag (within-day)
 # ---------------------------------------------------------------------------
 
 
@@ -1355,8 +1353,8 @@ def test_states_flag_passes_k_to_fitted_detector_fit(tmp_path, monkeypatch) -> N
 
 def test_states_default_produces_unsuffixed_dir(tmp_path, monkeypatch) -> None:
     """No `--states` (the default, `None` -> `cfg.detect.n_states`) must reproduce the
-    pre-Task-6 unsuffixed out-dir and summary `variant` string byte-for-byte -- the
-    binding byte-compatibility requirement (package-3 Task 6 brief)."""
+    pre-existing unsuffixed out-dir and summary `variant` string byte-for-byte -- the
+    binding byte-compatibility requirement."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     _build_one_day_root(tmp_path / "data")
@@ -1385,12 +1383,12 @@ def test_states_register_sections_disambiguate_k(tmp_path, monkeypatch) -> None:
     """Two invocations of the SAME (run, variant, labels, conditioning, scorer) combo
     at different conditioning granularities (default K, then `--states 3`) must append
     DISTINCT section headers to the append-only candidate register -- otherwise a
-    granularity sweep (T7: K=4/8/12 on one run/variant) produces colliding,
-    indistinguishable sections in the human-facing review artifact (coordinator
-    resolution to Task 6 concern 2). The section identity carries the same `-k<K>`
+    granularity sweep (K=4/8/12 on one run/variant) produces colliding,
+    indistinguishable sections in the human-facing review artifact. The section
+    identity carries the same `-k<K>`
     suffix convention as the combo out-dir (`_within_day_out_dir`), applied to its
     `<variant>-<labels>` part, and ONLY when `--states` is given -- a default run's
-    header stays byte-compatible with the pre-Task-6 register."""
+    header stays byte-compatible with the pre-existing register."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     _build_one_day_root(tmp_path / "data")
@@ -1416,8 +1414,8 @@ def test_states_register_sections_disambiguate_k(tmp_path, monkeypatch) -> None:
 def test_states_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None:
     """`--states` conditions the DETECTED-labels detector only -- a gt-labels sweep
     never fits a detector at all, so combining `--states` with `--labels gt` would be
-    a silent no-op inviting misread results (coordinator resolution to Task 6 concern
-    4); rejected up front instead, same `parser.error` pattern as the flag's other two
+    a silent no-op inviting misread results; rejected up front instead, same
+    `parser.error` pattern as the flag's other two
     guards."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
@@ -1435,7 +1433,7 @@ def test_states_with_gt_labels_rejected(tmp_path, monkeypatch, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. --ensemble majority-vote view (Task 4, design chapter's committed ensemble:
+# 13. --ensemble majority-vote view (design chapter's committed ensemble:
 # OC-SVM + Isolation Forest + LSTM-AE, decision-level majority vote)
 # ---------------------------------------------------------------------------
 
@@ -1766,8 +1764,7 @@ def test_ensemble_deciding_pair_includes_lstmae_vote(monkeypatch) -> None:
     empty -> 0 == expected) and the two-member-agreement test (ocsvm/iforest ARE its
     agreeing pair -> their AND == expected) above both fail to distinguish from the
     real >= 2-of-3 rule -- verified by applying that exact mutant in scratch: the two
-    prior tests pass under it, this one fails (0 != len(shared)); see the task-4
-    report's follow-up section for the captured run."""
+    prior tests pass under it, this one fails (0 != len(shared))."""
     import run_step2
 
     prepared_variant, prepared_logmel, labels = _make_ensemble_prepared_pair()
@@ -1996,7 +1993,7 @@ def test_ensemble_sub_window_grid_offset_tolerated_and_documented(
 
 
 # ---------------------------------------------------------------------------
-# --xattn-fusion view (package-5 Task 6, spec D8)
+# --xattn-fusion view
 # ---------------------------------------------------------------------------
 
 

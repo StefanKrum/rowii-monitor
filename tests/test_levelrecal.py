@@ -1,5 +1,5 @@
-"""Tests for `rowii.anomaly.levelrecal` (Package-8 D2 core, spec §3.D2 +
-A1.1/A1.4/A1.9): level vs shape column selection (the verified log10 fact from
+"""Tests for `rowii.anomaly.levelrecal`: level vs shape column selection
+(the verified log10 fact from
 `rowii.signals.features`), offset golden math (offset = run - reference,
 `apply_level_recal` subtracts it to recentre the run onto the reference), shape
 columns untouched, and the empty-level-set guard (embedding/fusion variants).
@@ -99,7 +99,7 @@ def test_fusion_style_names_are_matched_by_level_columns() -> None:
 def test_beats_embedding_names_raise_the_empty_set_guard() -> None:
     """Real `BeatsFeaturizer.feature_names()` output (`rowii.signals.beats`) --
     unlike fusion (previous test), an embedding variant's names carry no level
-    token at all, so this IS the empty-set guard's actual refusal case (A1.9)."""
+    token at all, so this IS the empty-set guard's actual refusal case."""
     embedding_names = ["beats_0", "beats_1"]
     assert level_columns(embedding_names) == []
     with pytest.raises(ValueError, match="no level column"):

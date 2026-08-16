@@ -16,14 +16,14 @@ def test_defaults_without_env() -> None:
 
 
 def test_gt_rules_speed_nominal_rpm_matches_measured_plateau() -> None:
-    # Task 13b (2026-06-25 real data): Task 13 measured the plateau off the WRONG
+    # 2026-06-25 real data: an earlier pass measured the plateau off the WRONG
     # channel ("1_Drehzahl_Ist", ~101 rpm) -- that channel is a percent-of-nominal-ish
     # quantity, not rpm. GT_CHANNELS["speed"] now points at "1_Drehzahl UPM" (the
     # genuine rpm channel; confirmed ~3.75x "1_Drehzahl_Ist" on the same file), whose
     # measured plateau during full-power turbine generation (05:00 Betriebsdaten hour,
     # median while power > 50 MW) is 378.832 rpm -- almost exactly the pre-delivery
-    # "8-pole 50 Hz machine" 375 rpm hypothesis Task 13 had discarded. Pinned here so a
-    # future edit cannot silently regress this to an unverified value again.
+    # "8-pole 50 Hz machine" 375 rpm hypothesis that earlier pass had discarded. Pinned
+    # here so a future edit cannot silently regress this to an unverified value again.
     cfg = load_config(env={})
     assert cfg.gt.speed_nominal_rpm == 378.832
 
@@ -35,7 +35,7 @@ def test_env_overrides() -> None:
 
 
 def test_tfc_checkpoint_env_overrides() -> None:
-    # Mirrors beats_checkpoint's own env-driven pattern exactly (package-4 spec D4):
+    # Mirrors beats_checkpoint's own env-driven pattern exactly:
     # two independent checkpoints (audio vs vibration branch), each its own env var.
     cfg = load_config(
         env={
@@ -59,8 +59,8 @@ def test_tfc_checkpoint_env_overrides_independently() -> None:
 
 
 def test_student_checkpoint_env_override() -> None:
-    # Mirrors beats_checkpoint's own single-field env-driven pattern (package-5
-    # spec D5): unlike TF-C, the student has only ONE (audio-only) checkpoint.
+    # Mirrors beats_checkpoint's own single-field env-driven pattern:
+    # unlike TF-C, the student has only ONE (audio-only) checkpoint.
     cfg = load_config(
         env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_STUDENT_CHECKPOINT": "/tmp/student.pt"}
     )
@@ -68,8 +68,8 @@ def test_student_checkpoint_env_override() -> None:
 
 
 def test_beats_int8_checkpoint_env_override() -> None:
-    # Mirrors student_checkpoint's own single-field env-driven pattern (package-5
-    # spec D6): the INT8-quantized BEATs module pickle (scripts/quantize_beats.py's
+    # Mirrors student_checkpoint's own single-field env-driven pattern:
+    # the INT8-quantized BEATs module pickle (scripts/quantize_beats.py's
     # output), independent of beats_checkpoint (the fp32 source it was quantized
     # FROM -- both may be set together, see
     # test_beats_int8_checkpoint_env_overrides_independently_of_beats_checkpoint below).

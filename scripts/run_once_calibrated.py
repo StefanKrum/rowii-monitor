@@ -1,4 +1,4 @@
-"""D1 replay driver -- "calibrate once, recalibrate only on a label-free drift
+"""Replay driver -- "calibrate once, recalibrate only on a label-free drift
 sentinel".
 
 **Framing (binding honesty).** A retrospective, day-granular SIMULATION
@@ -173,31 +173,31 @@ _REPRESENTATION_CHOICES: tuple[str, ...] = ("fusion", "vibration", "audio-beats"
 _B1_FIT_RUNS: tuple[str, ...] = (
     "010726-pu", "010726-tu1-morning", "010726-tu2", "010726-tu_ph_tu",
 )
-"""The commissioning pool (era B, the P7 pool-B1) -- Task 7's orchestrator
-command always passes exactly this comma-separated set via `--bank-fit-runs`;
+"""The commissioning pool (era B) -- always passed exactly as this
+comma-separated set via `--bank-fit-runs`;
 kept here as a documented constant (not itself enforced -- `--bank-fit-runs`
 stays a real CLI argument, matching every other pooled driver in this repo)."""
 
 _MIC_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0", "RAWTurbineMic__1")
 """s2's microphone stream pair -- duplicated from `scripts/analyze_days.py`'s
 own module constant of the same name (script-sibling rule): the era-step
-signature stream set (P8 D3)."""
+signature stream set."""
 _VIB_CROSSCHECK_STREAMS: tuple[str, ...] = ("RAWGeneratorVib__2",)
-"""s2's vibration cross-check stream -- **RAWGeneratorVib__2 ONLY** (A1.8):
+"""s2's vibration cross-check stream -- **RAWGeneratorVib__2 ONLY**:
 `RAWTurbineVib__3` reads std ~ 0 through 2026-07-01 (cabled only between eras B
-and C, README package-8 D4), so it is excluded here rather than averaged in
+and C, per the README), so it is excluded here rather than averaged in
 alongside a genuinely live channel."""
 
 _BANK_FAMILY: Literal["gaussian", "knn", "gmm"] = "knn"
-"""s1's canonical bank family, PINNED (not a CLI flag, mirroring the plan's own
-CLI signature): README package-8 D1's six-rotation table shows audio-beats bank
+"""s1's canonical bank family, PINNED (not a CLI flag): the README's
+six-rotation table shows audio-beats bank
 `knn` as the best of the three families (mean ARI 0.882 vs gaussian 0.476 /
-gmm 0.746), and it is the SAME family the era-C zero-shot readout the spec's D1
-honesty rule 5 cites (README: "Era-C zero-shot mode-ID readout (A1.7,
-audio-beats): knn accuracy 0.918 ... with a 19.5% no_mode_fits rate") was built
+gmm 0.746), and it is the SAME family the era-C zero-shot readout cites
+(README: "Era-C zero-shot mode-ID readout
+(audio-beats): knn accuracy 0.918 ... with a 19.5% no_mode_fits rate") was built
 with."""
 _BANK_MIN_REF = 20
-"""`ModeBank.fit`'s own default fit-side reference floor (spec A1.5 default) --
+"""`ModeBank.fit`'s own default fit-side reference floor --
 pinned here rather than exposed, matching `_BANK_FAMILY`."""
 _BANK_K = 5
 """`ModeBank.fit`'s `knn` family neighbour count -- its own default, matching
@@ -205,8 +205,8 @@ _BANK_K = 5
 
 _S1_BOOTSTRAP_PCT = 97.5
 """`rowii.anomaly.sentinels.s1_threshold`'s own internal bootstrap percentile
-(A1.1 pin) -- NOT one of `s1_threshold`'s parameters (the percentile is a
-fixed, named standard-statistics constant per A1.1, not a caller-configurable
+-- NOT one of `s1_threshold`'s parameters (the percentile is a
+fixed, named standard-statistics constant, not a caller-configurable
 knob, so it cannot be "passed" to `s1_threshold`); kept here ONLY so the
 sidecar can echo the exact value `s1_threshold` uses internally, making the
 bootstrap derivation fully self-documenting without a reader having to
@@ -234,7 +234,7 @@ _TAG_IN_SAMPLE = "in-sample"
 _TAG_EVENT_FREE_FAR = "event-free-far"
 
 _FAR_BASIS_COMMON_WINDOW = "common-window"
-"""`far_basis` value for a NON-event `_REPLAY` entry (A1.6): the frozen arm's
+"""`far_basis` value for a NON-event `_REPLAY` entry: the frozen arm's
 FAR is subset onto the recalibrate arm's own scoring-split window population
 (`_far_on_windows`/`_scoring_windows`) before the two are compared."""
 _FAR_BASIS_EVENT_FREE = "event-free per eval_events"
@@ -247,7 +247,7 @@ correct event-free reading is `scripts/eval_events.py`'s own
 non-event scored windows only), sourced here for ALL THREE regime arms."""
 
 _PILLAR3_ST_RUN = "080726-st_strikes"
-"""era C's standstill strike session -- NOT a `_REPLAY` entry (A1.2: "for the
+"""era C's standstill strike session -- NOT a `_REPLAY` entry ("for the
 event-retention check ONLY"); monitored separately, below, under the SAME
 era-C once+triggered decision `080726-pu_strikes` already established (module
 docstring's Pillar-3 section)."""
@@ -262,7 +262,7 @@ class _ReplayEntry:
     day: str
     """Calendar day-root string (e.g. `"250526"`), for grouping/reporting only."""
     era: str
-    """`"A"` / `"B"` / `"C"` -- the DAQ-configuration era (spec D1)."""
+    """`"A"` / `"B"` / `"C"` -- the DAQ-configuration era."""
     run: str
     """The discovered run name monitor.py/the sentinels are evaluated against."""
     tags: tuple[str, ...]
@@ -288,10 +288,10 @@ _REPLAY: tuple[_ReplayEntry, ...] = (
         tags=(_TAG_EVENT_FREE_FAR,), events_csv=_EVENTS_PU,
     ),
 )
-"""The pinned replay set, in true chronological order (A1.2/A1.8): 250526 (era
+"""The pinned replay set, in true chronological order: 250526 (era
 A) -> 270626 (era A, sentinel-only, its true position between 250526 and
 290626) -> 290626 (era B) -> 010726 (era B, in-sample) -> 080726 (era C,
-event-free FAR). `250526-pu-afternoon` is deliberately absent (A1.2: only its
+event-free FAR). `250526-pu-afternoon` is deliberately absent (only its
 fusion cache exists on disk)."""
 
 
@@ -332,7 +332,7 @@ def _run_gt_states(
     """Duplicated from `scripts/run_modebank.py`'s helper of the same name: the
     full-length `(W,)` object array of GT state strings for *run*. Needed ONLY
     for `--bank-fit-runs` (s1's commissioning bank needs SCADA-labelled fit AND
-    conformal sides, spec D1) -- no `_REPLAY` entry ever calls this, since every
+    conformal sides) -- no `_REPLAY` entry ever calls this, since every
     sentinel/FAR evaluation on a monitored day is label-free by construction.
 
     Raises:
@@ -402,7 +402,7 @@ def _pool_block_ids(pool: PoolResult, prepared: dict[str, PreparedRun]) -> np.nd
     one block per (run, burst file), never conflated across runs. No existing
     caller in this repo pools multiple runs' `segment_ids` into one block
     statistic (`scripts/analyze_days.py::_block_bootstrap_ci` is single-run by
-    construction) -- this is D1's own, new requirement.
+    construction) -- this is a new requirement.
     """
     local = np.empty(pool.features.shape[0], dtype=np.int64)
     for member_idx, member in enumerate(pool.members):
@@ -414,7 +414,7 @@ def _pool_block_ids(pool: PoolResult, prepared: dict[str, PreparedRun]) -> np.nd
 
 
 # ---------------------------------------------------------------------------
-# Sentinel commissioning (B1 CONFORMAL side ONLY, A1.1) + per-day evaluation
+# Sentinel commissioning (B1 CONFORMAL side ONLY) + per-day evaluation
 # ---------------------------------------------------------------------------
 
 
@@ -436,7 +436,7 @@ def _commission_s1(
     sweep_cfg: SweepConfig,
 ) -> _S1Commission:
     """Fit the audio-beats bank on `--bank-fit-runs`' FIT side and derive s1's
-    firing threshold from its own CONFORMAL side (A1.1) -- mirrors
+    firing threshold from its own CONFORMAL side -- mirrors
     `scripts/run_modebank.py::main`'s own fit/conformal pooling recipe exactly.
 
     Raises:
@@ -492,9 +492,9 @@ def _commission_s2(
     *,
     sweep_cfg: SweepConfig,
 ) -> _S2Commission:
-    """B1 CONFORMAL-side (A1.1, same held-out side as s1) anchor/MAD band for
+    """B1 CONFORMAL-side (same held-out side as s1) anchor/MAD band for
     ONE stream set -- called once for the mic pair and once (separately) for
-    the `RAWGeneratorVib__2` cross-check (A1.8), each on its OWN raw
+    the `RAWGeneratorVib__2` cross-check, each on its OWN raw
     audio/vibration `prepared_fit` (never a representation's own columns).
 
     Raises:
@@ -541,7 +541,7 @@ def _day_s1_rate(bank: ModeBank, prepared: PreparedRun) -> float:
 
 def _day_s2_median(prepared: PreparedRun, streams: tuple[str, ...]) -> float:
     """One monitored day's raw mic/vibration level MEDIAN (VALID windows only,
-    `level_series` averaged per window then medianed across windows, spec D1).
+    `level_series` averaged per window then medianed across windows).
     `level_series` looks up columns BY NAME against *prepared*'s own
     `feature_names` (never the B1 pool's), so channel-availability drift
     between the commissioning pool and a monitored day never misaligns this
@@ -563,7 +563,7 @@ def _day_s2_median(prepared: PreparedRun, streams: tuple[str, ...]) -> float:
 
 def _read_realized_far(alarms_path: Path) -> float:
     """The realized aggregate FAR over `role == "scored"` windows of one
-    monitor.py `alarms.parquet` -- the FULL-population reading (A1.6's labeled
+    monitor.py `alarms.parquet` -- the FULL-population reading (the labeled
     secondary column for the frozen arm; the primary reading for every other
     arm, which IS its own common population by construction)."""
     df = pd.read_parquet(alarms_path)
@@ -573,7 +573,7 @@ def _read_realized_far(alarms_path: Path) -> float:
 
 def _scoring_windows(alarms_path: Path) -> np.ndarray:
     """The `window` ids of every `role == "scored"` row of one `alarms.parquet`
-    -- the recalibrate arm's own scoring-split population, the A1.6 common
+    -- the recalibrate arm's own scoring-split population, the common
     population every OTHER arm's FAR is subset onto for the headline table."""
     df = pd.read_parquet(alarms_path)
     return np.asarray(df.loc[df["role"] == ROLE_SCORED, "window"].to_numpy())
@@ -581,7 +581,7 @@ def _scoring_windows(alarms_path: Path) -> np.ndarray:
 
 def _far_on_windows(alarms_path: Path, window_set: np.ndarray) -> float:
     """The realized FAR of one `alarms.parquet`, restricted to `role ==
-    "scored"` rows whose `window` id is in *window_set* (A1.6: comparing the
+    "scored"` rows whose `window` id is in *window_set* (comparing the
     frozen arm's FAR against the recalibrate arm's on the SAME window
     population, since the two arms otherwise score different-sized/composed
     scoring sides by construction)."""
@@ -593,16 +593,15 @@ def _far_on_windows(alarms_path: Path, window_set: np.ndarray) -> float:
 
 def _trigger_verdict(*, s1_fired: bool, s2_fired: bool) -> bool:
     """The day-level once+triggered decision: recalibrate iff EITHER sentinel
-    fired (spec D1: "the SAME day-level trigger verdict (s1 or s2) gates the
+    fired ("the SAME day-level trigger verdict (s1 or s2) gates the
     frozen/recalibrate choice for all three FAR arms")."""
     return bool(s1_fired or s2_fired)
 
 
 def _regime_far(frozen_far: float, recal_far: float, *, triggered: bool) -> float:
     """The once+triggered regime's FAR for one day: the recalibrate FAR if
-    triggered, else the frozen FAR -- PER DAY, deliberately NOT sticky (spec
-    D1/plan self-review resolved ambiguity 4: no persistent recalibrated-
-    baseline state machine, spec §2 out-of-scope)."""
+    triggered, else the frozen FAR -- PER DAY, deliberately NOT sticky (no
+    persistent recalibrated-baseline state machine -- out-of-scope)."""
     return recal_far if triggered else frozen_far
 
 
@@ -626,7 +625,7 @@ def _trigger_log_row(
     `rowii.anomaly.sentinels.s1_fires`/`s2_fires` predicates the driver uses
     everywhere else (never re-implemented ad hoc here). NEVER carries a `"far"`
     key -- FAR fields are merged in by the caller for every entry EXCEPT
-    sentinel-only days (`_TAG_SENTINEL_ONLY`, A1.2: no Betriebsdaten -> no
+    sentinel-only days (`_TAG_SENTINEL_ONLY`: no Betriebsdaten -> no
     FAR/GT row), so this function's own output is identical either way and the
     "no far row" property holds by construction, not by a branch inside this
     function."""
@@ -652,7 +651,7 @@ def _trigger_log_row(
 
 # ---------------------------------------------------------------------------
 # Subprocess seams (script-sibling rule: monitor.py/eval_events.py run as REAL
-# subprocesses, never imported -- monkeypatched in tests, spec §5).
+# subprocesses, never imported -- monkeypatched in tests).
 # ---------------------------------------------------------------------------
 
 
@@ -670,7 +669,7 @@ def _run_monitor(
     `mode == "recalibrate"` (frozen mode ignores `--alpha` with a warning, so
     this driver never triggers that warning). `event_free`, when given, is
     passed as `--exclude-calibration-events` regardless of mode -- harmless
-    (frozen mode also only warns on it) and keeps the P7 pillar-3 rule applied
+    (frozen mode also only warns on it) and keeps the pillar-3 rule applied
     uniformly for the one induced-event day (module docstring).
     """
     cmd = [
@@ -745,7 +744,7 @@ def _out_dir(results_root: Path, representation: str) -> Path:
 
 def _era_triggered(trigger_log: list[dict[str, object]], era: str) -> bool:
     """`True` iff ANY `_REPLAY` entry of *era* triggered a recalibrate decision
-    -- the "is the era boundary caught" readout (spec D1)."""
+    -- the "is the era boundary caught" readout."""
     return any(
         row["era"] == era and row["decision"] == "recalibrate" for row in trigger_log
     )
@@ -946,7 +945,7 @@ def main(argv: list[str] | None = None) -> int:
         trigger_log.append(row)
 
         if _TAG_SENTINEL_ONLY in entry.tags:
-            continue  # A1.2: no Betriebsdaten -> no monitor.py/FAR row
+            continue  # no Betriebsdaten -> no monitor.py/FAR row
 
         run_out = out_dir / "monitor" / entry.run
         try:

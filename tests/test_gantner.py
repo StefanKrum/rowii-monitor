@@ -98,7 +98,7 @@ def test_filler_bytes_between_tokens_are_skipped(tmp_path) -> None:
 
 
 def test_real_channel_record_gap_pattern_does_not_shadow_the_uuid_token(tmp_path) -> None:
-    # Task 13 real-data finding (Betriebsdaten 2026-06-25_05-00-00.dat and TU vib files):
+    # Real-data finding (Betriebsdaten 2026-06-25_05-00-00.dat and TU vib files):
     # every real channel record has FIXED gap bytes between name-end and unit-start
     # (`00 00 08 00 08 00 02 00`) and between unit-end and the uuid's own length prefix
     # (`2b 00 02 00`). The second gap's tail happens to overlap the uuid length-prefix's own

@@ -7,8 +7,8 @@ exchangeable normal data, `P(score > threshold) <= alpha`, and, when scores are 
 surely distinct (continuous score distribution), `P(score > threshold) >= alpha -
 1/(n + 1)` -- so the realised false-alarm rate is pinned within `1/(n + 1)` of the
 nominal target `alpha` (Angelopoulos & Bates 2022, "A Gentle Introduction to Conformal
-Prediction and Distribution-Free Uncertainty Quantification", arXiv:2107.07511; design
-§3.5). With `n` calibration scores sorted ascending `s_(1) <= ... <= s_(n)`, the
+Prediction and Distribution-Free Uncertainty Quantification", arXiv:2107.07511).
+With `n` calibration scores sorted ascending `s_(1) <= ... <= s_(n)`, the
 threshold is the `idx`-th smallest, `idx = ceil((n + 1) * (1 - alpha))` (1-based). That
 order statistic exists only while `idx <= n`, equivalently `n >= 1/alpha - 1`
 (`ConformalThreshold.achievable_alpha_floor`, `1 / (n + 1)`, is the smallest alpha ANY
@@ -24,7 +24,7 @@ the same calibration set: `p_i = (1 + #{j : calibration_scores[j] >= scores[i]})
 counts toward the `>=` set, the conservative direction). These p-values are
 super-uniform under the same exchangeability assumption -- `P(p <= t) <= t` for every
 `t` in `[0, 1]` -- so `p_values` is designed to double as the ranking key for Step-2's
-outlier sweep (spec §2 candidate register, Task S5): smaller p-value = more anomalous,
+outlier sweep's candidate register: smaller p-value = more anomalous,
 comparable across scorers and modes.
 """
 from __future__ import annotations

@@ -47,7 +47,7 @@ per-label row it emits already shares one scorer/threshold, so a further roll-up
 be redundant, per the dispatch's "+ one 'pooled' row WHEN per-state" wording).
 
 IMPORTANT deviation from the dispatch's own worked intuition for the conditioning-
-comparison test: the dispatch's test item 3 describes "label B with 10x feature
+comparison test: the dispatch's test describes "label B with 10x feature
 scale: pooled FAR for tight label A inflates". Verified both theoretically and
 empirically (scratch script, not committed) that this direction is backwards. Split
 conformal's guarantee is scorer-agnostic as long as a label's threshold is calibrated on
@@ -156,7 +156,7 @@ class FarRow:
     any row contributes a NaN there regardless, so this changes nothing about the final
     DataFrame's dtype.
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
     """
 
@@ -194,8 +194,7 @@ def _validate_labels(labels: np.ndarray) -> None:
     """`labels` must be an integer dtype (detected cluster ids) or a string/object-of-str
     dtype (GT state names) -- `rowii.anomaly.references.build_references` trusts this
     without checking (module docstring: "labels is deliberately generic"), so `run_sweep`,
-    as the layer that accepts raw labels from a caller, validates it explicitly (S2
-    review follow-up).
+    as the layer that accepts raw labels from a caller, validates it explicitly.
 
     Raises:
         ValueError: if `labels.dtype` is neither integer nor string/object-of-str.
@@ -223,7 +222,7 @@ def _make_scorer(name: str) -> Scorer:
     lr=1e-3, batch_size=256, seed=7)`, `LstmAeScorer(hidden=64, epochs=100,
     lr=1e-3, batch_size=128, seed=7, n_mels=64)`, `ConvAeScorer(channels=(16, 32),
     epochs=100, lr=1e-3, batch_size=128, seed=7, n_mels=64)` -- the three
-    reconstruction baselines added by package 3 Task 3, same design spec, D2).
+    reconstruction-AE baselines).
 
     Raises:
         ValueError: if `name` is none of `"knn"`, `"mahalanobis"`, `"ocsvm"`,
@@ -289,7 +288,7 @@ def far_row_excluded(label: int | str, cfg: SweepConfig) -> FarRow:
     calibration exists for this label at all" is unambiguously the maximally
     not-confident case, keeping the column clean `bool` throughout.
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
     """
     return FarRow(
@@ -316,7 +315,7 @@ def far_row_no_conformal_data(label: int | str, cfg: SweepConfig) -> FarRow:
     all of them land on the fit side. `excluded=False` since `min_ref` was not the
     reason (a real reference DOES exist -- just nothing to calibrate a threshold with).
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
     """
     row = far_row_excluded(label, cfg)
@@ -333,7 +332,7 @@ def far_row_empty_scoring(
     NaN far (no crash)"). Every other field reports the real, successfully-calibrated
     threshold (informative on its own, even with nothing yet scored against it).
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
     """
     return FarRow(
@@ -360,7 +359,7 @@ def far_row_scored(
     """A label with a real reference, threshold, and >= 1 scored window --
     `realized_far = n_alarms / n_scored` per the dispatch's literal formula.
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
     """
     return FarRow(
@@ -394,8 +393,8 @@ def far_row_aggregate(rows: list[FarRow], cfg: SweepConfig) -> FarRow:
     `rows` must be exactly the per-label rows accumulated so far by THIS caller's own
     sweep (never including a previously-appended aggregate row itself) -- `run_sweep`
     calls this with its own `far_rows` list before appending this function's return
-    value onto it; `scripts/run_step2.py`'s cross-day-per-state protocol (public since
-    package 2) follows the identical calling convention.
+    value onto it; `scripts/run_step2.py`'s cross-day-per-state protocol (public)
+    follows the identical calling convention.
     """
     contributing = [r for r in rows if not math.isnan(r.n_scored)]
     total_scored = sum(int(r.n_scored) for r in contributing)
@@ -427,7 +426,7 @@ def scores_and_candidates(
     """Every scored window's `_ScoreRow`, plus the `min(top_k, len(windows))`
     lowest-p-value windows' `_CandidateRow`s (rank 1-based ascending).
 
-    Public since package 2: `scripts/run_step2.py`'s cross-day-per-state protocol
+    Public: `scripts/run_step2.py`'s cross-day-per-state protocol
     builds the same rows.
 
     Tie-break order: p-value ascending, then SCORE DESCENDING, then window ascending

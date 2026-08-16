@@ -59,7 +59,7 @@ keeps the residual sub-window offset as a warning. `SystemExit(2)` remains
 for a `window_ns` mismatch or grids with NO overlapping windows at all --
 either signals a structural inconsistency distillation cannot paper over.
 
-## Leakage rule (spec D3, reused here)
+## Leakage rule (reused here)
 
 Distillation trains on calibration-side windows ONLY: `rowii.anomaly.
 references.split_by_segments` on the `logmel` cache's own `segment_ids`/
@@ -67,12 +67,12 @@ references.split_by_segments` on the `logmel` cache's own `segment_ids`/
 split every Step-2 sweep draws its own calibration/scoring windows from for
 this run), AND-ed with `audio-beats`' own `valid_mask` (so every drawn
 window's teacher target is finite -- see `_select_calibration_windows`'s own
-docstring for why this is a safe extension of, not a departure from, D3's
-"logmel prepared's segment_ids/valid_mask" rule). A distilled `student_<run>
-.pt` checkpoint therefore never trains on a window a LATER within-day sweep
-for the SAME run might score against it; the sidecar json restates this
-caveat (design's global "adapted/distilled/quantized results always carry
-their caveat" rule).
+docstring for why this is a safe extension of, not a departure from, the
+leakage rule's "logmel prepared's segment_ids/valid_mask" wording). A
+distilled `student_<run>.pt` checkpoint therefore never trains on a window a
+LATER within-day sweep for the SAME run might score against it; the sidecar
+json restates this caveat ("adapted/distilled/quantized results always carry
+their caveat").
 
 ## Training
 
@@ -86,7 +86,7 @@ model is constructed) -- verified only on CPU (this project's tests never run
 torch training on a non-CPU device; the established MPS/CUDA caveat is
 `rowii.anomaly.recon`'s own module docstring).
 
-Torch import discipline (plan's Global Constraints): every torch-touching name
+Torch import discipline: every torch-touching name
 here is imported lazily inside the function that needs it, INCLUDING
 `discover`, which is a deliberate exception (mirrors `scripts/adapt_beats.py`'s
 own module docstring: a module-level import specifically so
@@ -189,15 +189,14 @@ def _import_torch_or_exit() -> None:
 
 def _parse_runs_or_error(parser: argparse.ArgumentParser, raw: str) -> list[str]:
     """`--runs "a,b,c"` -> `["a", "b", "c"]`, with parse-level validation via
-    *parser*`.error` (exit 2, argparse's own convention; P7 spec D6/A3.11):
+    *parser*`.error` (exit 2, argparse's own convention):
     whitespace around names is stripped; an empty list (nothing but commas/
     blanks) and duplicate names are both rejected -- a duplicated run would
     stack its calibration rows TWICE into the pooled training matrix,
     silently double-weighting that run's distribution in the student's MSE
     objective. Duplicated from `scripts/adapt_beats.py`'s own helper of the
-    same name rather than imported (the plan's Global Constraint, set by
-    `scripts/warm_cache.py`'s precedent: one script must not depend on a
-    sibling script's internals).
+    same name rather than imported (`scripts/warm_cache.py`'s precedent: one
+    script must not depend on a sibling script's internals).
     """
     names = [name.strip() for name in raw.split(",") if name.strip()]
     if not names:
@@ -232,7 +231,7 @@ def _resolve_run_or_exit(run_name: str, cfg: Config) -> Run:
 
 
 def _resolve_runs_or_exit(run_names: list[str], cfg: Config) -> list[Run]:
-    """Multi-run counterpart of `_resolve_run_or_exit` (P7 spec D6/A3.11):
+    """Multi-run counterpart of `_resolve_run_or_exit`:
     ONE `discover` walk resolves every name (per-name `_resolve_run_or_exit`
     calls would re-walk the data tree once per pool member), preserving
     *run_names*' order -- the stacking order downstream.
@@ -391,8 +390,8 @@ def _teacher_target_columns(
     `"<stream>::<local>"`), while the `logmel` student input covers the primary
     mic alone -- the distillation target is therefore the primary-mic SLICE of
     the teacher matrix, never the full concatenation (regressing a 768-d
-    student head onto the 1536-d full matrix was the package-5 execution's
-    first real-data failure). Columns are selected by feature-name prefix, not
+    student head onto the 1536-d full matrix caused the first real-data
+    failure here). Columns are selected by feature-name prefix, not
     by position, so a stream-order change in the cache breaks loudly here
     instead of silently mis-slicing; a slice width that disagrees with the
     student's `out_dim` is likewise a hard exit, not a broadcast. Column
@@ -429,8 +428,8 @@ def _select_calibration_windows(
     seed: int,
     alignment: _CacheAlignment,
 ) -> np.ndarray:
-    """The leakage-safe calibration-side window indices to distill on (spec D3's
-    rule, reused here per the module docstring's "Leakage rule" section):
+    """The leakage-safe calibration-side window indices to distill on (reused
+    here per the module docstring's "Leakage rule" section):
     `split_by_segments` on the LOGMEL *student_input* cache's own `segment_ids`/
     `valid_mask` (`_CALIBRATION_FRAC`, *seed*) -- the SAME top-level
     calibration/scoring split every Step-2 sweep draws for this run, so a
@@ -450,7 +449,7 @@ def _select_calibration_windows(
     teacher target that is undefined (NaN) or nonexistent at that index --
     the combined mask keeps every drawn window's teacher target finite and
     real, without weakening the leakage rule itself (segment ids AND the
-    scoring-side exclusion still come from the logmel cache alone, per D3).
+    scoring-side exclusion still come from the logmel cache alone).
 
     Returns:
         `(N,)` int64 ascending STUDENT-cache window indices, valid in both
@@ -669,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
     t0: float
     calibration_windows_per_run: dict[str, int] | None = None
     if args.runs is not None:
-        # Multi-run pool (P7 spec D6/A3.11 -- module docstring): the
+        # Multi-run pool (module docstring): the
         # single-run recipe applied PER RUN (cache-only loads, alignment
         # guard, per-run top split), the selected calibration-side rows
         # stacked across runs in --runs order, ONE student trained on the
@@ -695,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
                     :, teacher_cols
                 ]
             )
-            # Zero-contribution runs stay visible in the counts (A4.1's
+            # Zero-contribution runs stay visible in the counts (the
             # coverage-visibility principle: never silently absent) AND get a
             # runtime warning PER RUN -- the whole-branch review caught this
             # check sitting outside the loop, where it only ever saw the last
@@ -768,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Provenance block: the single-run sidecar keeps its exact historical
     # shape ("run", unchanged note); a multi-run sidecar instead carries the
-    # runs list, the A3.11-required per-run calibration-window counts, and
+    # runs list, the per-run calibration-window counts, and
     # the pool-suffixed leakage note.
     if calibration_windows_per_run is None:
         provenance: dict[str, object] = {"run": label}

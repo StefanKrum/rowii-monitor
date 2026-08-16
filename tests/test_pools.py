@@ -6,9 +6,10 @@ fixture style).
 The split-parity tests re-derive every expected window set INDEPENDENTLY by calling
 `split_by_segments` by hand with the exact `run_sweep` convention (top split at
 `(calibration_frac, seed)`, nested split of the calibration side at `(0.5, seed + 1)`)
--- deliberately NOT the `_cross_day_per_state_sweep` top-split-as-fit convention the
-spec's A3.7 WARNING forbids copying. A non-default `SweepConfig(calibration_frac=0.4,
-seed=11)` is used so an implementation that hardcodes the defaults (0.5 / 7) fails the
+-- deliberately NOT the `_cross_day_per_state_sweep` top-split-as-fit convention
+`rowii.anomaly.pools`'s own module-docstring WARNING forbids copying. A non-default
+`SweepConfig(calibration_frac=0.4, seed=11)` is used so an implementation that
+hardcodes the defaults (0.5 / 7) fails the
 parity tests instead of passing by coincidence.
 """
 from __future__ import annotations
@@ -374,7 +375,7 @@ def test_coverage_table_schema_and_counts_int_labels() -> None:
 
 
 def test_coverage_table_composite_state_load_bin_labels() -> None:
-    # Composite "state|load_bin" strings (A4.2's state x load-bin cells) are just
+    # Composite "state|load_bin" strings (state x load-bin cells) are just
     # another label array -- the machinery is labels-agnostic.
     prepared = {"run-a": _pool_run(2, 3, seed=0)}
     labels = np.array(
@@ -411,7 +412,7 @@ def test_coverage_table_validates_runs_and_label_alignment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. coverage_warnings fires exactly on eval-not-train cells (A4.1/A4.2)
+# 14. coverage_warnings fires exactly on eval-not-train cells
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +448,7 @@ def test_coverage_warnings_fire_exactly_on_eval_not_train_cells(caplog) -> None:
     # `pump|1` is train-only (never evaluated) -- not an eval-not-train cell.
     assert "pump|1" not in joined
     assert all("zero training coverage" in w for w in warnings)
-    # The warnings are also LOGGED (spec A4.2: "the pool builder logs a warning").
+    # The warnings are also LOGGED ("the pool builder logs a warning").
     logged = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(logged) == 3
 
@@ -464,8 +465,7 @@ def test_coverage_warnings_silent_when_everything_covered() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 15. A3.7 WARNING is pinned in the module docstring (cheap doc pin, same pattern
-#     as the plan's Task-4 docstring pin)
+# 15. The WARNING is pinned in the module docstring (cheap doc pin)
 # ---------------------------------------------------------------------------
 
 

@@ -1,7 +1,7 @@
 """Common UTC window grid across streams, plus per-stream slicing and coverage.
 
 This module provides only the grid/slice/coverage primitives. It does NOT implement
-any run-level policy: the 0.8-coverage drop rule and the >5% hard-fail rule (spec §6)
+any run-level policy: the 0.8-coverage drop rule and the >5% hard-fail rule
 are the CALLER's responsibility (detect/CLI layer), not this module's.
 """
 from __future__ import annotations

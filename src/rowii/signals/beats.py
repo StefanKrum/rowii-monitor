@@ -1,4 +1,4 @@
-"""Frozen-BEATs audio featurizer (Task 14, behind the `[beats]` extra).
+"""Frozen-BEATs audio featurizer (behind the `[beats]` extra).
 
 Only this module (and `rowii.signals.beats_model`, which it delegates
 checkpoint loading and fbank computation to) imports `torch`/`torchaudio` --
@@ -20,8 +20,8 @@ feature extraction happens per burst file already (`src/rowii/pipeline.py`'s
 few hundred at 1-s windows / 12-min bursts) comfortably fits one batch on
 even CPU-only hardware.
 
-`BeatsFeaturizer`'s `int8_model_path` constructor arg (Step-2 package-5 spec
-D6) is an alternate-load branch, not a second featurizer class: a `scripts/
+`BeatsFeaturizer`'s `int8_model_path` constructor arg is an alternate-load
+branch, not a second featurizer class: a `scripts/
 quantize_beats.py`-produced post-training INT8 dynamically-quantized module
 (`rowii.signals.beats_model.load_quantized_beats_model`) is fed through the
 exact SAME `_RealBeatsEncoder`/`transform` pipeline as the frozen fp32 model,
@@ -148,7 +148,7 @@ class BeatsFeaturizer:
             *int8_model_path* (quantized, `load_quantized_beats_model`),
             whichever is given.
         int8_model_path: Path to a `scripts/quantize_beats.py`-produced
-            quantized-module pickle (design spec D6) -- NOT the `{"cfg",
+            quantized-module pickle -- NOT the `{"cfg",
             "model"}` state-dict format *checkpoint* points at. When set
             (and *encoder* is `None`), `transform`'s real path loads THIS
             module (`rowii.signals.beats_model.load_quantized_beats_model`)
@@ -158,7 +158,7 @@ class BeatsFeaturizer:
             quantize_dynamic`) are a CPU-only PyTorch backend (no MPS/CUDA
             support), which happens to match this project's own deployment
             target for the compact/quantized pole: an on-premise server with
-            no GPU (design spec D6). The loaded quantized module is still fed
+            no GPU. The loaded quantized module is still fed
             through the SAME `_RealBeatsEncoder`/`transform` pipeline as the
             fp32 path -- `torch.ao.quantization.quantize_dynamic` only swaps
             `nn.Linear` LEAVES for quantized counterparts, never the

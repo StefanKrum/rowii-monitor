@@ -1,5 +1,5 @@
-"""Tests for the cross-attention fusion head (Step-2 package-5 spec D8, plan Task
-6): `rowii.fusionx.wrapper`/`rowii.fusionx.model` (the `XattnConfig`/`XattnHead`
+"""Tests for the cross-attention fusion head:
+`rowii.fusionx.wrapper`/`rowii.fusionx.model` (the `XattnConfig`/`XattnHead`
 pair, mirroring `rowii.tfc.wrapper`/`rowii.tfc.model`'s own torch-free-wrapper/
 eager-model split) and `scripts/train_xattn.py` (the CLIP-style training CLI
 that turns ALREADY-CACHED `audio-beats` embeddings + the `fusion` cache's own
@@ -578,7 +578,7 @@ class TestSelectCalibrationWindows:
         # A window valid for fusion but NOT for audio-beats must never reach
         # split_by_segments' valid_mask as True -- its audio side would be
         # undefined (NaN) there (module docstring's rationale for why the AND
-        # is a safe extension of, not a departure from, D3's rule).
+        # is a safe extension of, not a departure from, the leakage rule).
         n = 4
         vib_source = PreparedRun(
             features=np.zeros((n, 1)), grid=_grid(n_windows=n),

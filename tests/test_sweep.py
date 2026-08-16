@@ -2,11 +2,10 @@
 (`run_sweep`) -- synthetic end-to-end coverage. No real data.
 
 Every numeric bound/seed used below was verified empirically against the real
-implementation before being hardcoded here (scratch scripts, not committed -- see
-the S5 review record for the full derivations), matching this
-package's own established practice (`test_conformal.py`'s module docstring; `task-s4-
-report.md`'s "Verification performed" section) for statistical/segment-split
-constructions whose outcome cannot be derived by inspection alone.
+implementation before being hardcoded here (scratch scripts, not committed),
+matching this package's own established practice (`test_conformal.py`'s module
+docstring) for statistical/segment-split constructions whose outcome cannot be
+derived by inspection alone.
 """
 from __future__ import annotations
 
@@ -107,7 +106,7 @@ def _three_label_run_with_injected_outliers(
 
 
 # ---------------------------------------------------------------------------
-# Item 1 + 2: injected outliers dominate candidates; non-injected FAR still holds
+# Injected outliers dominate candidates; non-injected FAR still holds
 # ---------------------------------------------------------------------------
 
 
@@ -190,7 +189,7 @@ def test_candidate_p_value_ties_are_broken_by_descending_score_hand_computed() -
 
 
 # ---------------------------------------------------------------------------
-# Item 4: fit/conformal/scoring windows are pairwise disjoint (no self-scoring leak)
+# fit/conformal/scoring windows are pairwise disjoint (no self-scoring leak)
 # ---------------------------------------------------------------------------
 
 
@@ -243,7 +242,7 @@ def test_fit_conformal_scoring_windows_are_pairwise_disjoint_end_to_end() -> Non
 
 
 # ---------------------------------------------------------------------------
-# Item 5: determinism
+# Determinism
 # ---------------------------------------------------------------------------
 
 
@@ -261,21 +260,20 @@ def test_run_sweep_is_deterministic_for_the_same_config() -> None:
 
 
 def test_run_sweep_is_invariant_under_a_constant_grid_t0_shift() -> None:
-    """Task 10 (D6a, the invariance regression this task's whole point rests on):
-    `run_sweep` never reads `prepared.grid` at all (`_prepared_run`'s own docstring,
+    """`run_sweep` never reads `prepared.grid` at all (`_prepared_run`'s own docstring,
     `run_sweep`'s own docstring: "grid/feature_names are not used by this
     function") -- every split/reference/score/threshold decision is a function of
     `features`/`valid_mask`/`segment_ids` and `labels` alone. Replacing `prepared`'s
     grid with one whose `t0_ns` differs by an arbitrary constant (standing in for
-    `rowii.pipeline.build_run_grid`'s D2 true-UTC shift) must leave `far_table`/
+    `rowii.pipeline.build_run_grid`'s true-UTC shift) must leave `far_table`/
     `scores`/`candidates` -- window indices, labels, scores, p-values, thresholds,
     realized FAR -- byte-for-byte IDENTICAL. This is the property the whole
     DAQ-clock-quirk fix depends on: moving the pipeline onto true UTC must never
     move a single label, score, or FAR value.
     """
     prepared, labels, _ = _three_label_run_with_injected_outliers()
-    shift_ns = 946_677_600 * 10**9  # arbitrary but realistic (task-10-brief.md's own
-    # worked CEST offset)
+    shift_ns = 946_677_600 * 10**9  # arbitrary but realistic (the worked CEST
+    # offset from tests/test_dataset.py's own DAQ epoch-2000 example)
     shifted_grid = dataclasses.replace(prepared.grid, t0_ns=prepared.grid.t0_ns + shift_ns)
     shifted_prepared = dataclasses.replace(prepared, grid=shifted_grid)
     cfg = SweepConfig(seed=2)
@@ -290,7 +288,6 @@ def test_run_sweep_is_invariant_under_a_constant_grid_t0_shift() -> None:
 
 # ---------------------------------------------------------------------------
 # Fixture 2: two well-separated str-labeled clusters with mismatched feature scale
-# (item 3)
 # ---------------------------------------------------------------------------
 
 _N_SEGMENTS_TWO_LABEL = 40
@@ -362,7 +359,7 @@ def test_pooled_conditioning_inflates_far_for_the_loose_label_versus_per_state()
 
 
 # ---------------------------------------------------------------------------
-# Item 6: labels dtype validation
+# Labels dtype validation
 # ---------------------------------------------------------------------------
 
 
@@ -415,7 +412,7 @@ def test_run_sweep_raises_on_invalid_scorer_name() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Item 1: nested-split crash with clear diagnostics
+# Nested-split crash with clear diagnostics
 # ---------------------------------------------------------------------------
 
 
@@ -528,7 +525,7 @@ def test_top_level_split_error_and_nested_split_error_differ() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Item 2: eager alpha validation
+# Eager alpha validation
 # ---------------------------------------------------------------------------
 
 
@@ -542,7 +539,7 @@ def test_run_sweep_raises_on_invalid_alpha(bad_alpha: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Item 3: top_k validation
+# top_k validation
 # ---------------------------------------------------------------------------
 
 
@@ -556,7 +553,7 @@ def test_run_sweep_raises_on_invalid_top_k(bad_top_k: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Item 4: pooled-row convention (0 for counts, NaN for aggregates when all excluded)
+# Pooled-row convention (0 for counts, NaN for aggregates when all excluded)
 # ---------------------------------------------------------------------------
 
 
@@ -597,7 +594,7 @@ def test_pooled_row_uses_zero_for_counts_when_all_labels_excluded() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixture 3 + item 7: excluded-label row (total count < min_ref, ANY seed)
+# Fixture 3: excluded-label row (total count < min_ref, ANY seed)
 # ---------------------------------------------------------------------------
 
 _RARE_LABEL_TOTAL = 15
@@ -661,7 +658,7 @@ def test_excluded_label_row_has_nan_metrics_and_excluded_flag() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixture 4 + item 8: empty-scoring-side row (label entirely on the calibration side)
+# Fixture 4: empty-scoring-side row (label entirely on the calibration side)
 # ---------------------------------------------------------------------------
 
 

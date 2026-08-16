@@ -7,7 +7,7 @@ CLI arguments.
 Run preparation (grid synthesis, chunked per-file feature extraction, validity mask --
 the expensive, k/clusterer-independent half of the pipeline, including the memory
 constraint that a whole stream is never concatenated into memory) now lives in
-`rowii.pipeline.prepare_run` (Step-2 Task S1 extraction, so Step-2's own scoring
+`rowii.pipeline.prepare_run` (so Step-2's own scoring
 pipeline can reuse it without importing this script). This module is a thin caller:
 `_prepare_run_features` calls `rowii.pipeline.prepare_run` and pairs its output with
 SCADA/GT loading, which stays here (see `rowii.pipeline`'s module docstring for why).
@@ -106,14 +106,14 @@ _CONCRETE_VARIANTS: tuple[str, ...] = (
     "fusion",
     "fusion-beats",
     # "logmel" is deliberately NOT expanded by `--variant all` (though it stays
-    # explicitly selectable via _VARIANT_CHOICES): package-3 spec D3 scopes logmel
+    # explicitly selectable via _VARIANT_CHOICES): logmel is scoped
     # as a Step-2 autoencoder INPUT, not a Step-1 clustering candidate -- a
     # 3136-dim z-scored matrix into the full-covariance GMM is statistically
     # underdetermined at typical per-run window counts (and measured at 4.6-8.2 s
     # per fit even on trivial synthetic data). audio-tfc/vibration-tfc draw the
-    # OPPOSITE conclusion (package-4 spec D4): TF-C's 256-d embedding IS
+    # OPPOSITE conclusion: TF-C's 256-d embedding IS
     # well-conditioned for the GMM, so both ARE expanded here, same treatment as
-    # the handcrafted/beats variants. audio-student (package-5 spec D5) likewise
+    # the handcrafted/beats variants. audio-student likewise
     # IS expanded: its 768-d embedding is exactly BEATs' own well-conditioned
     # geometry (the student is distilled to regress it), so it is a genuine
     # state-detection candidate, not merely a Step-2 autoencoder input like logmel.
@@ -198,7 +198,7 @@ def _resolve_runs(choice: str, index: RecordingIndex) -> list[Run]:
 
 
 # ---------------------------------------------------------------------------
-# SCADA / GT (spec Task 12 step 6)
+# SCADA / GT
 # ---------------------------------------------------------------------------
 
 
@@ -208,16 +208,15 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
     Cheap (header-only) intersection test: a file (nominally one hour) overlaps
     the grid iff its own [t0, t_end) intersects [grid.t0_ns, grid_end_ns).
 
-    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
-    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
-    header`, straight off disk) is still the raw DAQ axis -- shifted here by
+    *grid* is true-UTC since `rowii.pipeline.build_run_grid`'s own fix, but each
+    candidate file's own `header.t0_ns` (`read_header`, straight off disk) is
+    still the raw DAQ axis -- shifted here by
     *betriebsdaten*'s own derived offset (`rowii.io.dataset.
     betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
-    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
+    scada.labels.load_scada_window_means`'s identical fix. BEFORE that fix the
     comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
     sides shared the SAME axis by construction, so selection worked correctly by
-    accident, not because either side was ever true UTC (see the task report for
-    the full derivation).
+    accident, not because either side was ever true UTC.
     """
     grid_end_ns = int(grid.edges_ns()[-1])
     offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
@@ -243,7 +242,7 @@ def load_run_gt(
     count of windows newly marked this way is left to the caller to log.
 
     *run* is used only to derive `run_utc_offset_ns(run)`, passed to
-    `load_scada_window_means` as the audio-side cross-check (D3: never used to
+    `load_scada_window_means` as the audio-side cross-check (never used to
     derive the SCADA-side shift itself, which `load_scada_window_means` always
     derives independently from *betriebsdaten*).
     """
@@ -299,7 +298,7 @@ def _write_no_gt_report(out_dir: Path, run: str, variant: str, det: DetectionRes
 
 def _silhouette_or_nan(features_valid: np.ndarray, labels: np.ndarray) -> float:
     """`silhouette_score` on z-scored valid features vs *labels*; NaN if <= 1 unique label
-    (silhouette is undefined for a single cluster -- spec Task 12 step 8's explicit guard)."""
+    (silhouette is undefined for a single cluster)."""
     from sklearn.metrics import silhouette_score
 
     from rowii.signals.features import zscore
@@ -358,9 +357,9 @@ def _prepare_run_features(
 ) -> _RunFeatures:
     """Grid + chunked featurize + validity mask + SCADA/GT for one (run, variant).
 
-    This is the expensive, k/clusterer-independent half of the pipeline (spec
-    Task 12 steps 1-3, 6): `rowii.pipeline.prepare_run` does the run-level-grid/
-    chunked-featurize/validity-mask work (Step-2 Task S1 extraction -- see that
+    This is the expensive, k/clusterer-independent half of the pipeline:
+    `rowii.pipeline.prepare_run` does the run-level-grid/
+    chunked-featurize/validity-mask work (see that
     module for the memory-bounded per-file extraction and its optional on-disk
     feature cache); SCADA-derived ground truth loading stays here (`load_run_gt`),
     since `rowii.pipeline` deliberately does not own it (see that module's
@@ -480,7 +479,7 @@ def run_combo(
     use_cache: bool = True,
 ) -> ComboResult:
     """Execute the full pipeline for one (run, variant, clusterer) combination and
-    append its row to `results/summary.csv` immediately (spec Task 12 step 8: the
+    append its row to `results/summary.csv` immediately (the
     summary row is an OUTPUT of the combo itself, not a batched end-of-run write --
     so a crash partway through a large `--run all --variant all` grid still leaves
     every already-completed combination's row on disk).
@@ -553,7 +552,7 @@ def _import_beats_or_exit() -> None:
 
 
 def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
-    """Extends `_import_beats_or_exit`'s pattern (package-4 spec D4): fails fast,
+    """Extends `_import_beats_or_exit`'s pattern: fails fast,
     BEFORE `_prepare_run_features` starts an expensive extraction, on either of two
     problems `rowii.pipeline._featurizer_for_stream`'s own tfc dispatch would
     otherwise only surface much later (torch missing is never even checked there --
@@ -578,7 +577,7 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
 
 
 def _import_student_or_exit(cfg: Config) -> None:
-    """Mirrors `_import_tfc_or_exit`'s pattern (package-5 spec D5), simplified:
+    """Mirrors `_import_tfc_or_exit`'s pattern, simplified:
     the distilled student has only ONE checkpoint (unlike TF-C's two
     independent branches), so there is no variant-based checkpoint selection --
     torch missing (checked first) -> SystemExit naming the shared `[beats]`

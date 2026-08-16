@@ -1,4 +1,4 @@
-"""Frozen-TF-C audio featurizer (package-4 spec D1/D4, Time-Frequency
+"""Frozen-TF-C audio featurizer (Time-Frequency
 Consistency -- Zhang et al. 2022): the compact industrial-pretraining
 counterpart to `rowii.signals.beats.BeatsFeaturizer`, later pre-trained on
 public corpora and integrated as a frozen-embedding variant alongside BEATs.
@@ -13,7 +13,7 @@ precedent), and is therefore imported ONLY lazily, from inside this module's
 functions/methods, never at `wrapper.py`'s own top level. `TfcConfig` lives
 HERE rather than in `model.py` precisely so it stays importable without
 torch: callers that only need to describe a TF-C architecture (e.g. to read
-a checkpoint's `cfg` field, Task 3/4) never pull in torch as a side effect.
+a checkpoint's `cfg` field) never pull in torch as a side effect.
 
 `TfcFeaturizer.transform` mirrors the shape contract of the other featurizers
 (`rowii.signals.features.AudioFeaturizer`/`VibFeaturizer`,
@@ -230,7 +230,7 @@ def load_tfc_model(checkpoint: Path, device: torch.device) -> TfcModel:
         checkpoint: Path to a `.pt` file containing
             `{"cfg": dataclasses.asdict(TfcConfig(...)), "model": state_dict,
             "corpus_manifest_sha256": str, "epochs": int}` -- the format
-            fixed HERE (Task 1) and reused, unmodified, by the later
+            fixed HERE and reused, unmodified, by the later
             pretraining script that actually writes one.
         device: Torch device to place the model on.
 
@@ -307,7 +307,7 @@ class _RealTfcEncoder:
 
 class TfcFeaturizer:
     """Frozen-TF-C embedding featurizer: `(B, S)`/`(B, S, C)` windows ->
-    `(B, 256)` embeddings (spec D1/D4).
+    `(B, 256)` embeddings.
 
     Mirrors `rowii.signals.beats.BeatsFeaturizer`'s stub-injectable design
     (an injected `encoder` short-circuits the real, torch-dependent path
@@ -329,7 +329,7 @@ class TfcFeaturizer:
         self, checkpoint: Path | None, encoder: TfcEncoderProtocol | None = None
     ) -> None:
         """Args:
-        checkpoint: Path to a Task-1-format TF-C checkpoint
+        checkpoint: Path to a TF-C checkpoint
             (`load_tfc_model`'s docstring). Ignored if *encoder* is given.
             May be `None` if *encoder* is given (tests) -- `None` with no
             *encoder* is only an error once `transform()` is actually called

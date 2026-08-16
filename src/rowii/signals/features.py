@@ -389,7 +389,7 @@ def zscore_stats(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per-column (mean, std) via `nanmean`/`nanstd`, float64 — the statistics
     `zscore` standardizes with, exposed separately so a fitted model can carry its
     FIT-day statistics and re-apply them to another day's features
-    (`rowii.state.detect.FittedDetector`, package-2 spec D1).
+    (`rowii.state.detect.FittedDetector`).
     """
     x64 = np.asarray(x, dtype=np.float64)
     return np.nanmean(x64, axis=0), np.nanstd(x64, axis=0)
@@ -418,7 +418,7 @@ def zscore(x: np.ndarray) -> np.ndarray:
     discriminative information, so an all-zero output is the correct neutral
     value rather than propagating a division blow-up.
 
-    Mean/std use `nanmean`/`nanstd` (Task 13 fix): a real feature matrix
+    Mean/std use `nanmean`/`nanstd`: a real feature matrix
     routinely has a handful of NaN rows (invalid windows -- see
     `_StreamFeatureResult.features`'s docstring in `src/rowii/pipeline.py`).
     Plain `.mean()`/`.std()` propagate NaN into EVERY row's statistics for a

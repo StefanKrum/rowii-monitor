@@ -1,5 +1,4 @@
-"""Masked-reconstruction proxy objectives (Step-2 package-5 spec D1 as
-amended by Amendment A1, Task 1 + Task 3 rework): the adaptation objectives
+"""Masked-reconstruction proxy objectives: the adaptation objectives
 shared by LoRA and full fine-tune. Eager torch at module level -- see
 `rowii.adapt.lora`'s module docstring for why that is the right discipline
 for this package (adaptation only ever runs with the `[beats]` extra
@@ -8,7 +7,7 @@ installed).
 BEATs' OWN pre-training objective (discrete acoustic-token distillation via
 its own tokenizer network) is not reproducible here -- that tokenizer is not
 part of the vendored inference-time module, and training one from scratch is
-out of this package's scope (design spec D1, non-goals). Both objectives here
+out of this package's scope (non-goals). Both objectives here
 are therefore DOCUMENTED PROXIES, always described as such wherever
 adapted-model results appear. Two variants:
 
@@ -23,19 +22,18 @@ adapted-model results appear. Two variants:
   (`BEATs.extract_features`) feeds the encoder, adapters trained through this
   objective train on the distribution they will be scored on.
 
-- `masked_patch_loss` -- the original frame-level variant (D1's pre-amendment
-  wording), masking whole `(mels,)` TIME-FRAME rows of the fbank BEFORE the
+- `masked_patch_loss` -- the original frame-level variant (superseded by
+  `masked_token_loss` above), masking whole `(mels,)` TIME-FRAME rows of the fbank BEFORE the
   encoder. RETAINED for encoders that consume the fbank frame-by-frame
   (position-preserving encoders: its `encoder_forward` must map `(B, frames,
   mels)` -> `(B, frames, D)`, the SAME `frames` count in and out). It is
-  STRUCTURALLY INCOMPATIBLE with BEATs' native forward (Amendment A1's
-  trigger, discovered in Task 3): BEATs' `patch_embedding` is a strided
+  STRUCTURALLY INCOMPATIBLE with BEATs' native forward: BEATs' `patch_embedding` is a strided
   `Conv2d` over the fbank "image" that downsamples BOTH the time and mel
   axes and then FLATTENS the two patch axes into one token axis (~98 frames
   -> 48 tokens for the real checkpoint), so no closure over the native
   BEATs stack can satisfy this loss's frame-count-preserving contract --
-  and bridging the gap with a NON-native frame-preserving projection (Task
-  3's first, retired attempt) trains the adapters on an input distribution
+  and bridging the gap with a NON-native frame-preserving projection (an
+  earlier, abandoned attempt) trains the adapters on an input distribution
   decoupled from the deployed inference path. Do not use this objective for
   BEATs adaptation; use `masked_token_loss`.
 """
@@ -51,7 +49,7 @@ def _random_row_mask(
 ) -> torch.Tensor:
     """`(batch, n_rows)` boolean mask with ~*mask_frac* of each sample's rows
     True -- the shared masking core of both objectives in this module
-    (factored out in the Task-3 rework; `masked_patch_loss`'s draw sequence
+    (factored out here; `masked_patch_loss`'s draw sequence
     is byte-identical to its pre-refactor behaviour: same per-sample
     `torch.randperm` calls against the same generator, in the same order).
 
@@ -81,7 +79,7 @@ def masked_token_loss(
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Native token-level masked-reconstruction MSE (module docstring: the
-    BEATs adaptation objective, spec D1 as amended by Amendment A1) -- a
+    BEATs adaptation objective) -- a
     latent-target MAE: mask ~*mask_frac* of *tokens*' rows (zeroed), encode
     the masked sequence, and regress the encoder's output at the masked
     positions (through *head*) onto the ORIGINAL pre-mask token embeddings.
@@ -124,13 +122,13 @@ def masked_token_loss(
             `(B, T, D_out)` per-token encoder output, any `D_out` (*head*
             reconciles it back to `D`). Token count `T` must be preserved --
             trivially true for a transformer encoder consuming its own
-            native tokens (the whole point of Amendment A1).
+            native tokens.
         head: `nn.Linear(D_out, D)` projecting the encoder output back to
             token-embedding width; trained jointly with the encoder
             (`scripts/adapt_beats.py` includes `head.parameters()` in its
             optimizer for both modes).
-        mask_frac: Fraction of token rows (dim 1) masked per sample, spec
-            D1/A1 default 0.3 (30%); rounding/clamping per
+        mask_frac: Fraction of token rows (dim 1) masked per sample,
+            default 0.3 (30%); rounding/clamping per
             `_random_row_mask`.
         generator: Optional CPU `torch.Generator` controlling which rows are
             masked (same contract as `masked_patch_loss`'s parameter of the
@@ -162,11 +160,11 @@ def masked_patch_loss(
     for POSITION-PRESERVING encoders only (module docstring; NOT for BEATs'
     native patchifying forward, whose `patch_embedding` collapses ~98 fbank
     frames into 48 flattened patch tokens and therefore cannot satisfy this
-    function's frame-count-preserving `encoder_forward` contract -- Amendment
-    A1 retargeted BEATs adaptation to `masked_token_loss` for exactly this
+    function's frame-count-preserving `encoder_forward` contract -- BEATs
+    adaptation was retargeted to `masked_token_loss` for exactly this
     reason; this function is retained for non-patchifying encoders).
 
-    Gradient-flow caveat for test authors (Task-1 review note): with a
+    Gradient-flow caveat for test authors: with a
     purely POSITION-WISE `encoder_forward` (e.g. this module's own test
     suite's bare `nn.Linear`, applied independently per frame), the
     encoder's WEIGHT gradients are exactly zero -- the loss reads
@@ -179,7 +177,7 @@ def masked_patch_loss(
     encoder can prove that ADAPTER weights train. A real attention encoder
     mixes information across positions (a masked query attends to unmasked
     keys/values), so LoRA q/v adapter weights DO receive gradients there --
-    the Task-3 integration tests assert nonzero LoRA-adapter gradients after
+    the integration tests assert nonzero LoRA-adapter gradients after
     a backward pass (through `masked_token_loss`, the objective actually
     used for BEATs adaptation), precisely because the unit tests here
     structurally cannot.
@@ -198,8 +196,8 @@ def masked_patch_loss(
             `fbank`).
         head: `nn.Linear(D, mels)` projecting `encoder_forward`'s output
             back to fbank-frame width; trained jointly with the encoder.
-        mask_frac: Fraction of TIME FRAMES (dim 1) masked per sample, spec
-            D1 default 0.3 (30%); rounding/clamping per `_random_row_mask`.
+        mask_frac: Fraction of TIME FRAMES (dim 1) masked per sample,
+            default 0.3 (30%); rounding/clamping per `_random_row_mask`.
         generator: Optional `torch.Generator` (CPU-typed, matching
             `torch.randperm`'s own default -- this function never moves it
             to `fbank`'s device) controlling which frames are masked, for

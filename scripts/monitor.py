@@ -22,21 +22,21 @@ the snapshot's OWN fit-day references, thresholded in one of two modes:
   segments at the snapshot's own `(calibration_frac, seed)`, recompute each
   snapshot-known state's conformal threshold on the calibration-side windows of
   that state at `--alpha` (default: the snapshot's fit-time alpha), and emit
-  verdicts for the SCORING-side windows only. This operationalizes package-2's
+  verdicts for the SCORING-side windows only. This operationalizes the
   central cross-day finding: "transfer detector + references, recalibrate
   thresholds per day" is the only recipe whose realized false-alarm rate held its
   nominal alpha. References are NEVER refit here -- recalibrate mode touches
-  thresholds only (spec §4). The calibration-side windows themselves are consumed
+  thresholds only. The calibration-side windows themselves are consumed
   by the threshold fit and are NEVER alarmed (`role="consumed_for_calibration"` --
-  the calibration-bias rule, A1.3: alarming the very windows a threshold was fitted
+  the calibration-bias rule: alarming the very windows a threshold was fitted
   on would break the conformal exchangeability argument in the anti-conservative
   direction).
 - `--thresholds frozen`: apply the fit day's stored thresholds unchanged to every
   valid window of a snapshot-known state. Reported with an explicit
-  distribution-shift warning in the notes: in package-2's cross-day evidence,
+  distribution-shift warning in the notes: in the cross-day evidence,
   frozen cross-day thresholds did NOT hold their nominal FAR.
-- `--thresholds rolling --rolling-minutes M` (package-7 Task 5, spec D7 as amended
-  by A3.2; default M=60): the SAME roles/split as recalibrate mode -- rolling
+- `--thresholds rolling --rolling-minutes M` (default M=60): the SAME roles/split
+  as recalibrate mode -- rolling
   replaces HOW each scored window's threshold is derived, not WHICH windows get
   verdicts. Per (state, scored window): the threshold is `calibrate(...)` over the
   scores of the SAME state's calibration-side ("consumed") windows whose window
@@ -46,17 +46,17 @@ the snapshot's OWN fit-day references, thresholded in one of two modes:
   (against the trailing set when rolling, against the fit day's stored calibration
   scores when falling back). Every scored row is flagged per window in the
   `threshold_source` column (`rolling` / `fit_day_fallback`) -- never a SILENT
-  fallback (the A1.3 recalibrate-mode rule forbids silent frozen fallbacks; here
+  fallback (the recalibrate-mode rule forbids silent frozen fallbacks; here
   the fallback is the designed, per-window-flagged behavior, and per-state
-  trailing-coverage statistics are a MANDATORY notes output, A3.2). Consumed
+  trailing-coverage statistics are a MANDATORY notes output). Consumed
   windows' scores stay recorded in alarms.parquet, so every rolling threshold is
-  auditable from the artifact alone. Explicit limitation (D7): a slowly developing
+  auditable from the artifact alone. Explicit limitation: a slowly developing
   fault inflates the trailing calibration scores and can be ABSORBED by a rolling
   threshold -- the notes carry the double-reference honesty note (read rolling
   verdicts side by side with fit-day-referenced verdicts). This is a batch
   ablation over recorded files, not a production stream.
 
-Per-state semantics on the new run (A1.3, binding): a valid window's detected
+Per-state semantics on the new run (binding): a valid window's detected
 state can be absent from the snapshot (no reference/threshold survived fitting) --
 such windows get `role="unknown_state"`, are never alarmed, and are counted in the
 notes. In recalibrate mode a snapshot-known state with ZERO calibration-side
@@ -65,81 +65,81 @@ windows on the new run cannot be recalibrated -- ALL its windows get
 to the frozen fit-day threshold, which would smuggle exactly the un-recalibrated
 behavior the mode exists to avoid).
 
-`--session-norm` (package-7 Task 4, spec D3 as amended by A3.5): label-free
+`--session-norm`: label-free
 per-session robust normalization of the SCORING space. The snapshot must carry
 session stats (format v2, `rowii.anomaly.normalize.SessionStats`) -- a v1 file or
 any snapshot fitted without stats is REFUSED with exit 2 (never a silent raw-space
 fallback). When active: the DETECTOR still consumes RAW features (labels are
-norm-invariant by construction, the A3.5 binding boundary); the scoring path
+norm-invariant by construction); the scoring path
 transforms (a) the snapshot's stored RAW references with the SNAPSHOT's stats
 (`scorer_for_label(..., session_stats=...)` -- pool-global stats for a pooled
 snapshot, `norm_minutes == 0.0` sentinel) and (b) the monitored run's features
 with the MONITORED run's OWN first-N stats (N = the snapshot's stored
-`norm_minutes`; the pool-global sentinel falls back to the D3 default of
+`norm_minutes`; the pool-global sentinel falls back to the default of
 `_DEFAULT_NORM_MINUTES`), so scores, thresholds and p-values all live in the
 session-normalized space. Roles and alarm logic are otherwise unchanged.
-Comparability with raw-space (P6) numbers is FAR-level only (A3.5). The reverse
+Comparability with raw-space numbers is FAR-level only. The reverse
 mismatch -- a stats-bearing snapshot run WITHOUT `--session-norm` -- only logs a
 WARNING: the stored references are raw, so recalibrate mode stays fully coherent;
 frozen mode would compare raw-space scores against the snapshot's
 normalized-space thresholds, which the warning names.
 
-`--level-recal` (package-8 Task 7, spec D2 as amended by A1.4/A1.10/A1.11): the
+`--level-recal`: the
 shape-preserving, feature-native counterpart to `--session-norm` -- an additive
 offset in the log10 domain (`rowii.anomaly.levelrecal`), applied ONLY to the
 monitored run's LEVEL columns (`*_log_rms`/`*_band_*`/`*_octave_*`); shape
 columns (`*_spectral_centroid`/`*_rolloff95`/`*_kurtosis`) are untouched.
-Mutually exclusive with `--session-norm` (A1.10 fit-path exclusivity, exit 2).
+Mutually exclusive with `--session-norm` (fit-path exclusivity, exit 2).
 The snapshot must carry `level_recal_medians` (format v2, the pooled FIT side's
-own per-column median at `run_step2 --save-snapshot --level-recal` fit time,
-A1.4) -- a snapshot without them is REFUSED with exit 2 (never a silent
+own per-column median at `run_step2 --save-snapshot --level-recal` fit time)
+-- a snapshot without them is REFUSED with exit 2 (never a silent
 raw-space fallback, mirroring `--session-norm`'s stats-less refusal). Unlike
-`--session-norm`, this applies AFTER the snapshot-contract geometry projection
-(A1.11): the run-side median is computed over the monitored run's own
+`--session-norm`, this applies AFTER the snapshot-contract geometry projection:
+the run-side median is computed over the monitored run's own
 label-free first-`_DEFAULT_NORM_MINUTES` (20) minutes of valid windows,
 name-keyed against the PROJECTED `feature_names` (mirrors `scripts/
 run_step2.py`'s `_first_n_minutes_rows`, duplicated locally -- the
 script-sibling rule). The DETECTOR still consumes RAW features (labels are
-norm-invariant, the same A3.5 boundary `--session-norm` uses); references stay
+norm-invariant, the same boundary `--session-norm` uses); references stay
 the snapshot's RAW references -- only the monitored run's scoring features
 shift. A zero-level-column snapshot feature contract (an embedding variant)
-raises inside `rowii.anomaly.levelrecal` and is caught here as exit 2 (A1.9).
+raises inside `rowii.anomaly.levelrecal` and is caught here as exit 2.
 
-Named states end to end (package-9 Task 3, spec D2(c)) and transition visibility
-(spec D3c): the snapshot's OPTIONAL commissioning-time `state_names` member
+Named states end to end and transition visibility: the snapshot's OPTIONAL
+commissioning-time `state_names` member
 (`dict[int, str]`, `rowii.eval.metrics.derive_state_names`, `rowii.runtime.snapshot`)
 surfaces as `state_name` on EVERY `alarms.parquet` row (ALWAYS present -- fallback
-`cluster-<id>` when the snapshot carries no names, A1.4) and as an OPTIONAL
+`cluster-<id>` when the snapshot carries no names) and as an OPTIONAL
 `mapped_mode` column on `segments.csv` (present only when the snapshot carries names
--- inventing a mapping the artifact cannot back would be a claim, not a fact, D2(c)).
+-- inventing a mapping the artifact cannot back would be a claim, not a fact).
 `timeline.md` and `monitor_notes.md`'s per-state table name states the same way when
-a name exists. `near_transition` (`alarms.parquet`, ALWAYS present, A1.4) is True for
+a name exists. `near_transition` (`alarms.parquet`, ALWAYS present) is True for
 every VALID window within ≈W seconds, measured along the VALID subsequence (not
 wall-clock -- an invalid gap contributes no distance), of a detected-state CHANGE
 found in that same subsequence (an invalid gap never counts as a change itself
 either); `W` defaults to the snapshot's own `min_dwell_s` -- the same dwell scale
-package-9's `min_dwell` sweep grounds. The OPTIONAL `--suppress-transition-alarms`
-flag (default OFF, D3c ablation) then withholds alarms on near-transition SCORED windows
+the `min_dwell` sweep grounds. The OPTIONAL `--suppress-transition-alarms`
+flag (default OFF) then withholds alarms on near-transition SCORED windows
 (`alarm -> False`); `score`/`p_value`/`near_transition`/`role` stay recorded, so
 every suppressed alarm remains fully auditable from `alarms.parquet` alone, and the
 suppressed count is reported in `monitor_notes.md`. Suppression is an explicit
 OPERATOR choice this package makes visible, never a default behavior.
 
 Outputs under `--out` (default `results/monitor/<run>/`): `segments.csv` (+ an
-OPTIONAL `mapped_mode` column, D2(c)) + `timeline.md` (the state half,
+OPTIONAL `mapped_mode` column) + `timeline.md` (the state half,
 `scripts/apply_detector.py`'s conventions incl. scatter-back over `valid_mask`),
 `alarms.parquet` (one row per VALID window: `window, t_utc_ns, state, score,
 p_value, alarm, low_confidence, role, threshold_source, near_transition,
 state_name` -- `threshold_source` is per-window `rolling`/`fit_day_fallback` on
 rolling-mode scored rows, `""` on rolling-mode rows without a verdict, and the
 constant mode name in the other modes, so the column exists uniformly;
-`near_transition`/`state_name` are ALWAYS present regardless of mode, package-9
-Task 3), `alarm_segments.csv` (maximal alarm runs: `start_utc, end_utc, duration_s`
+`near_transition`/`state_name` are ALWAYS present regardless of mode),
+`alarm_segments.csv` (maximal alarm runs: `start_utc, end_utc, duration_s`
 -- reflects `--suppress-transition-alarms` when active, since it forces `alarm`
 values BEFORE this table is built), and `monitor_notes.md` (snapshot provenance,
 mode, per-state table, window accounting incl. the suppressed-alarm count when
 suppression ran, and the standing honesty framing: NO fault labels exist -- alarms
-are candidates for operator review, never verified detections; spec §4).
+are candidates for operator review, never verified detections).
 
 Bootstrapping (config/env via `rowii.config.load_config`, run discovery via
 `rowii.io.dataset.discover`, unknown-run exit 2 listing every discovered run)
@@ -199,7 +199,7 @@ imported -- module docstring)."""
 _THRESHOLD_MODES: tuple[str, ...] = ("recalibrate", "frozen", "rolling")
 
 _DEFAULT_ROLLING_MINUTES = 60.0
-"""`--thresholds rolling`'s default trailing-window length M in minutes -- A3.2's
+"""`--thresholds rolling`'s default trailing-window length M in minutes -- the
 binding default (its motivating probe on 290626-tu: at M=20 only 46.8% of scored
 windows reach the conformal floor, states 2/3 at 0%; at M=60 still 53.8%)."""
 _MAX_ROLLING_MINUTES = 5_256_000.0
@@ -210,11 +210,10 @@ CLI's clean exit-2 contract)."""
 
 _DEFAULT_NORM_MINUTES = 20.0
 """`--session-norm` fallback prefix length for the MONITORED run's own stats when
-the snapshot's stored `norm_minutes` is the pool-global sentinel (0.0) -- the D3
-default ("first `--norm-minutes` (default 20)"); a first-N snapshot's stored value
-is used verbatim instead. Also `--level-recal`'s (unconfigurable, D2 spec: "N=20
-default") first-N-minutes prefix length for the monitored run's own level-column
-median (`_first_n_minutes_rows`, package-8 Task 7) -- mirrors `scripts/
+the snapshot's stored `norm_minutes` is the pool-global sentinel (0.0); a
+first-N snapshot's stored value is used verbatim instead. Also `--level-recal`'s
+(unconfigurable) first-N-minutes prefix length for the monitored run's own
+level-column median (`_first_n_minutes_rows`) -- mirrors `scripts/
 run_step2.py`'s own reuse of the identical constant/value for the same purpose."""
 
 _DEFAULT_EXCLUDE_TOLERANCE_S = 5.0
@@ -227,12 +226,11 @@ _ALARM_COLUMNS: tuple[str, ...] = (
     "window", "t_utc_ns", "state", "score", "p_value", "alarm", "low_confidence", "role",
     "threshold_source", "near_transition", "state_name",
 )
-"""alarms.parquet's exact column contract (spec D2 / plan Task 2; `threshold_source`
-appended by package-7 Task 5, spec D7/A3.2; `near_transition` then `state_name`
-appended at the END by package-9 Task 3, spec D3c/D2(c)/A1.4), in this order. BOTH
+"""alarms.parquet's exact column contract, in this order: `threshold_source` was
+appended after the base columns; `near_transition` then `state_name` were
+appended at the END. BOTH
 new columns are ALWAYS present, never conditional on the snapshot carrying
-`state_names` (A1.4 retracts the old "exactly as today" sentence for these two
-columns). Downstream readers that select columns by name
+`state_names`. Downstream readers that select columns by name
 (`rowii.eval.events.evaluate_events`, `scripts/eval_events.py`) ignore the addition
 by construction."""
 
@@ -242,18 +240,18 @@ trailing same-state calibration set (rolling mode only)."""
 SOURCE_FIT_DAY_FALLBACK = "fit_day_fallback"
 """`threshold_source` value: the trailing count sat below the conformal floor, so
 the snapshot's stored fit-day threshold/calibration scores were applied (rolling
-mode only -- the A3.2 per-window-flagged fallback)."""
+mode only -- the per-window-flagged fallback)."""
 
 ROLE_SCORED = "scored"
 """A window with a real verdict: its state's threshold was applied to its score."""
 ROLE_CONSUMED = "consumed_for_calibration"
 """Recalibrate mode only: a calibration-side window whose score parameterized its
-state's recalibrated threshold -- never alarmed (calibration-bias rule, A1.3)."""
+state's recalibrated threshold -- never alarmed (calibration-bias rule)."""
 ROLE_UNKNOWN_STATE = "unknown_state"
 """Detected state has no reference/threshold in the snapshot -- never alarmed."""
 ROLE_NO_CONFORMAL_DATA = "no_conformal_data"
 """Recalibrate mode only: the state is snapshot-known but has zero calibration-side
-windows on this run, so no per-day threshold exists -- never alarmed (A1.3)."""
+windows on this run, so no per-day threshold exists -- never alarmed."""
 
 _FROZEN_SHIFT_WARNING = (
     "**Distribution-shift warning (frozen thresholds):** the fit day's conformal "
@@ -263,14 +261,14 @@ _FROZEN_SHIFT_WARNING = (
     "below carry NO per-day false-alarm guarantee. `--thresholds recalibrate` (the "
     "default) is the recipe whose FAR held."
 )
-"""The notes' verbatim frozen-mode warning (spec D2: reported with an explicit
+"""The notes' verbatim frozen-mode warning (reported with an explicit
 distribution-shift warning; the binding phrase is "did NOT hold")."""
 
 
 def _first_n_minutes_rows(prepared: PreparedRun, norm_minutes: float) -> np.ndarray:
     """*prepared*'s own first *norm_minutes* of VALID windows, float64 -- the
-    `--level-recal` run-side anchor source (package-8 Task 7, spec A1.4/A1.11:
-    "the monitored run's own first-N-minutes windows", label-free).
+    `--level-recal` run-side anchor source (the monitored run's own
+    first-N-minutes windows, label-free).
 
     DUPLICATED from `scripts/run_step2.py::_first_n_minutes_rows` (the
     script-sibling rule, module docstring: a script must not depend on a
@@ -480,7 +478,7 @@ class _Verdicts:
     score: np.ndarray
     """(W,) float64 -- NaN where no score was computed (invalid/unknown/no-data)."""
     p_value: np.ndarray
-    """(W,) float64 -- NaN everywhere except scored windows (verdict-only, A1.3)."""
+    """(W,) float64 -- NaN everywhere except scored windows (verdict-only)."""
     alarm: np.ndarray
     """(W,) bool -- True only on scored windows over their state's threshold."""
     low_confidence: np.ndarray
@@ -489,7 +487,7 @@ class _Verdicts:
     role: np.ndarray
     """(W,) object -- one of the ROLE_* strings on valid windows, "" on invalid."""
     threshold_source: np.ndarray
-    """(W,) object -- alarms.parquet's `threshold_source` column (spec D7/A3.2):
+    """(W,) object -- alarms.parquet's `threshold_source` column:
     per-window `SOURCE_ROLLING`/`SOURCE_FIT_DAY_FALLBACK` on rolling-mode scored
     windows ("" on rolling-mode windows without a verdict), the constant mode name
     everywhere in the other modes."""
@@ -515,7 +513,7 @@ def _mark_unknown_states(
 ) -> dict[int, int]:
     """Tag every valid window whose detected state has no snapshot threshold with
     `ROLE_UNKNOWN_STATE` (in place) -- returns `{state id: window count}` for the
-    notes (A1.3: such windows get no verdict and are counted, never alarmed)."""
+    notes (such windows get no verdict and are counted, never alarmed)."""
     unknown: dict[int, int] = {}
     for label in (int(v) for v in np.unique(labels[prepared.valid_mask]).tolist()):
         if label in snapshot.thresholds:
@@ -539,15 +537,15 @@ def _frozen_verdicts(
     scoring_features: np.ndarray | None = None,
     session_stats: SessionStats | None = None,
 ) -> _Verdicts:
-    """Frozen mode (spec D2): every valid window of a snapshot-known state gets a
+    """Frozen mode: every valid window of a snapshot-known state gets a
     verdict against the fit day's STORED threshold; p-values against the fit day's
     stored calibration scores (the same set the threshold came from).
 
-    Under `--session-norm` (D3/A3.5) the caller passes *scoring_features* (this
+    Under `--session-norm` the caller passes *scoring_features* (this
     run's session-normalized matrix -- `None` means score the raw features) and
     *session_stats* (the SNAPSHOT's stats, transforming the stored references via
     `scorer_for_label`); the stored thresholds/calibration scores then live in the
-    snapshot's own normalized space, comparable at FAR level only (A3.5)."""
+    snapshot's own normalized space, comparable at FAR level only."""
     features = prepared.features if scoring_features is None else scoring_features
     score, p_value, alarm, low_confidence, role, threshold_source = _empty_verdict_arrays(
         prepared.features.shape[0], "frozen"
@@ -646,10 +644,10 @@ def _exclusion_mask(
 def _apply_calibration_exclusion(
     cal_windows: np.ndarray, scoring_windows: np.ndarray, exclusion_mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Spec A2.3.3: calibration-side windows inside excluded event intervals are
+    """Calibration-side windows inside excluded event intervals are
     moved to the SCORING side -- they must never feed a threshold (an induced
     event calibrated into the conformal set both inflates the threshold and, via
-    the A1.3 consumed-never-alarmed rule, becomes structurally undetectable),
+    the consumed-never-alarmed rule, becomes structurally undetectable),
     but they remain fully evaluable against the event-free thresholds. Scoring-
     side event windows are untouched (already scored). Returns the adjusted
     `(cal_windows, scoring_windows, n_moved)`."""
@@ -674,7 +672,7 @@ def _recalibrate_verdicts(
     session_stats: SessionStats | None = None,
     exclusion_mask: np.ndarray | None = None,
 ) -> _Verdicts:
-    """Recalibrate mode (DEFAULT, spec D2 + A1.3): top split of the new run's valid
+    """Recalibrate mode (DEFAULT): top split of the new run's valid
     windows at the snapshot's own `(calibration_frac, seed)`; per snapshot-known
     state, a fresh conformal threshold from the calibration-side windows of that
     state (references stay the SNAPSHOT's -- thresholds only), verdicts for the
@@ -682,7 +680,7 @@ def _recalibrate_verdicts(
     (calibration-bias rule); a state with zero calibration-side windows takes the
     `no_conformal_data` path for ALL its windows.
 
-    Under `--session-norm` (D3/A3.5): *scoring_features*/*session_stats* exactly as
+    Under `--session-norm`: *scoring_features*/*session_stats* exactly as
     in `_frozen_verdicts` -- here the recalibrated thresholds AND p-values are
     computed from this run's own scores in the normalized space end to end, so the
     mode stays fully coherent (no cross-space comparison anywhere)."""
@@ -713,7 +711,7 @@ def _recalibrate_verdicts(
         label_scr = scoring_windows[labels[scoring_windows] == label]
 
         if label_cal.size == 0:
-            # A1.3: no per-day threshold can be calibrated -> no verdicts at all for
+            # No per-day threshold can be calibrated -> no verdicts at all for
             # this state (falling back to the frozen fit-day threshold here would
             # silently reintroduce exactly the behavior this mode exists to avoid).
             role[label_all] = ROLE_NO_CONFORMAL_DATA
@@ -743,7 +741,7 @@ def _recalibrate_verdicts(
         # notes' per-state `n_consumed` column and whose confidence is carried by
         # `low_confidence` -- exactly the sweeps' semantics, not a second gate.
         threshold = calibrate(cal_scores, alpha)
-        # Calibration-bias rule (A1.3): scores are recorded for provenance (they ARE
+        # Calibration-bias rule: scores are recorded for provenance (they ARE
         # the threshold's empirical distribution), but no p-value, never an alarm.
         score[label_cal] = cal_scores
         role[label_cal] = ROLE_CONSUMED
@@ -797,7 +795,7 @@ def _trailing_bounds(
 def _rolling_floor(alpha: float) -> int:
     """Smallest trailing calibration count at which `calibrate(..., alpha)` yields a
     REAL (finite, non-low-confidence) threshold -- mathematically `ceil(1/alpha) - 1`
-    (spec A3.2's conformal floor, equivalently `n >= 1/alpha - 1`). Derived by
+    (the conformal floor, equivalently `n >= 1/alpha - 1`). Derived by
     probing `threshold_index` around the closed-form candidate instead of a separate
     floating-point `ceil(1/alpha)` so the rolling gate and `calibrate`'s own
     `low_confidence` boundary can NEVER disagree (the same boundary-consistency rule
@@ -824,7 +822,7 @@ def _rolling_verdicts(
     session_stats: SessionStats | None = None,
     exclusion_mask: np.ndarray | None = None,
 ) -> _Verdicts:
-    """Rolling mode (spec D7 as amended by A3.2): the SAME top split and roles as
+    """Rolling mode: the SAME top split and roles as
     recalibrate mode (calibration side consumed and never alarmed, scoring side
     scored -- rolling changes HOW each threshold is derived, not WHICH windows get
     verdicts). Per scored window `w` of state `s`: the trailing set is the scores
@@ -835,12 +833,12 @@ def _rolling_verdicts(
     (`threshold_source = SOURCE_ROLLING`); below the floor the window falls back to
     the snapshot's STORED fit-day threshold and stored calibration scores
     (`SOURCE_FIT_DAY_FALLBACK`) -- an explicit, per-window-flagged fallback, never
-    a silent one (the A1.3 rule against silent frozen fallbacks is exactly why the
+    a silent one (the rule against silent frozen fallbacks is exactly why the
     flag column exists). Consumed windows' scores are recorded (no p-value, never
     an alarm), which doubles as the audit trail: every rolling threshold is
     recomputable from alarms.parquet alone.
 
-    Under `--session-norm` (D3/A3.5): *scoring_features*/*session_stats* exactly as
+    Under `--session-norm`: *scoring_features*/*session_stats* exactly as
     in `_recalibrate_verdicts` -- trailing calibration scores, rolling thresholds
     and rolling p-values all live in the session-normalized space; the FALLBACK
     branch compares against the snapshot's stored (fit-space) thresholds exactly
@@ -963,7 +961,7 @@ def _assert_roles_complete(role: np.ndarray, valid_mask: np.ndarray) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Transitions + named states (package-9 Task 3, spec D2(c)/D3c, amendment A1.4)
+# Transitions + named states
 # ---------------------------------------------------------------------------
 
 
@@ -972,7 +970,7 @@ def _near_transition_mask(
 ) -> np.ndarray:
     """(W,) bool, True for every VALID window within `+-round(w_seconds/window_s)`
     STEPS -- counted along the VALID subsequence, not raw grid index -- of a
-    detected-state CHANGE found in that same valid subsequence (spec D3c/A1.8).
+    detected-state CHANGE found in that same valid subsequence.
 
     Invalid windows are filtered FIRST; a change is any label difference between
     consecutive entries of the compacted valid-only label sequence, so a
@@ -997,8 +995,7 @@ def _near_transition_mask(
     # max(1, ...) floor: literal parity with FittedDetector._finish's own
     # `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
     # round() truncates to 0 steps must still flag the immediate neighbours of a
-    # transition, not degenerate to "only the boundary window itself" (P9 T3a
-    # hardening).
+    # transition, not degenerate to "only the boundary window itself".
     w_windows = max(1, int(round(w_seconds / (window_ns / 1e9))))
     positions = np.arange(valid_idx.shape[0])
     near = np.zeros(valid_idx.shape[0], dtype=bool)
@@ -1009,9 +1006,9 @@ def _near_transition_mask(
 
 
 def _state_name_for(state_id: int, state_names: dict[int, str] | None) -> str:
-    """The A1.4 naming convention shared by every surfacing site: `"invalid"` for
+    """The naming convention shared by every surfacing site: `"invalid"` for
     `_INVALID_LABEL`; the snapshot's own name when *state_names* carries one for
-    *state_id*; else the bare `cluster-<id>` fallback (D2(a)'s convention, matching
+    *state_id*; else the bare `cluster-<id>` fallback (matching
     `rowii.eval.metrics.derive_state_names`' own fallback)."""
     if state_id == _INVALID_LABEL:
         return "invalid"
@@ -1023,7 +1020,7 @@ def _state_name_for(state_id: int, state_names: dict[int, str] | None) -> str:
 def _apply_transition_suppression(
     alarm: np.ndarray, near_transition: np.ndarray, role: np.ndarray
 ) -> int:
-    """`--suppress-transition-alarms` (spec D3c ablation): in place, force
+    """`--suppress-transition-alarms`: in place, force
     `alarm=False` on every SCORED window that is both currently an alarm and
     `near_transition` -- returns the count actually flipped
     (`suppressed_by_transition`, the notes' reported number). `score`/`p_value`/
@@ -1054,7 +1051,7 @@ def _alarms_frame(
     the window's grid left edge (`rowii.anomaly.overlap.to_utc_ns`'s own
     `t0_ns + window * window_ns` convention, reused directly -- it lives in `src`,
     not in a sibling script). `near_transition`/`state_name` are ALWAYS present
-    (A1.4) -- the latter via `_state_name_for`, so an unmapped state still gets its
+    -- the latter via `_state_name_for`, so an unmapped state still gets its
     `cluster-<id>` fallback name rather than a missing/empty cell."""
     idx = np.flatnonzero(prepared.valid_mask).astype(np.int64)
     frame = pd.DataFrame(
@@ -1093,10 +1090,10 @@ def _state_segments(
     """`segments.csv`'s table: `to_segments` over the full-length label array
     (`_INVALID_LABEL` segments included, visibly), `cluster` renamed to
     `cluster_id` -- `scripts/apply_detector.py`'s convention. `mapped_mode`
-    (D2(c)) is added ONLY when *state_names* is not None -- a nameless snapshot
+    is added ONLY when *state_names* is not None -- a nameless snapshot
     still carries no cluster-id -> mode-name mapping, and inventing one here would
     be a claim the artifact cannot back; this keeps the column conditional, unlike
-    `alarms.parquet`'s ALWAYS-present `state_name` (A1.4)."""
+    `alarms.parquet`'s ALWAYS-present `state_name`."""
     segments = to_segments(labels, grid).rename(columns={"cluster": "cluster_id"})
     if state_names is not None:
         segments["mapped_mode"] = [
@@ -1145,7 +1142,7 @@ def _timeline_markdown(
 
 
 def _session_norm_lines(snapshot_stats: SessionStats, run_stats: SessionStats) -> list[str]:
-    """The notes' `--session-norm` section (D3/A3.5): names the mode, BOTH stats'
+    """The notes' `--session-norm` section: names the mode, BOTH stats'
     n_windows, the pool-global sentinel where it applies, and the caveats that must
     travel with every session-normalized number."""
     if snapshot_stats.norm_minutes > 0.0:
@@ -1182,7 +1179,7 @@ def _session_norm_lines(snapshot_stats: SessionStats, run_stats: SessionStats) -
 
 
 def _level_recal_lines(offsets: dict[str, float]) -> list[str]:
-    """The notes' `--level-recal` section (D2/A1.4/A1.10/A1.11): names the
+    """The notes' `--level-recal` section: names the
     mechanism, the anchor source, and the per-column offset table -- mirrors
     `scripts/run_step2.py`'s own `level_recal_note_lines` block (duplicated
     text, not imported -- the script-sibling rule)."""
@@ -1222,10 +1219,10 @@ def _rolling_coverage_lines(
     rolling_minutes: float,
     floor: int,
 ) -> list[str]:
-    """The notes' MANDATORY rolling-mode block (spec A3.2): per-state trailing-
+    """The notes' MANDATORY rolling-mode block: per-state trailing-
     coverage table (fraction of scored windows whose trailing calibration count
-    reached the conformal floor at this M), the A3.2 motivating measurement as the
-    rationale, and the D7 double-reference honesty note."""
+    reached the conformal floor at this M), the motivating measurement as the
+    rationale, and the double-reference honesty note."""
     lines = [
         "",
         f"## Rolling trailing coverage (M = {rolling_minutes:g} min, conformal "
@@ -1471,7 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if args.level_recal and args.session_norm:
-        # A1.10 fit-path exclusivity: session-normalization and level-only
+        # Fit-path exclusivity: session-normalization and level-only
         # recalibration are different scoring-space transforms and are never
         # both active in one pass.
         print(
@@ -1490,7 +1487,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.session_norm and snapshot.session_stats is None:
-        # A3.5 binding: never a silent raw-space fallback under --session-norm.
+        # Binding: never a silent raw-space fallback under --session-norm.
         print(
             f"monitor: --session-norm requires a snapshot that stores session-"
             f"normalization stats (format v2 with session stats), but "
@@ -1515,7 +1512,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.level_recal and snapshot.level_recal_medians is None:
-        # A1.10 binding: never a silent raw-space fallback under --level-recal.
+        # Binding: never a silent raw-space fallback under --level-recal.
         print(
             f"monitor: --level-recal requires a snapshot that stores level-"
             f"recal reference medians (format v2 with level_recal_medians), "
@@ -1593,7 +1590,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     detector = to_detector(snapshot)
-    labels = _apply_detector_labels(prepared, detector)  # ALWAYS raw features (A3.5)
+    labels = _apply_detector_labels(prepared, detector)  # ALWAYS raw features
 
     session_stats: SessionStats | None = None
     run_stats: SessionStats | None = None
@@ -1625,11 +1622,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         scoring_features = apply_session_norm(prepared.features, run_stats)
     elif args.level_recal:
-        # A1.11: applies AFTER the geometry-guard projection above, so
+        # Applies AFTER the geometry-guard projection above, so
         # prepared.feature_names already equals snapshot.feature_names here --
         # the run-side median is name-keyed against the PROJECTED columns.
         # session_stats stays None (references scored RAW, the query is
-        # aligned onto them, mirrors the A3.5 detector-RAW boundary).
+        # aligned onto them, mirrors the detector-RAW boundary).
         assert snapshot.level_recal_medians is not None  # guarded after load_snapshot
         try:
             first_n_rows = _first_n_minutes_rows(prepared, _DEFAULT_NORM_MINUTES)
@@ -1641,7 +1638,7 @@ def main(argv: list[str] | None = None) -> int:
                 prepared.features, snapshot.feature_names, level_recal_offsets_used
             )
         except ValueError as exc:
-            # Covers the A1.9 zero-level-column refusal (an embedding snapshot's
+            # Covers the zero-level-column refusal (an embedding snapshot's
             # feature contract) and an empty first-N/anchor overlap alike --
             # every ValueError from the levelrecal module surfaces as exit 2.
             print(
@@ -1725,8 +1722,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _assert_roles_complete(verdicts.role, prepared.valid_mask)
 
-    # Package-9 Task 3 (spec D3c/A1.8): near_transition is computed for every run
-    # (ALWAYS-present column, A1.4); --suppress-transition-alarms then optionally
+    # near_transition is computed for every run
+    # (ALWAYS-present column); --suppress-transition-alarms then optionally
     # forces alarm=False on near-transition SCORED windows BEFORE any output is
     # built, so segments/alarms/alarm_segments/notes all see the suppressed set.
     near_transition = _near_transition_mask(

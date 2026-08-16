@@ -27,16 +27,16 @@ fit ONE scorer on that state's fit-part reference, score its own conformal-part 
 downstream, inside `scarcity_curve` itself, which is what makes a 50-repetition sweep
 over 8 budgets cheap per state. A state excluded by `min_ref`, or with an empty
 conformal or scoring side, never gets a `scarcity_curve` call -- it is recorded in
-`summary.md` as "not curvable" WITH its count instead of silently vanishing (spec D5
-no-silent-caps, orchestrator resolution 4).
+`summary.md` as "not curvable" WITH its count instead of silently vanishing (the
+no-silent-caps policy).
 
 ## Secondary curve: always the FIRST run x fusion x knn
 
 `--secondary` computes exactly ONE `segment_accumulation_curve`, for `args.runs[0]` x
 `"fusion"` x `"knn"` -- fixed, independent of whatever `--variants`/`--scorers` the
-main (primary) sweep was actually given (Task 5 brief). It reuses the SAME
+main (primary) sweep was actually given. It reuses the SAME
 seed-7 top-level split as the primary curve would for that combo, so its `scoring_
-windows` (the fixed, never-resampled held-out side, spec D3) are identical whether or
+windows` (the fixed, never-resampled held-out side) are identical whether or
 not that exact combo happened to run as part of the primary sweep too.
 
 ## Output layout
@@ -54,7 +54,7 @@ needed" headline, `_stabilization_table`) -- a state that never clears both
 conditions within the tested checkpoints is reported `stabilized=False` citing its
 largest tested checkpoint, never silently omitted. `summary.md` also carries the
 S-package honesty notes and the scoring-side-sampling-noise caveat verbatim
-(`_HONESTY_NOTES`, spec D5 + spec D3).
+(`_HONESTY_NOTES`).
 
 A combo whose own `prepare_run` raises `RuntimeError` (run too short/sparse for the
 requested variant) is logged and skipped, mirroring `scripts/run_step2.py`'s and
@@ -140,13 +140,13 @@ own default, so a state curvable here would also get a real per-state reference 
 _SECONDARY_VARIANT = "fusion"
 _SECONDARY_SCORER = "knn"
 """The secondary (segment-accumulation) curve is always computed for `args.runs[0]` x
-`_SECONDARY_VARIANT` x `_SECONDARY_SCORER` -- fixed by the Task 5 brief, independent
+`_SECONDARY_VARIANT` x `_SECONDARY_SCORER` -- fixed, independent
 of whatever `--variants`/`--scorers` the primary sweep was given."""
 
 _ALPHA_FLOOR_N = 19
 """`1/0.05 - 1` -- the alpha=0.05 conformal achievability floor (`rowii.anomaly.
 conformal.threshold_index`); always drawn as a fixed reference marker on the primary
-figure regardless of the run's own `--alpha` (orchestrator resolution 5's literal
+figure regardless of the run's own `--alpha` (drawn as a
 "vertical line at n = 19 labeled 'alpha=0.05 floor'")."""
 
 _INVALID_LABEL = -1
@@ -246,7 +246,7 @@ def _import_beats_or_exit() -> None:
 def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
     """Mirrors `scripts/run_step1.py`'s own private helper of the same name
     (duplicated, not imported -- see module docstring). Extends the
-    beats-import-guard pattern (package-4 spec D4): torch missing (checked first)
+    beats-import-guard pattern: torch missing (checked first)
     -> SystemExit naming the shared `[beats]` extra; else the ONE checkpoint
     relevant to *variant* itself missing -> SystemExit naming its own env var."""
     try:
@@ -264,7 +264,7 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
 
 
 def _import_student_or_exit(cfg: Config) -> None:
-    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    """Mirrors `_import_tfc_or_exit` above, simplified: the
     distilled student has only ONE checkpoint (unlike TF-C's two independent
     branches), so there is no variant-based checkpoint selection -- torch
     missing (checked first) -> SystemExit naming the shared `[beats]` extra;
@@ -318,7 +318,7 @@ def _detected_labels(prepared: PreparedRun, cfg: Config) -> np.ndarray:
 @dataclass(frozen=True)
 class _NotCurvable:
     """One state that could not be curved for one combo -- always reported in
-    `summary.md` (spec D5 no-silent-caps), never just dropped."""
+    `summary.md` (the no-silent-caps policy), never just dropped."""
 
     label: int | str
     reason: str
@@ -455,7 +455,7 @@ def _run_secondary_combo(
     """The ONE segment-accumulation curve `--secondary` asks for -- always
     `run_name` x `_SECONDARY_VARIANT` x `_SECONDARY_SCORER` (module docstring).
     Reuses the SAME seed-7 top-level split as a primary combo on this run would, so
-    `scoring_windows` (the FIXED, never-resampled scoring side, spec D3) is
+    `scoring_windows` (the FIXED, never-resampled scoring side) is
     identical either way; `segment_accumulation_curve` then only ever draws its
     growing fit/conformal prefixes from the calibration side's own segments.
     """
@@ -490,7 +490,7 @@ def _run_secondary_combo(
 
 
 # ---------------------------------------------------------------------------
-# Figures (orchestrator resolution 5)
+# Figures
 # ---------------------------------------------------------------------------
 
 
@@ -505,7 +505,7 @@ def _plot_one_curve_panel(
     """Primary-figure per-state panel: x = *x_col* (`achieved_n`), translucent
     per-rep points + mean line + empirical 5/95 band, exact `beta_band` overlay at
     each distinct *x_col* value, horizontal alpha line, vertical `n = _ALPHA_FLOOR_N`
-    marker (orchestrator resolution 5)."""
+    marker."""
     x_raw = state_curve[x_col].to_numpy(dtype=float)
     far_raw = state_curve["realized_far"].to_numpy(dtype=float)
     ax.scatter(x_raw, far_raw, alpha=0.15, s=10, color="tab:blue", label="per-rep FAR")
@@ -547,7 +547,7 @@ def _plot_one_curve_panel(
 
 
 def _plot_curve_by_state(out_path: Path, curve: pd.DataFrame, alpha: float) -> None:
-    """One panel per curvable state (module docstring / orchestrator resolution 5).
+    """One panel per curvable state (module docstring).
     Always writes a non-empty PNG, even when zero states are curvable."""
     labels = sorted(curve["label"].unique().tolist()) if len(curve) else []
     n_panels = max(len(labels), 1)
@@ -620,7 +620,7 @@ def _plot_one_segment_panel(
 
 
 def _plot_segment_curve(out_path: Path, curve: pd.DataFrame, alpha: float) -> None:
-    """Secondary figure: x = minutes (module docstring / orchestrator resolution 5).
+    """Secondary figure: x = minutes (module docstring).
     Always writes a non-empty PNG, even when zero states are curvable."""
     labels = sorted(curve["label"].unique().tolist()) if len(curve) else []
     n_panels = max(len(labels), 1)
@@ -638,7 +638,7 @@ def _plot_segment_curve(out_path: Path, curve: pd.DataFrame, alpha: float) -> No
 
 
 # ---------------------------------------------------------------------------
-# summary.md (orchestrator resolution 4: no state ever silently dropped)
+# summary.md (no state ever silently dropped)
 # ---------------------------------------------------------------------------
 
 _HONESTY_NOTES = """\
@@ -686,7 +686,7 @@ def _stabilization_table(
     `<= 2*alpha` -- both conditions at the SAME checkpoint. A label with no such
     checkpoint among those actually tested is reported `stabilized=False`, citing
     the LARGEST tested checkpoint's own mean/95th-pct instead of silently omitting
-    the state (spec D5 no-silent-caps).
+    the state (no-silent-caps).
 
     Args:
         curve: One combo's `curve`/`segment_curve` DataFrame (columns must include

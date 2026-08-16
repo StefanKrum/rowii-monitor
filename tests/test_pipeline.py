@@ -1,4 +1,4 @@
-"""Unit tests for `rowii.pipeline` (Step-2 Task S1): `prepare_run`'s on-disk feature
+"""Unit tests for `rowii.pipeline`: `prepare_run`'s on-disk feature
 cache (round-trip + fingerprint invalidation) and its two fields Step-1's own CLI never
 consumed, `feature_names` and `segment_ids`.
 
@@ -266,7 +266,7 @@ def test_prepare_run_unknown_variant_raises_value_error(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. build_run_grid: DAQ epoch-2000 clock quirk (Task 10, D2) -- the run's derived
+# 4. build_run_grid: DAQ epoch-2000 clock quirk -- the run's derived
 # UTC offset (rowii.io.dataset.run_utc_offset_ns) must be baked into grid.t0_ns
 # BEFORE common_grid, so PreparedRun.grid.t0_ns is true UTC, not the raw DAQ axis.
 # ---------------------------------------------------------------------------
@@ -352,7 +352,7 @@ def test_build_run_grid_leaves_already_correct_clock_grid_unshifted(tmp_path) ->
 
 
 # ---------------------------------------------------------------------------
-# 5. prepare_run cache: DAQ epoch-2000 clock quirk (Task 10, D4) -- a cache written
+# 5. prepare_run cache: DAQ epoch-2000 clock quirk -- a cache written
 # before the true-UTC fix carries a raw-axis grid_t0_ns; a fingerprint-matched hit
 # must OVERRIDE it with the true-UTC value on load, without recomputing features.
 # ---------------------------------------------------------------------------
@@ -373,7 +373,7 @@ def test_prepare_run_cache_hit_overrides_raw_axis_t0_ns_with_true_utc(
 
     monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
 
-    # First call: real compute + cache write. grid.t0_ns is ALREADY true-UTC (D2),
+    # First call: real compute + cache write. grid.t0_ns is ALREADY true-UTC,
     # so simulate a cache written BEFORE the fix by round-tripping the cache file
     # with grid_t0_ns rewritten back to the raw axis -- exactly what an npz on disk
     # from before this task would carry.
@@ -422,7 +422,7 @@ def test_prepare_run_cache_hit_is_a_no_op_when_t0_ns_already_true_utc(
 
 
 # ---------------------------------------------------------------------------
-# 6. logmel variant (package-3 spec D3): stream mapping, featurizer dispatch, and a
+# 6. logmel variant: stream mapping, featurizer dispatch, and a
 # cache round-trip for the logmel-shaped (W, 49 * 64 = 3136) feature matrix.
 # ---------------------------------------------------------------------------
 
@@ -455,7 +455,7 @@ def test_featurizer_for_stream_dispatches_logmel_variant(tmp_path) -> None:
 
 def _single_file_logmel_run(burst_dir: Path, *, n_seconds: int = 3) -> Run:
     """One 50 kHz single-channel file for the primary mic stream ONLY --
-    `_streams_for_variant("logmel")` needs no other stream (spec D3: primary mic,
+    `_streams_for_variant("logmel")` needs no other stream (primary mic,
     size bound)."""
     burst_dir.mkdir(parents=True, exist_ok=True)
     path = burst_dir / "gen_mic.dat"
@@ -475,7 +475,7 @@ def _single_file_logmel_run(burst_dir: Path, *, n_seconds: int = 3) -> Run:
 
 
 # ---------------------------------------------------------------------------
-# 7. audio-tfc / vibration-tfc variants (package-4 spec D4): stream mapping,
+# 7. audio-tfc / vibration-tfc variants: stream mapping,
 # featurizer dispatch (with the RELEVANT checkpoint path injected via cfg),
 # feature-column assembly, and cache-fingerprint checkpoint scoping.
 # ---------------------------------------------------------------------------
@@ -555,7 +555,7 @@ def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
     whenever a user points at a new audio-branch checkpoint). Three cfgs, changing
     exactly ONE field relative to the baseline each, isolate the two checkpoint
     axes independently. This test pins RELATIVE behavior only; the absolute payload
-    SHAPE (backward compatibility with pre-package-4 caches) is pinned by the
+    SHAPE (backward compatibility with pre-existing caches) is pinned by the
     golden test below."""
     run = _single_file_audio_run(tmp_path / "burst")
     audio_a, audio_b = tmp_path / "tfc_audio_a.pt", tmp_path / "tfc_audio_b.pt"
@@ -594,7 +594,7 @@ def test_cache_fingerprint_tfc_checkpoint_change_is_scoped_to_its_own_variant(
 
 
 # ---------------------------------------------------------------------------
-# 8. audio-student variant (Step-2 package-5 spec D5): stream mapping (mirrors
+# 8. audio-student variant: stream mapping (mirrors
 # audio-beats), featurizer dispatch (with cfg.student_checkpoint injected),
 # feature-column assembly, and cache-fingerprint checkpoint scoping isolated to
 # ITS OWN variant only.
@@ -667,15 +667,15 @@ def test_assemble_variant_features_audio_student_hstacks_like_audio_beats() -> N
 def test_cache_fingerprint_student_checkpoint_change_is_scoped_to_its_own_variant(
     tmp_path,
 ) -> None:
-    """Variant-SCOPED checkpoint sensitivity (mirrors the tfc test above, package-5
-    spec D5): a fingerprint must depend on `cfg.student_checkpoint` ONLY for
+    """Variant-SCOPED checkpoint sensitivity (mirrors the tfc test above):
+    a fingerprint must depend on `cfg.student_checkpoint` ONLY for
     `"audio-student"` -- changing it must leave `"audio-beats"` (the teacher
     variant `audio-student` distills FROM), `"audio-tfc"`, and every other
     variant's fingerprint untouched (the reverse would force a needless
     recompute of, say, the hours-expensive `audio-beats` cache whenever a user
     merely points `ROWII_STUDENT_CHECKPOINT` at a freshly distilled checkpoint).
     This test pins RELATIVE behavior only; the absolute payload SHAPE (backward
-    compatibility with pre-package-5 caches) is pinned by the golden test below.
+    compatibility with pre-existing caches) is pinned by the golden test below.
     """
     run = _single_file_audio_run(tmp_path / "burst")
     student_a = tmp_path / "student_a.pt"
@@ -709,10 +709,10 @@ def test_cache_fingerprint_student_checkpoint_change_is_scoped_to_its_own_varian
 
 
 # ---------------------------------------------------------------------------
-# 9. beats_int8_checkpoint (Step-2 package-5 spec D6): cache-fingerprint
+# 9. beats_int8_checkpoint: cache-fingerprint
 # scoping to beats variants ONLY (audio-beats/fusion-beats), and ONLY when the
 # int8 path is actually set -- unset must be payload byte-identical to the
-# pre-existing (pre-Task-5) beats-variant fingerprint (no int8-checkpoint line
+# pre-existing beats-variant fingerprint (no int8-checkpoint line
 # at all), and `_featurizer_for_stream`'s beats dispatch must thread
 # cfg.beats_int8_checkpoint through to BeatsFeaturizer's int8_model_path arg.
 # ---------------------------------------------------------------------------
@@ -728,7 +728,7 @@ def test_cache_fingerprint_beats_int8_checkpoint_changes_beats_variants_only(
     itself changes, and leave every OTHER variant's fingerprint (including
     the fp32-only `beats_checkpoint`-scoped ones) untouched. This test pins
     RELATIVE behavior only; the absolute payload SHAPE (backward
-    compatibility with pre-Task-5 caches) is pinned by the two tests below."""
+    compatibility with pre-existing caches) is pinned by the two tests below."""
     run = _single_file_audio_run(tmp_path / "burst")
     unset = Config(data_root=tmp_path, results_root=tmp_path)
     set_a = Config(
@@ -766,9 +766,9 @@ def test_cache_fingerprint_beats_int8_checkpoint_changes_beats_variants_only(
 def test_cache_fingerprint_beats_int8_checkpoint_unset_is_byte_identical_to_pre_task5_format(
     tmp_path,
 ) -> None:
-    """The literal 'unset -> payload byte-identical' contract (package-5 spec
-    D6, Task 5): reconstructs the EXACT payload `_cache_fingerprint` produced
-    for a beats variant before this task existed (three fixed lines + sorted
+    """The literal 'unset -> payload byte-identical' contract: reconstructs
+    the EXACT payload `_cache_fingerprint` produced
+    for a beats variant before this feature existed (three fixed lines + sorted
     file entries, no int8 line at all) independently, and asserts today's
     function -- called with beats_int8_checkpoint left at its default `None`
     -- still hashes to that same value. A regression here means an EXISTING
@@ -794,7 +794,7 @@ def test_cache_fingerprint_beats_int8_checkpoint_unset_is_byte_identical_to_pre_
 def test_featurizer_for_stream_threads_beats_int8_checkpoint_for_beats_variants(
     tmp_path,
 ) -> None:
-    """`_featurizer_for_stream`'s beats branch (package-5 spec D6) must pass
+    """`_featurizer_for_stream`'s beats branch must pass
     `cfg.beats_int8_checkpoint` through as `BeatsFeaturizer`'s `int8_model_
     path` -- proven here via the missing-file guard (cheap: no real torch
     model construction needed) rather than a full real-checkpoint round trip
@@ -847,23 +847,23 @@ def _golden_fingerprint_run(burst_dir: Path) -> Run:
 
 
 def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) -> None:
-    """GOLDEN regression pins (package-4 execution finding): the fingerprint payload
+    """GOLDEN regression pins: the fingerprint payload
     SHAPE is a persistence format -- every pre-existing `results/cache/*.npz` stores
     a fingerprint computed from it, and hours-expensive BEATs caches silently
     invalidate (full re-extraction on next use) if the payload for their variant
-    ever changes shape, even with identical semantics. Task 4's first cut emitted
+    ever changes shape, even with identical semantics. An early cut emitted
     blank `tfc_*_checkpoint=` lines for EVERY variant and did exactly that (real
     finding: 250526-tu/audio-beats stored d455ca9b... vs recomputed 9bacaa14...).
 
     The hex literals below are sha256 digests computed ONCE from the intended
     payloads, independently of `_cache_fingerprint` itself:
 
-    - non-tfc/non-student variants: the PRE-package-4 payload format,
+    - non-tfc/non-student variants: the ORIGINAL payload format,
       byte-identical (`variant=` / `window_s=` / `beats_checkpoint=` / sorted
       `name:size` file entries -- NO extra checkpoint lines at all);
     - tfc variants: that same format + exactly ONE extra line (its own
       variant's checkpoint) inserted after `beats_checkpoint=`;
-    - `audio-student` (package-5 spec D5, Task 4, added in THIS commit): same
+    - `audio-student` (added in THIS commit): same
       format + exactly ONE extra `student_checkpoint=` line, same insertion
       point. No cache-migration is needed for this addition -- `audio-student`
       is a BRAND NEW variant with no pre-existing `results/cache/*.npz`
@@ -871,14 +871,14 @@ def test_cache_fingerprint_golden_pins_payload_backward_compatibility(tmp_path) 
       byte-for-byte UNCHANGED (proven by their tests staying green, untouched,
       in this same commit) -- the banked lesson applied consciously, not
       skipped.
-    - `audio-beats` + `beats_int8_checkpoint` SET (package-5 spec D6, Task 5,
-      added in THIS commit): same format + exactly ONE extra `beats_int8_
+    - `audio-beats` + `beats_int8_checkpoint` SET (added in THIS commit): same
+      format + exactly ONE extra `beats_int8_
       checkpoint=` line, inserted right after `beats_checkpoint=` -- scoped to
       beats variants ONLY (`_is_beats_variant`: `audio-beats`/`fusion-beats`)
       and ONLY when the int8 path is actually set at all; the UNSET case is
       covered by a separate dedicated test (`test_cache_fingerprint_beats_
       int8_checkpoint_unset_is_byte_identical_to_pre_task5_format`), which
-      independently reconstructs the SAME pre-Task-5 payload rather than
+      independently reconstructs the SAME pre-existing payload rather than
       duplicating another opaque hex literal here. No cache-migration is
       needed for the unset case: every existing `results/cache/*--audio-
       beats.npz`/`*--fusion-beats.npz` entry was written under a

@@ -19,16 +19,16 @@ The pipeline NEVER concatenates a whole stream into memory.
 SCADA/ground-truth loading (`rowii.scada.labels`) is deliberately NOT part of this
 module, even though `prepare_run` accepts an optional `betriebsdaten` argument (see its
 own docstring) -- Step 2's per-state references are built from DETECTED cluster labels,
-not GT (design spec §2: GT enters only evaluation views), and Step-1's own GT loading
+not GT (GT enters only evaluation views), and Step-1's own GT loading
 stays a CLI-layer concern (`scripts/run_step1.py`'s `load_run_gt`), called separately
 using this module's `PreparedRun.grid`/`valid_mask`.
 
-On-disk feature cache (Step-2 Task S1): `prepare_run(..., use_cache=True)` (the default)
+On-disk feature cache: `prepare_run(..., use_cache=True)` (the default)
 persists its result to `results/cache/<run.name>--<variant>.npz`, keyed by a sha256
 fingerprint of everything that determines the output (variant, window duration, every
-burst file's name+size, the beats-checkpoint path, and -- for the two tfc variants,
-package-4 spec D4 -- the ONE tfc checkpoint path relevant to that variant; for the two
-beats variants, package-5 spec D6, the int8 checkpoint path too, but ONLY when it is
+burst file's name+size, the beats-checkpoint path, and -- for the two tfc variants --
+the ONE tfc checkpoint path relevant to that variant; for the two
+beats variants, the int8 checkpoint path too, but ONLY when it is
 actually set) -- see `_cache_fingerprint`. A fingerprint mismatch (or a missing/corrupt
 cache file) is treated as a plain cache miss: recompute, then overwrite. `use_cache=False`
 bypasses the cache entirely (never reads, never writes) -- wired to `scripts/run_step1.py
@@ -54,7 +54,7 @@ from rowii.signals.logmel import LogmelFeaturizer
 from rowii.signals.windows import WindowGrid, common_grid, coverage, window_slices
 
 if TYPE_CHECKING:
-    # StudentFeaturizer (Step-2 package-5 spec D5) shares BeatsFeaturizer's/
+    # StudentFeaturizer shares BeatsFeaturizer's/
     # TfcFeaturizer's "optional [beats] extra" story -- same TYPE_CHECKING-only
     # import, same lazy real import inside `_featurizer_for_stream`, only when
     # the `audio-student` variant runs.
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     # lazily, only when an actual beats variant runs).
     from rowii.signals.beats import BeatsFeaturizer
 
-    # TfcFeaturizer (package-4 spec D4) shares BeatsFeaturizer's "optional [beats]
+    # TfcFeaturizer shares BeatsFeaturizer's "optional [beats]
     # extra" story -- same TYPE_CHECKING-only import, same lazy real import inside
     # `_featurizer_for_stream`, only when an actual tfc variant runs.
     from rowii.tfc.wrapper import TfcFeaturizer
@@ -74,9 +74,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Streams per variant (spec: audio streams = both mic files' channels;
+# Streams per variant (audio streams = both mic files' channels;
 # vibration = both vib streams' live channels; fusion = all four; logmel = the
-# primary (generator) mic ONLY, package-3 spec D3: size bound, documented).
+# primary (generator) mic ONLY: size bound, documented).
 # ---------------------------------------------------------------------------
 
 _AUDIO_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0", "RAWTurbineMic__1")
@@ -86,8 +86,8 @@ _LOGMEL_STREAMS: tuple[str, ...] = ("RAWGeneratorMic__0",)
 _COVERAGE_THRESHOLD = 0.8
 _MAX_INVALID_FRACTION = 0.05
 _SAMPLE_JITTER_TOLERANCE = 4
-"""Max |actual - expected| sample count still treated as a "full" window (Task 13 real-data
-finding: real DAQ clocks jitter by +/-1 sample/window at 10 kHz/50 kHz -- a sample count off
+"""Max |actual - expected| sample count still treated as a "full" window (real DAQ
+clocks jitter by +/-1 sample/window at 10 kHz/50 kHz -- a sample count off
 by 2370+ is a genuine partial window at a file boundary, not jitter; see
 `_extract_stream_features`)."""
 
@@ -96,7 +96,7 @@ _BEATS_INSTALL_HINT = (
 )
 
 _TFC_INSTALL_HINT = 'install extra: pip install -e ".[beats]"'
-"""TF-C (package-4 spec D4) reuses the SAME `[beats]` extra as BEATs (both need
+"""TF-C reuses the SAME `[beats]` extra as BEATs (both need
 torch) -- but unlike `_BEATS_INSTALL_HINT`, this hint deliberately does NOT also
 name a checkpoint env var: TF-C has TWO independent checkpoints (`audio-tfc` ->
 `ROWII_TFC_AUDIO_CHECKPOINT`, `vibration-tfc` -> `ROWII_TFC_VIB_CHECKPOINT`), so
@@ -106,7 +106,7 @@ stream`'s own beats-checkpoint-None message shape, e.g. `scripts/run_step1.py`'s
 `_import_tfc_or_exit`)."""
 
 _STUDENT_INSTALL_HINT = 'install extra: pip install -e ".[beats]"'
-"""The distilled student (Step-2 package-5 spec D5) reuses the SAME `[beats]`
+"""The distilled student reuses the SAME `[beats]`
 extra as BEATs/TF-C (its checkpoint loader needs torch) -- mirrors
 `_TFC_INSTALL_HINT`'s own shape: this hint deliberately does NOT also name a
 checkpoint env var, since there is only ONE (`ROWII_STUDENT_CHECKPOINT`, unlike
@@ -121,7 +121,7 @@ def _streams_for_variant(variant: str) -> tuple[str, ...]:
     entry is always the first mic stream for every audio-bearing variant (including
     `"logmel"`, `"audio-tfc"`, and `"audio-student"` -- the latter two's ONLY stream
     being that same mic pair for `"audio-tfc"`, or mirroring `"audio-beats"` for
-    `"audio-student"`, package-5 spec D5) and the first vib stream for
+    `"audio-student"`) and the first vib stream for
     `"vibration"`/`"vibration-tfc"` -- see that field's own docstring.
     """
     if variant in ("audio", "audio-beats", "audio-tfc", "audio-student"):
@@ -143,8 +143,8 @@ def stream_columns(feature_names: list[str], stream: str) -> np.ndarray:
     `_assemble_feature_names`); consumers defined on ONE stream's block -- the
     distillation teacher target and the cross-attention audio query are both
     defined on the primary mic's 768-d BEATs embedding, never the full two-mic
-    1536-column concatenation (packages 5 D5/D8; regressing/projecting against
-    the full matrix was the package-5 execution's recurring real-data failure)
+    1536-column concatenation (regressing/projecting against
+    the full matrix was a recurring real-data failure)
     -- select it here, by name prefix rather than position, so a stream-order
     change breaks loudly at the caller's own width check instead of silently
     mis-slicing.
@@ -167,7 +167,7 @@ def _is_beats_variant(variant: str) -> bool:
 
 
 def _is_tfc_variant(variant: str) -> bool:
-    """Mirrors `_is_beats_variant` (package-4 spec D4): `TfcFeaturizer` is likewise
+    """Mirrors `_is_beats_variant`: `TfcFeaturizer` is likewise
     audio/vibration-branch-specific per variant (unlike BEATs, TF-C is NOT
     audio-only -- `"vibration-tfc"` runs the SAME frozen-embedding contract on the
     vibration branch, pre-trained separately on CWRU/Paderborn bearing data)."""
@@ -175,7 +175,7 @@ def _is_tfc_variant(variant: str) -> bool:
 
 
 def _is_student_variant(variant: str) -> bool:
-    """Mirrors `_is_beats_variant`/`_is_tfc_variant` (Step-2 package-5 spec D5):
+    """Mirrors `_is_beats_variant`/`_is_tfc_variant`:
     `"audio-student"` is the ONE concrete variant the distilled
     `StudentFeaturizer` backs -- unlike BEATs/TF-C there is no vibration- or
     fusion-branch counterpart (the student distills from BEATs' own
@@ -192,7 +192,7 @@ def _featurizer_for_stream(
     """One featurizer instance for *stream*, given *variant*.
 
     Vibration streams get a fresh `VibFeaturizer` for every variant EXCEPT
-    `"vibration-tfc"` (package-4 spec D4: unlike BEATs -- audio-branch only
+    `"vibration-tfc"` (unlike BEATs -- audio-branch only
     per the design, so no "vib-beats" variant ever exists -- TF-C IS
     pre-trained on both branches separately, so `TfcFeaturizer(checkpoint=
     cfg.tfc_vib_checkpoint)` is the one case a vibration stream's featurizer
@@ -201,7 +201,7 @@ def _featurizer_for_stream(
     `_streams_for_variant`), `BeatsFeaturizer` for the two beats variants,
     `TfcFeaturizer(checkpoint=cfg.tfc_audio_checkpoint)` for `"audio-tfc"`,
     `StudentFeaturizer(checkpoint=cfg.student_checkpoint)` for
-    `"audio-student"` (package-5 spec D5), and `AudioFeaturizer` otherwise.
+    `"audio-student"`, and `AudioFeaturizer` otherwise.
     One `BeatsFeaturizer`/`TfcFeaturizer`/`StudentFeaturizer` (and therefore
     one loaded copy of the frozen/trained checkpoint) is constructed PER
     audio stream, not shared between the two -- mirroring how handcrafted
@@ -222,7 +222,7 @@ def _featurizer_for_stream(
     mirrored per script).
 
     `BeatsFeaturizer` also always receives `cfg.beats_int8_checkpoint` as its
-    `int8_model_path` arg (package-5 spec D6), for BOTH beats variants --
+    `int8_model_path` arg, for BOTH beats variants --
     `None` (the default, no env set) reproduces the fp32-only behavior
     exactly; when set, `BeatsFeaturizer.__init__` itself decides to load the
     quantized module instead of *checkpoint* (that constructor's own
@@ -265,7 +265,7 @@ def _featurizer_for_stream(
 
 
 # ---------------------------------------------------------------------------
-# Run-level grid (no data loaded -- header-only synthesis, spec Task 12 step 2)
+# Run-level grid (no data loaded -- header-only synthesis)
 # ---------------------------------------------------------------------------
 
 
@@ -295,7 +295,7 @@ def build_run_grid(
 ) -> WindowGrid:
     """Common window grid across *streams*, computed from header-only reads.
 
-    Task 10 (D2, DAQ epoch-2000 clock quirk): before `common_grid`, every stream's
+    DAQ epoch-2000 clock quirk: before `common_grid`, every stream's
     synthesized header t0 is shifted by *run*'s derived UTC offset -- ONE value for
     the whole run, applied identically to every stream, so the returned grid's
     `t0_ns` (and therefore every `WindowGrid.edges_ns()`/`to_segments`-derived
@@ -343,7 +343,7 @@ def build_run_grid(
 
 
 # ---------------------------------------------------------------------------
-# Chunked per-stream feature extraction (spec Task 12 step 3 -- memory constraint)
+# Chunked per-stream feature extraction (memory constraint)
 # ---------------------------------------------------------------------------
 
 
@@ -395,7 +395,7 @@ def _extract_stream_features(
 ) -> _StreamFeatureResult:
     """Featurize one stream's burst files against *grid*, one file at a time.
 
-    Task 10 (D2, DAQ epoch-2000 clock quirk): *grid* is already on the true-UTC
+    DAQ epoch-2000 clock quirk: *grid* is already on the true-UTC
     axis (`build_run_grid`), but each file's OWN raw `timestamps_ns` (`read_gantner`,
     read straight off disk) still carries the raw DAQ axis -- *offset_ns* (the same
     run-level `rowii.io.dataset.run_utc_offset_ns` value `build_run_grid` baked into
@@ -419,7 +419,7 @@ def _extract_stream_features(
     are contiguous with < 15 min gaps and each grid window in practice is
     covered by exactly one file).
 
-    Tolerance rationale (Task 13 real-data finding): real DAQ clocks jitter
+    Tolerance rationale: real DAQ clocks jitter
     by +/-1 sample per window even with no actual data gap -- `read_gantner`'s
     rate estimate is a median over the whole file, so any single window can
     round to one sample more or fewer than that estimate predicts. A genuine
@@ -446,7 +446,7 @@ def _extract_stream_features(
     matrix -- an acceptable fail-fast outcome for a pathological case with no
     test coverage or spec-defined handling.
 
-    `segment_ids` (Step-2 Task S1 addition, alongside the pre-existing
+    `segment_ids` (alongside the pre-existing
     `features`/`coverage`): derived from the SAME per-file `window_slices` call
     already computed for `coverage` -- a window is attributed to the EARLIEST
     (sorted) file whose slice for that window is non-empty (`sl.stop > sl.start`,
@@ -513,7 +513,7 @@ def _extract_stream_features(
 
 
 # ---------------------------------------------------------------------------
-# Validity mask (spec Task 12 step 5)
+# Validity mask
 # ---------------------------------------------------------------------------
 
 
@@ -542,7 +542,7 @@ def compute_validity_mask(
 
 
 # ---------------------------------------------------------------------------
-# Per-variant feature assembly (spec Task 12 step 4)
+# Per-variant feature assembly
 # ---------------------------------------------------------------------------
 
 
@@ -551,9 +551,9 @@ def assemble_variant_features(
 ) -> np.ndarray:
     """Combine per-stream feature matrices into the variant's (W, F) matrix.
 
-    audio/vibration/logmel (and their tfc counterparts, package-4 spec D4 --
+    audio/vibration/logmel (and their tfc counterparts --
     `audio-tfc` mirrors `audio`, `vibration-tfc` mirrors `vibration`, both
-    single-stream-family variants; `audio-student`, package-5 spec D5, mirrors
+    single-stream-family variants; `audio-student` mirrors
     `audio`/`audio-beats` the same way): `np.hstack` of the variant's stream
     matrices (z-scoring happens inside `run_detection`; for logmel that is a
     single primary-mic matrix, hstack of one). fusion(-beats): `fuse()` on
@@ -624,7 +624,7 @@ class PreparedRun:
     a window's samples, read off the PRIMARY stream of the variant: the first mic
     stream (`RAWGeneratorMic__0`) for audio/audio-beats/audio-tfc/audio-student/
     fusion/fusion-beats/logmel (logmel's ONLY stream is that mic; audio-tfc mirrors
-    audio, package-4 spec D4; audio-student mirrors audio-beats, package-5 spec D5),
+    audio; audio-student mirrors audio-beats),
     the first vib stream (`RAWGeneratorVib__2`) for vibration/vibration-tfc
     (the latter mirroring vibration) -- i.e. `_streams_for_variant(
     variant)[0]` in every case (that tuple's own ordering already puts the right
@@ -637,7 +637,7 @@ class PreparedRun:
 
 
 # ---------------------------------------------------------------------------
-# On-disk feature cache (Step-2 Task S1)
+# On-disk feature cache
 # ---------------------------------------------------------------------------
 
 _CACHE_SUBDIR = "cache"
@@ -668,17 +668,16 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     fields that change what a featurizer computes: `cfg.beats_checkpoint`'s path,
     included unconditionally (every variant's payload carries it, even a handcrafted
     one) so a handcrafted-variant cache is never silently reused after switching
-    to/from a beats checkpoint; and, ONLY for a tfc or student variant (package-4
-    spec D4, package-5 spec D5), exactly ONE extra checkpoint-path line carrying
+    to/from a beats checkpoint; and, ONLY for a tfc or student variant,
+    exactly ONE extra checkpoint-path line carrying
     the checkpoint relevant to *variant* itself -- `cfg.tfc_audio_checkpoint` for
     `"audio-tfc"`, `cfg.tfc_vib_checkpoint` for `"vibration-tfc"`,
     `cfg.student_checkpoint` for `"audio-student"`. Every other variant's payload
     carries NONE of these extra lines at all, keeping it byte-identical to the
-    pre-package-4 format: the payload is a PERSISTENCE format, not an
+    original format: the payload is a PERSISTENCE format, not an
     implementation detail -- every existing `results/cache/*.npz` stores a
     fingerprint computed from it, so even a semantically-neutral shape change
-    (e.g. appending blank lines for every variant, the exact package-4 execution
-    finding this wording guards against) silently invalidates every pre-existing
+    (e.g. appending blank lines for every variant) silently invalidates every pre-existing
     cache entry, including hours-expensive BEATs extractions. Scoping each extra
     line to its own variant also keeps a checkpoint change from invalidating
     caches that never depended on it (TF-C has TWO independent checkpoints
@@ -691,7 +690,7 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     consciously update `tests/test_pipeline.py`'s golden pins AND deliberately
     migrate/invalidate the on-disk caches.
 
-    `cfg.beats_int8_checkpoint` (package-5 spec D6) follows the SAME scoped-line
+    `cfg.beats_int8_checkpoint` follows the SAME scoped-line
     convention, with one extra condition: the line is appended ONLY for a beats
     variant (`_is_beats_variant` -- `"audio-beats"`/`"fusion-beats"`, unlike the
     single-variant tfc/student lines above) AND ONLY when the int8 path is
@@ -746,8 +745,8 @@ def _load_cached_prepared_run(
     an interrupted previous run) is treated as a miss, not a crash: logged as a
     warning, never raised.
 
-    Task 10 (D4, DAQ epoch-2000 clock quirk -- cache compatibility WITHOUT
-    recompute): a cache npz written before this task's fix stores `grid_t0_ns` on
+    DAQ epoch-2000 clock quirk -- cache compatibility WITHOUT
+    recompute: a cache npz written before this fix stores `grid_t0_ns` on
     the RAW axis; a BEATs cache costs hours to rebuild and must never be
     invalidated just to fix a timestamp. On every fingerprint-matched hit, this
     function recomputes the run's grid fresh via `build_run_grid` (headers only,
@@ -879,7 +878,7 @@ def prepare_run(
     streams = _streams_for_variant(variant)
     cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
     fingerprint = _cache_fingerprint(run, variant, cfg)
-    # Derived ONCE per call (Task 10, D2/D4) -- header-only reads, cheap -- and
+    # Derived ONCE per call -- header-only reads, cheap -- and
     # threaded through every place below that needs the run's true-UTC axis:
     # build_run_grid (both the cache-hit override recompute and the compute
     # path), and _extract_stream_features's own per-file timestamp shift.

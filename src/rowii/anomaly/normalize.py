@@ -11,17 +11,17 @@ space. The scale is floored at 1e-8, the house silent-window divide-by-zero
 convention (`rowii.adapt.target_windows._standardize_1d` / `rowii.tfc.wrapper.
 _standardize`).
 
-**A3.5 boundary (BINDING).** The state DETECTOR always consumes RAW features --
+**Boundary (BINDING).** The state DETECTOR always consumes RAW features --
 detected labels are norm-invariant by construction (the detector carries its own
 fit-day standardization). Session normalization applies to the SCORING space only:
 references, calibration scores, and scoring windows, each transformed with their
 OWN session's stats (the fit day's references with the fit day's stats -- stored in
 the `MonitorSnapshot` since format v2 -- and a monitored/test run's windows with
 that run's own first-N stats). Comparability of scores/thresholds across the raw
-and normalized spaces is FAR-level only (A3.5): a normalized-space threshold is
+and normalized spaces is FAR-level only: a normalized-space threshold is
 never compared to a raw-space score.
 
-**Pooled-snapshot stats (`fit_pool_stats`, plan Task 4 design decision).** A pooled
+**Pooled-snapshot stats (`fit_pool_stats`).** A pooled
 artifact has no single fit day, so no first-N prefix defines its reference-side
 stats. The committed choice: center/scale over the POOLED fit matrix as a whole,
 carrying `norm_minutes == 0.0` as an explicit sentinel ("pool-global stats, not a
@@ -82,7 +82,7 @@ def fit_session_stats(
     norm_minutes: float,
 ) -> SessionStats:
     """Robust per-column stats from the first *norm_minutes* of a run's VALID
-    windows -- the label-free, deployment-realistic estimator (spec D3): the first
+    windows -- the label-free, deployment-realistic estimator: the first
     minutes of a new day are observable without any labels or SCADA, so these
     stats are exactly what a deployed monitor could compute before scoring.
 
@@ -90,12 +90,12 @@ def fit_session_stats(
     `i * grid.window_ns` is strictly below `norm_minutes * 60 * 1e9` ns AND
     `valid_mask[i]` is True.
 
-    **State-mix confound (A3.5, documented caveat).** The first N minutes of a run
+    **State-mix confound (documented caveat).** The first N minutes of a run
     can be -- and measurably are -- a single operating state: 290626's first 20
     minutes are 100% one state. The stats are therefore state-composition-
     dependent: a run that opens in turbine operation yields different center/scale
     than one opening at standstill, and that difference propagates into every
-    normalized score. The N-sweep over `norm_minutes` in {5, 20, 60} (spec A2.2)
+    normalized score. The N-sweep over `norm_minutes` in {5, 20, 60}
     is the designated sensitivity probe for this confound, and the rolling-
     recalibration caveat's sibling applies too: if the first minutes contain a
     fault, normalization absorbs part of it.
@@ -185,7 +185,7 @@ def fit_pool_stats(rows: np.ndarray) -> SessionStats:
 def apply_session_norm(features: np.ndarray, stats: SessionStats) -> np.ndarray:
     """Map *features* into the session-normalized space: `(X - center) / scale`,
     as a fresh float64 array (never a view -- callers keep their raw matrix for
-    the detector, A3.5). NaN rows (invalid windows) pass through as NaN.
+    the detector). NaN rows (invalid windows) pass through as NaN.
 
     Raises:
         ValueError: if the feature width does not match the stats' width (the

@@ -50,8 +50,7 @@ class TestMatchByTime:
         candidate: `match_by_time`'s stable sort preserves the row-major
         (a-row, b-row) pair enumeration order, so among tied pairs the earlier
         row of the other side wins -- pinned here in both directions so the
-        `kind="stable"` choice is locked in (its docstring's tie rule; Task 7
-        review finding 3)."""
+        `kind="stable"` choice is locked in (its docstring's tie rule)."""
         one_a, two_b = self._cands([100]), self._cands([99, 101])
         m = match_by_time(one_a, two_b, tol_s=5.0)
         assert len(m) == 1
@@ -178,8 +177,8 @@ def test_analyze_step2_writes_overlap_report_and_needs_listening_check(
     -- one `--check-utc` timestamp that hits both combos and one that misses both.
 
     ComboA ("fusion-knn") and comboB ("audio-beats-knn") get genuinely DIFFERENT
-    grids: comboB's grid starts 100 windows (100 s) LATER (Task 7 review finding 2
-    -- value-identical grids cannot exercise per-combo grid selection at all).
+    grids: comboB's grid starts 100 windows (100 s) LATER
+    -- value-identical grids cannot exercise per-combo grid selection at all.
     ComboA's candidate window 500 (-> T0+500 s) and comboB's candidate window 403
     (-> T0+503 s via comboB's own shifted grid) land 3 s apart in absolute UTC --
     a match -- despite raw indices disagreeing by 97. Had the script wrongly used
@@ -313,8 +312,7 @@ def test_analyze_step2_malformed_pair_combo_exits_2_before_any_io(
     """A `--pairs` combo without a known scorer suffix must be rejected UP FRONT
     (argparse usage error, exit 2, message naming the bad combo) BEFORE the overlap
     directory is even created -- not crash with a raw `ValueError` traceback midway
-    through the pair loop, potentially after earlier pairs already wrote reports
-    (Task 7 review finding 1)."""
+    through the pair loop, potentially after earlier pairs already wrote reports."""
     monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
     results_root = tmp_path / "results"

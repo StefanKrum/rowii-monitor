@@ -22,7 +22,7 @@ pipeline uses, so a benchmark row measures the same object the pipeline runs:
 - `student`     -> variant `audio-student` (needs ROWII_STUDENT_CHECKPOINT)
 
 A configuration whose checkpoint env is unset is SKIPPED with a log line, never
-an error -- the harness reports what is measurable on this machine (spec D7's
+an error -- the harness reports what is measurable on this machine (the
 graceful-skip rule; silent omission would misread as "measured and absent").
 Device control goes through the same `ROWII_FORCE_CPU` seam `best_device()`
 honours everywhere else; numpy configs always report device `cpu`.

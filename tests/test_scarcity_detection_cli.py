@@ -1,4 +1,4 @@
-"""Tests for `scripts/scarcity_detection.py` (package-6 pillar-3, plan Task 5):
+"""Tests for `scripts/scarcity_detection.py` (pillar-3):
 synthetic labeled wav trees only (mirroring `tests/test_corpora_labeled.py`'s
 builder conventions -- no real MIMII anywhere, this repo's downloads-never-run-
 in-tests rule), driven through the handcrafted representation plus the torch
@@ -7,7 +7,7 @@ established semantics).
 
 The synthetic corpus makes abnormal clips LOUD high-variance broadband noise
 against tonal normals: the labeled iterator per-window standardizes every
-window (amendment A1.5), which erases a PURE level difference by construction,
+window, which erases a PURE level difference by construction,
 so separability must come from spectral shape -- a 200 Hz tone vs. broadband
 noise separates cleanly in the handcrafted spectral features (centroid,
 rolloff, band energies) regardless of gain.
@@ -31,7 +31,7 @@ import scarcity_detection  # noqa: E402
 _RATE_HZ = 16_000
 
 # Expected CSV schema, hardcoded (NOT read off the module constant) so a drive-by
-# column rename/reorder fails loudly here -- the binding contract of plan Task 5.
+# column rename/reorder fails loudly here -- the binding contract.
 _EXPECTED_COLUMNS = [
     "representation", "machine_id", "fraction", "seed",
     "n_fit_clips", "n_cal_clips", "n_test_normal_clips", "n_abnormal_clips",
@@ -67,8 +67,8 @@ def _build_separable_tree(
     n_abnormal: int = 4,
     duration_s: float = 2.0,
 ) -> None:
-    """`root/pump/id_*/{normal,abnormal}/<NNNNNNNN>.wav` (MIMII's real layout,
-    the Task-4 builder pattern): normal = 200 Hz tone + light noise, abnormal =
+    """`root/pump/id_*/{normal,abnormal}/<NNNNNNNN>.wav` (MIMII's real layout):
+    normal = 200 Hz tone + light noise, abnormal =
     loud broadband noise (module docstring on why spectral, not level,
     separation is required)."""
     t = np.arange(int(round(duration_s * _RATE_HZ))) / _RATE_HZ
@@ -131,7 +131,7 @@ class TestEndToEnd:
 
         first_line = (out / "scarcity_detection.csv").read_text().splitlines()[0]
         assert first_line.startswith("#")
-        assert "McClish" in first_line  # A1.4: definition named in a CSV header comment
+        assert "McClish" in first_line  # definition named in a CSV header comment
         assert "max_fpr=0.1" in first_line
         table = _read_table(out)
         assert list(table.columns) == _EXPECTED_COLUMNS
@@ -187,12 +187,12 @@ class TestEndToEnd:
         assert _run(root, out) == 0
 
         md = (out / "scarcity_detection.md").read_text()
-        assert "McClish" in md  # A1.4: pAUC definition named in the md
-        assert "per-window standardized" in md  # A1.5: standardization caveat
-        # A1.5: student-transferability framing, verbatim from the spec.
+        assert "McClish" in md  # pAUC definition named in the md
+        assert "per-window standardized" in md  # standardization caveat
+        # student-transferability framing, verbatim from the module docstring.
         assert "The student on MIMII measures TRANSFERABILITY of a PSHP-distilled encoder" in md
-        assert "public-proxy" in md  # spec section 4 honesty framing
-        assert "never window-calibrated/clip-applied" in md  # A1.4 coherence rule
+        assert "public-proxy" in md  # honesty framing
+        assert "never window-calibrated/clip-applied" in md  # coherence rule
 
 
 class TestProtocol:
@@ -235,7 +235,7 @@ class TestProtocol:
             assert group["n_abnormal_clips"].nunique() == 1
 
     def test_standardized_pauc_definition_pinned_by_hand_computed_case(self):
-        # Hand derivation (A1.4: the pAUC definition is pinned against a hand-
+        # Hand derivation (the pAUC definition is pinned against a hand-
         # computed case). 10 normals scored 0..9, abnormals scored 8.5 and 20:
         # ROC points with FPR <= 0.1 are (0,0) -> (0,0.5) [threshold 20] ->
         # (0.1,0.5) [normal 9 admitted] -> (0.1,1.0) [threshold 8.5]. Raw partial
@@ -299,7 +299,7 @@ class TestCliContract:
 
 
 class TestReviewHardening:
-    """P6 combined-review MEDIUMs: corpus-gone behavior must be loud, and a
+    """Corpus-gone behavior must be loud, and a
     valid cache must survive source deletion."""
 
     def test_cache_served_unvalidated_when_corpus_files_deleted(

@@ -20,7 +20,7 @@ from rowii.anomaly.scorers import (
 )
 
 # ---------------------------------------------------------------------------
-# Constructed inliers-vs-outliers (item 1)
+# Constructed inliers-vs-outliers
 # ---------------------------------------------------------------------------
 
 
@@ -77,7 +77,7 @@ def test_mahalanobis_magnitude_outlier_along_low_variance_feature_exceeds_inlier
 
 
 # ---------------------------------------------------------------------------
-# KnnScorer cosine equivalence to sklearn (item 2)
+# KnnScorer cosine equivalence to sklearn
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +93,7 @@ def test_knn_cosine_k1_matches_sklearn_cosine_similarity() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Chunked == unchunked (item 3)
+# Chunked == unchunked
 # ---------------------------------------------------------------------------
 
 
@@ -124,7 +124,7 @@ def test_knn_euclidean_chunked_matches_unchunked() -> None:
 
 
 # ---------------------------------------------------------------------------
-# k=3 top-k mean semantics, hand-computed (item 4)
+# k=3 top-k mean semantics, hand-computed
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +176,7 @@ def test_knn_euclidean_k1_matches_sklearn_nearest_neighbors_distance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mahalanobis shrinkage=1.0 equals isotropic (item 5)
+# Mahalanobis shrinkage=1.0 equals isotropic
 # ---------------------------------------------------------------------------
 
 
@@ -219,7 +219,7 @@ def test_mahalanobis_shrinkage_zero_uses_raw_per_feature_variance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Determinism (item 6)
+# Determinism
 # ---------------------------------------------------------------------------
 
 
@@ -266,7 +266,7 @@ def test_scorer_name_attributes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Error paths (item 7)
+# Error paths
 # ---------------------------------------------------------------------------
 
 

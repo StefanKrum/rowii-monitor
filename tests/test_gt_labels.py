@@ -24,13 +24,13 @@ GT_CHANNEL_NAMES = [
 
 
 def test_gt_channels_constant_matches_the_seven_real_betriebsdaten_channel_names() -> None:
-    # Task 13b real-data finding: "1_Drehzahl_Ist" is NOT rpm -- it is a
+    # Real-data finding: "1_Drehzahl_Ist" is NOT rpm -- it is a
     # percent-of-nominal-ish quantity (measured ratio ~3.75x smaller than the true rpm
     # channel on the same file). "1_Drehzahl UPM" ("Umdrehungen Pro Minute" = rpm) is
     # the genuine rpm channel and is what GtRules.speed_nominal_rpm must be compared
-    # against. "reactive"/"ks_valve" added by the multi-day/phase-shifter addendum
-    # (spec §3) -- both verified present (real names, exact spelling) in every
-    # SCADA-bearing day's Betriebsdaten during Task 13b/addendum work.
+    # against. "reactive"/"ks_valve" added later for multi-day/phase-shifter support
+    # -- both verified present (real names, exact spelling) in every
+    # SCADA-bearing day's Betriebsdaten.
     assert dict(GT_CHANNELS) == {
         "power": "1_P_Ist",
         "speed": "1_Drehzahl UPM",
@@ -164,10 +164,10 @@ def test_gt_channel_names_with_spaces_and_dots_round_trip_through_gantner_reader
 
 
 # ---------------------------------------------------------------------------
-# load_scada_window_means: DAQ epoch-2000 clock quirk (Task 10, D3) -- the raw
+# load_scada_window_means: DAQ epoch-2000 clock quirk -- the raw
 # Betriebsdaten timestamps carry the SAME quirk as burst files (module docstring
 # of rowii.io.dataset); load_scada_window_means must shift them onto true UTC
-# before slicing against a (by then already true-UTC, D2) grid.
+# before slicing against a (by then already true-UTC) grid.
 # ---------------------------------------------------------------------------
 
 
@@ -180,8 +180,8 @@ def _naive_unix_decode_ns(dt: datetime) -> int:
     return int((dt - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
 
 
-# CEST (UTC+2) worked example, identical constant to tests/test_dataset.py's own
-# (task-10-brief.md's numeric example): local hour 06 on 2026-06-27 -> true UTC
+# CEST (UTC+2) worked example, identical constant to tests/test_dataset.py's own:
+# local hour 06 on 2026-06-27 -> true UTC
 # 04:00:00Z; offset = 946_684_800 s epoch-2000 shift - 7_200 s CEST = 946_677_600 s.
 _CEST_OFFSET_NS = 946_677_600 * 10**9
 
@@ -190,7 +190,7 @@ def test_load_scada_window_means_shifts_raw_scada_axis_onto_true_utc(tmp_path) -
     # Betriebsdaten filename encodes local hour 06 (CEST) -> true UTC start
     # 2026-06-27T04:00:00Z; the file's own raw header.t0_ns instead carries the
     # QUIRKY axis (decodes naively to 1996-06-27T06:00:00Z). A grid built on the
-    # TRUE UTC axis (as `rowii.pipeline.build_run_grid` now produces, D2) must still
+    # TRUE UTC axis (as `rowii.pipeline.build_run_grid` now produces) must still
     # capture every sample once load_scada_window_means derives and applies the
     # SCADA file's own offset -- without the fix, the window would see zero samples
     # (raw ts ~30 years earlier than the grid) and come out all-NaN instead.
@@ -228,7 +228,7 @@ def test_load_scada_window_means_files_not_matching_pattern_stay_unshifted(tmp_p
 
 def test_load_scada_window_means_warns_when_audio_offset_disagrees(tmp_path, caplog) -> None:
     # The SCADA-derived offset must never blindly copy the audio run's own offset
-    # (D3) -- but the two ARE expected to agree closely for the same day, so a
+    # -- but the two ARE expected to agree closely for the same day, so a
     # caller that has both must be warned when they do not. Winter-vs-summer
     # offsets (946_681_200 s vs 946_677_600 s, a 3600 s disagreement) stand in for
     # "something is wrong" here.
@@ -272,7 +272,7 @@ def test_load_scada_window_means_no_warning_when_audio_offset_agrees(tmp_path, c
 # gt_labels
 # ---------------------------------------------------------------------------
 
-RULES = GtRules()  # nominal=378.832 (measured, Task 13b), speed_eps_frac=0.05, power_eps_mw=2.0,
+RULES = GtRules()  # nominal=378.832 (measured), speed_eps_frac=0.05, power_eps_mw=2.0,
 # ramp=1.0 MW/s, transition_buffer_s=10.0, n_load_bins=3
 WINDOW_S = 5.0  # matches the scenarios' hand-derivation (buffer=10s -> 2-window radius)
 
@@ -408,7 +408,7 @@ def test_gt_labels_pump_via_negative_power() -> None:
 
 
 def test_gt_labels_pump_mode_with_negative_speed_is_still_nominal() -> None:
-    # Task 13/13b real-data finding (Rodundwerk II, 2026-06-25 09:00 pump run):
+    # Real-data finding (Rodundwerk II, 2026-06-25 09:00 pump run):
     # "1_Drehzahl UPM" (the genuine rpm channel -- see GT_CHANNELS) is SIGNED by
     # rotation direction at this plant -- positive during turbine operation, negative
     # during pump operation (a reversible pump-turbine spins the opposite way in each
@@ -490,9 +490,10 @@ def test_gt_labels_load_bin_degenerate_single_value_group_still_gets_bin_zero() 
 def test_gt_labels_standstill_base_rule() -> None:
     # Speeds derived from RULES.speed_nominal_rpm (not a hardcoded magic number) so this test
     # keeps exercising "clearly below the standstill epsilon" regardless of what
-    # speed_nominal_rpm is currently set to (Task 13 changed it from an unverified 375 to a
-    # measured-but-wrong-channel 101.0; Task 13b corrected the channel itself to "1_Drehzahl
-    # UPM" and remeasured the true value as 378.832 -- a hardcoded sub-threshold value here
+    # speed_nominal_rpm is currently set to (an earlier pass changed it from an unverified
+    # 375 to a measured-but-wrong-channel 101.0; a later correction fixed the channel itself
+    # to "1_Drehzahl UPM" and remeasured the true value as 378.832 -- a hardcoded
+    # sub-threshold value here
     # would have silently stopped being sub-threshold and turned this into a false green
     # across either transition).
     standstill_eps = RULES.speed_eps_frac * RULES.speed_nominal_rpm
@@ -560,7 +561,7 @@ def test_load_scada_window_means_smoke_does_not_raise_gantner_format_error(tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Phase-shifter ground truth (addendum spec §3)
+# Phase-shifter ground truth
 # ---------------------------------------------------------------------------
 
 # 1-minute windows here (not the 5.0s WINDOW_S above) so the real

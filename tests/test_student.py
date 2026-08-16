@@ -1,5 +1,5 @@
-"""Tests for the distilled BEATs-student compactness pair (Step-2 package-5 spec
-D5, plan Task 4): `rowii.adapt.student`/`rowii.adapt._student_model` (the
+"""Tests for the distilled BEATs-student compactness pair:
+`rowii.adapt.student`/`rowii.adapt._student_model` (the
 `StudentFeaturizer`/`_StudentNet` pair, mirroring `rowii.tfc.wrapper`/
 `rowii.tfc.model`'s own torch-free-wrapper/eager-model split) and
 `scripts/distill_beats.py` (the training CLI that turns ALREADY-CACHED
@@ -408,7 +408,7 @@ class TestCheckCacheAlignment:
         assert any("dropp" in r.message.lower() for r in caplog.records)
 
     def test_n_windows_mismatch_trims_to_overlap(self, caplog):
-        # The 010726-pu real-data case (P7 execution B): logmel's primary-mic-only
+        # The 010726-pu real-data case: logmel's primary-mic-only
         # grid starts 41 ms earlier and fits one MORE window than audio-beats'
         # both-mics grid -- pair i<->i over the teacher's range, drop the
         # student's extra final window, keep the sub-window residual warning.
@@ -564,7 +564,7 @@ class TestSelectCalibrationWindows:
         # A window valid for logmel but NOT for audio-beats must never reach
         # split_by_segments' valid_mask as True -- the teacher target would be
         # undefined (NaN) there (module docstring's rationale for why the AND
-        # is a safe extension of, not a departure from, D3's rule).
+        # is a safe extension of, not a departure from, the leakage rule).
         n = 4
         student_input = PreparedRun(
             features=np.zeros((n, 1)), grid=_grid(n_windows=n),
@@ -893,8 +893,8 @@ class TestDistillBeatsMainEndToEnd:
 
 
 # ---------------------------------------------------------------------------
-# 5f. --runs: multi-run stacking (Step-2 package-7 Task 8, spec D6 as amended
-#     by A3.11): per run, BOTH caches load (cache-only) and alignment-check
+# 5f. --runs: multi-run stacking: per run, BOTH caches load (cache-only) and
+#     alignment-check
 #     exactly as in single-run mode, the per-run top split selects
 #     calibration-side rows, and the selected student inputs + teacher
 #     primary-mic slices are STACKED across runs into ONE training set. The
@@ -1225,10 +1225,10 @@ def test_distill_runs_with_only_blank_names_is_a_parser_error(capsys):
 def test_multi_run_zero_contribution_warning_fires_for_a_non_last_run(
     tmp_path, monkeypatch, caplog
 ):
-    """Whole-branch-review finding 3: the T8 zero-contribution warning sat
+    """The zero-contribution warning sat
     OUTSIDE the pool loop and therefore only ever inspected the LAST run's
     count -- a zero-contribution run in any earlier position was silently
-    unflagged (A4.1's never-silently-absent principle). Pin: run 1 contributes
+    unflagged (the never-silently-absent principle). Pin: run 1 contributes
     zero, run 2 contributes rows -> the warning fires and names run 1."""
     import logging
 

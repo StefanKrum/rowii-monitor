@@ -1,6 +1,6 @@
-"""Task-13 parameter verification against the real 2026-06-25 Rodundwerk II delivery.
+"""Parameter verification against the real 2026-06-25 Rodundwerk II delivery.
 
-Per the no-legacy-assumptions constraint (Task 13 dispatch): every machine parameter
+Per the no-legacy-assumptions constraint: every machine parameter
 hard-coded in `rowii.config` or `rowii.signals.features` is a HYPOTHESIS until confirmed
 or corrected from THIS data. This script measures each one directly from the real
 Betriebsdaten / TU burst files and writes a permanent record of the derivation to
@@ -47,10 +47,9 @@ _BETRIEBSDATEN_DIR = f"{_DAY_ROOT}/{_MESSUNG_DIR}/Betriebsdaten"
 _RUN_NAME_TU = "250526-tu"
 _RUN_NAME_PU_AFTERNOON = "250526-pu-afternoon"
 _PH_VERIFICATION_RUN_NAME = "010726-tu_ph_tu"
-"""Day tree used for the phase-shifter channel verification (addendum spec §3/
-Item 4): 2026-07-01 is the campaign's only day with ALL FOUR operating modes
-in one full-SCADA-covered day, including a confirmed, sustained phase-shifter
-interval."""
+"""Day tree used for the phase-shifter channel verification: 2026-07-01 is the
+campaign's only day with ALL FOUR operating modes in one full-SCADA-covered
+day, including a confirmed, sustained phase-shifter interval."""
 _POWER_GENERATION_THRESHOLD_MW = 50.0
 _SPEED_DEVIATION_CORRECTION_THRESHOLD_PCT = 2.0
 _MACHINE_HZ_LOCAL_WINDOW_HZ = 3.0
@@ -130,7 +129,7 @@ def _local_peak_hz(freqs: np.ndarray, psd: np.ndarray, center_hz: float, window_
 
     A tight window around the CONFIGURED centre (rather than a wide +/-20% search) avoids
     locking onto an unrelated, stronger tone that can exist a few Hz away in a wider band --
-    verified during Task 13: two of four mic channels have a much stronger tone ~6-13 Hz off
+    verified: two of four mic channels have a much stronger tone ~6-13 Hz off
     from `blade_pass`'s configured 43.75 Hz, which a wide-window argmax would have reported as
     the "measured peak" instead of the genuine (if weaker on those channels) blade-pass tone
     that a tight window correctly finds within 0.1% of 43.75 Hz on every channel.
@@ -261,7 +260,7 @@ class PuAfternoonCoverageResult:
 
 def _wall_clock_hms(t0_ns: int) -> str:
     """Format a raw t0_ns as HH:MM:SS.mmm of the DEVICE's own clock (not a real calendar
-    date -- Task 13 found every burst/Betriebsdaten file in this delivery uses a fixed,
+    date -- every burst/Betriebsdaten file in this delivery uses a fixed,
     wrong epoch year internally, but the wall-clock-of-day these timestamps resolve to is
     self-consistent across every stream and directly comparable to filename digits)."""
     dt = datetime.datetime.fromtimestamp(t0_ns / 1e9, tz=datetime.UTC)
@@ -306,7 +305,7 @@ def measure_pu_afternoon_coverage(cfg: Config, index: RecordingIndex) -> PuAfter
 
 
 # ---------------------------------------------------------------------------
-# 6. Phase-shifter channels (multi-day/phase-shifter addendum, Item 4): per-GT-state
+# 6. Phase-shifter channels: per-GT-state
 #    distribution of ks_valve ("1_KS Stellung") and reactive ("1_Q_Ist") on the
 #    2026-07-01 delivery, GT ALWAYS computed with the KS gate forced off
 #    (dataclasses.replace(cfg.gt, ph_requires_ks_closed=False)) -- verification
@@ -338,10 +337,10 @@ def _build_whole_day_grid(betriebsdaten: list[Path], window_s: float) -> WindowG
     files -- `common_grid` is designed for OVERLAPPING burst streams, not consecutive
     SCADA hours).
 
-    Task 10 (D3 consequence): this is a standalone grid builder, bypassing `rowii.
+    This is a standalone grid builder, bypassing `rowii.
     pipeline.build_run_grid` entirely (no audio run involved) -- `load_scada_window_
     means` (module-docstring's only caller of this function, `measure_phase_shifter_
-    channels`) now always shifts its OWN raw SCADA timestamps onto true UTC (D3), so
+    channels`) now always shifts its OWN raw SCADA timestamps onto true UTC, so
     this grid's `t0_ns` must be shifted by the SAME *betriebsdaten*-derived offset
     (`rowii.io.dataset.betriebsdaten_utc_offset_ns`) to stay on that same axis --
     otherwise every window here would search for true-UTC timestamps against a

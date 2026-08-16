@@ -1,11 +1,11 @@
 """Markdown + timeline-plot run report for one detection variant.
 
 `write_report` is the terminal step of the Step-1 pipeline for a single (run, variant)
-combination (spec §8 deliverables): it renders the `EvalResult` produced by
+combination: it renders the `EvalResult` produced by
 `rowii.eval.metrics.evaluate` into a human-readable `report.md`, a 3-panel
 `timeline.png` (power curve / GT states / predicted mapped states, all in hours since
 the grid start), and re-exports the machine-readable `segments.csv` /
-`frame_labels.parquet` artifacts spec §8 lists alongside it. report.md now leads with a
+`frame_labels.parquet` artifacts alongside it. report.md now leads with a
 state-level (mode) metrics block using majority cluster->state mapping, with the
 original strict 1:1 Hungarian view retained below it as a secondary reference. Each
 block owns its own confusion matrix (`EvalResult.state_confusion` / `.confusion`
@@ -94,7 +94,7 @@ def _load_alignment_crosstab_to_markdown(crosstab: pd.DataFrame) -> str:
 
 
 def _load_alignment_section(det: DetectionResult, gt: pd.DataFrame | None) -> list[str]:
-    """"Do sub-clusters track load levels?" section (Task 13b item 2).
+    """"Do sub-clusters track load levels?" section.
 
     Restricted to the run's turbine (or pump-fallback) windows via
     `rowii.eval.metrics.load_alignment` -- `None` when `gt` was not supplied to
@@ -215,7 +215,7 @@ def _window_s_from_segments(det: DetectionResult) -> float:
     equals the next row's `start_utc`), so the total wall-clock span divided by the
     window count is exact -- this is the only source of window duration available to
     `write_report` (neither `scada` nor `EvalResult` carries a `WindowGrid` or
-    timestamps). Falls back to 1.0s (spec §5's Step-1 default) when there are no
+    timestamps). Falls back to 1.0s (the Step-1 default) when there are no
     windows at all or no segment rows (nothing to derive from).
     """
     n_windows = len(det.frame_labels)
@@ -298,7 +298,7 @@ def write_report(
             `None` (the default -- matching the exact base signature), the timeline's
             GT-states panel renders an explicit "no GT provided" placeholder instead
             of per-window data, and report.md's "Do sub-clusters track load levels?"
-            section (Task 13b item 2) reports "n/a" instead of a real crosstab/ARI
+            section reports "n/a" instead of a real crosstab/ARI
             (both need `gt.load_bin`, which is not otherwise available here).
     """
     out_dir.mkdir(parents=True, exist_ok=True)

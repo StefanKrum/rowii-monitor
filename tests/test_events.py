@@ -1,9 +1,9 @@
 """Tests for the pillar-3 event-level evaluation harness (`rowii.eval.events` +
-`scripts/eval_events.py`; Step-2 package 6, design spec D3, plan Task 3).
+`scripts/eval_events.py`).
 
 Synthetic hand-built frames ONLY: the harness is PREPARED-ONLY (no real fault
 labels exist until the induced-fault campaign), so every case here pins the
-spec-D3 edge semantics on constructed nanosecond timestamps at window_s=1.0 --
+edge semantics on constructed nanosecond timestamps at window_s=1.0 --
 inclusive-start/exclusive-end membership, tolerance padding (negative latency
 kept), first-alarm-only latency, vacuous-TPR NaN, role filtering, and the
 non-event FAR denominators.
@@ -41,7 +41,7 @@ def _iso(seconds: float) -> str:
 
 def _alarms(n: int, alarm_at: list[int], role: list[str] | None = None) -> pd.DataFrame:
     """*n* consecutive 1-s windows starting at BASE_NS; alarm=True exactly at the
-    window indices in *alarm_at* (timestamps are window STARTS, spec D3)."""
+    window indices in *alarm_at* (timestamps are window STARTS)."""
     alarm = np.zeros(n, dtype=bool)
     alarm[alarm_at] = True
     frame = pd.DataFrame(
@@ -212,7 +212,7 @@ def test_boundary_inclusive_start_exclusive_end() -> None:
 
 # ---------------------------------------------------------------------------
 # 8. Tolerance pad: an alarm before the logged start (inside the pad) detects
-#    the event with a NEGATIVE latency -- kept, not clamped (spec D3)
+#    the event with a NEGATIVE latency -- kept, not clamped
 # ---------------------------------------------------------------------------
 
 
@@ -345,7 +345,7 @@ def test_invalid_window_s_and_tolerance_raise() -> None:
 
 # ---------------------------------------------------------------------------
 # 16. CLI smoke: parquet + csv in, event_eval.csv (summary row first) +
-#     event_notes.md (honesty framing + D3 conventions) out
+#     event_notes.md (honesty framing) out
 # ---------------------------------------------------------------------------
 
 
@@ -368,8 +368,7 @@ def _write_cli_inputs(tmp_path: Path) -> tuple[Path, Path]:
 def test_cli_events_csv_with_comment_provenance_lines(tmp_path: Path) -> None:
     """The real ground-truth files (`docs/groundtruth/080726_events_*.csv`) open
     with `#` provenance lines before the header -- the CLI must skip them
-    instead of parsing the first comment as the column row (the P7 execution-B
-    failure mode)."""
+    instead of parsing the first comment as the column row."""
     import eval_events
 
     alarms_path, events_path = _write_cli_inputs(tmp_path)

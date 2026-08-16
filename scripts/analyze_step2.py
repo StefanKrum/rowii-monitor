@@ -20,8 +20,9 @@ boundary since no variant string (`rowii.pipeline`'s five concrete variants) end
 in `"-knn"` or `"-mahalanobis"`. This script always reads the DETECTED-labels,
 PER-STATE-conditioning sweep for a combo -- `scripts/run_step2.py`'s own
 runtime-realistic default (module docstring: "detected ... the only run-time-
-realistic mode"; package-2 design spec: pooled cross-day is "structurally
-unusable") -- so a bare combo name is unambiguous without a separate labels/
+realistic mode"; pooled conditioning's realized FAR runs roughly 2-3x higher
+than per-state conditioning's, per `rowii.anomaly.sweep`'s module docstring)
+-- so a bare combo name is unambiguous without a separate labels/
 conditioning axis.
 
 ## Run names and combo-directory lookup
@@ -212,7 +213,7 @@ def _grid_for_combo(day_name: str, variant: str, cfg: Config) -> WindowGrid:
     """*day_name*'s `WindowGrid` for *variant*, via `rowii.pipeline.prepare_run(...,
     use_cache=True)` -- discovers *day_name* under `cfg.data_root`
     (`rowii.io.dataset.discover`) and delegates the rest to `prepare_run`. With a
-    warm cache (this package's Task 6) every call is a cache hit, so `prepare_run`
+    warm cache every call is a cache hit, so `prepare_run`
     never re-extracts features and, for a beats variant, never imports torch (the
     featurizer only runs on a MISS -- `rowii.pipeline.prepare_run`'s own module
     docstring).
@@ -353,8 +354,7 @@ def _write_overlap_report(
     matches: pd.DataFrame,
 ) -> None:
     """`<run>--<comboA>--vs--<comboB>.md`: candidate counts, Jaccard, a match table
-    (human-readable UTC), and both combos' unmatched candidates (orchestrator
-    resolution, Task 7)."""
+    (human-readable UTC), and both combos' unmatched candidates."""
     jac = jaccard(len(cands_a), len(cands_b), len(matches))
     lines = [f"# Candidate overlap: {run} -- {combo_a} vs {combo_b}", ""]
     lines.append(
@@ -507,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     # Validate every --pairs entry COMPLETELY up front -- both the ":" split and
     # each half's combo suffix -- so a malformed combo is an argparse usage error
     # (exit 2) before any I/O, never a raw ValueError traceback midway through the
-    # pair loop after earlier pairs already wrote reports (Task 7 review finding 1).
+    # pair loop after earlier pairs already wrote reports.
     try:
         pairs = [_split_pair(p) for p in args.pairs]
         for combo_a, combo_b in pairs:

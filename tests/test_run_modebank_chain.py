@@ -1,4 +1,4 @@
-"""Tests for scripts/run_modebank_chain.py (Package-8 D1 chain probe): split-parity
+"""Tests for scripts/run_modebank_chain.py (chain probe): split-parity
 vs run_step2's top split (BINDING) + FAR math on synthetic two-mode data, the chain's
 own per-mode reference/threshold/FAR assembly (`_build_far_table`, unit-tested
 directly on hand-built BANK-ASSIGNED label arrays -- never GT, mirroring run_step2
@@ -345,7 +345,7 @@ def test_unknown_run_names_exit_2(tmp_path, monkeypatch, capsys) -> None:
 
 
 def test_day_group_overlap_between_fit_and_test_exits_2(tmp_path, monkeypatch, capsys) -> None:
-    """The A3.8-style day-group guard (duplicated from run_step2.py/run_modebank.py's
+    """The day-group guard (duplicated from run_step2.py/run_modebank.py's
     `_run_day_groups`) fires on the REAL (unmocked) day-group computation -- fitA and
     testC share one calendar day."""
     import run_modebank_chain as rc

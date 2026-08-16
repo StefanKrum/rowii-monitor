@@ -1,6 +1,6 @@
-"""Tests for scripts/analyze_days.py (Package-8 D3): per-subcommand artifact-shape
+"""Tests for scripts/analyze_days.py: per-subcommand artifact-shape
 tests on synthetic inputs + pure-helper math (flag-rate matrix, segment-block
-bootstrap, 3dB classification boundary, era-step column math). A1.8: no partner
+bootstrap, 3dB classification boundary, era-step column math). No partner
 number appears as an expected value.
 
 Beyond the plan's own RED block (flag-rate matrix, classify-shift boundary,
@@ -8,7 +8,7 @@ block-bootstrap, rotations-heatmap CLI), this file also exercises the
 feature-stability and era-step subcommands end-to-end via the shared
 `_run_features_and_gt` seam (monkeypatched directly, mirroring how
 `tests/test_modebank.py` bypasses IO entirely) -- both are required deliverables
-of Task 8's own interface section, not just their pure helpers.
+of this script's own interface, not just their pure helpers.
 """
 from __future__ import annotations
 
@@ -170,7 +170,7 @@ def test_era_step_row_computes_per_stream_median_over_the_mask() -> None:
 
 # ---------------------------------------------------------------------------
 # Extension 2: feature-stability end-to-end (monkeypatched `_run_features_and_gt`
-# seam -- Task 8's interface bullet requires the subcommand, not just its two
+# seam -- the module's own interface requires the subcommand, not just its two
 # pure helpers).
 # ---------------------------------------------------------------------------
 
@@ -231,7 +231,7 @@ def test_feature_stability_writes_sorted_table_and_excludes_non_gt_runs(
             ]
         )
     assert code == 0
-    # A1.2: the non-GT-bearing day is excluded, with a warning naming it.
+    # The non-GT-bearing day is excluded, with a warning naming it.
     assert any("dayNoGT" in r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
 
     csv_path = out / "feature-stability" / "audio.csv"
@@ -417,8 +417,8 @@ def test_feature_stability_embedding_variant_skips_db_classification(caplog) -> 
 
 
 # ---------------------------------------------------------------------------
-# Extension 3: era-step end-to-end -- the 27.06-style unmatched point (A1.2)
-# and the --include-080726 gate (A1.2).
+# Extension 3: era-step end-to-end -- the 27.06-style unmatched point
+# and the --include-080726 gate.
 # ---------------------------------------------------------------------------
 
 _ERA_NAMES = ["RAWGeneratorMic__0::ch0_log_rms", "RAWTurbineVib__3::ch0_log_rms"]
@@ -448,7 +448,7 @@ def test_era_step_marks_unmatched_day_and_gates_080726(tmp_path, monkeypatch, ca
     out = tmp_path / "results" / "analysis-days"
 
     # Without the gate flag: 080726 is excluded (warning names it); dayNoGT is an
-    # unmatched point (no GT at all -- A1.2's exact wording), dayGT is matched.
+    # unmatched point (no GT at all), dayGT is matched.
     with caplog.at_level(logging.WARNING):
         code = ad.main(
             [
@@ -488,7 +488,7 @@ def test_era_step_marks_unmatched_day_and_gates_080726(tmp_path, monkeypatch, ca
 
 # ---------------------------------------------------------------------------
 # era-step's `--variant` is raw-scale-only (audio/
-# vibration) -- fusion's per-run z-score (A1.1) has no meaningful log10 level
+# vibration) -- fusion's per-run z-score has no meaningful log10 level
 # to plot here.
 # ---------------------------------------------------------------------------
 
@@ -509,9 +509,9 @@ def test_era_step_refuses_fusion_variant(tmp_path, capsys) -> None:
 # ---------------------------------------------------------------------------
 # `mode-signatures`, `tonal-table`, `pillar3-figure`, `digest` --
 # three more pure helpers (`_tonal_contrast`, `_mode_profile`, `_tpr_by_alpha`,
-# all explicitly named "Pure helper" in the plan's own Task 9 Interfaces
-# section) + their subcommands, going through the SAME `_run_features_and_gt`/
-# `_RunFeatures` seam Task 8 built (mode-signatures/tonal-table) or reading
+# all explicitly named "Pure helper") + their subcommands, going through the
+# SAME `_run_features_and_gt`/
+# `_RunFeatures` seam already built (mode-signatures/tonal-table) or reading
 # `results/pillar3/**/event_eval.csv` directly (pillar3-figure, no seam
 # needed, mirrors rotations-heatmap's own direct-filesystem-read style).
 # ---------------------------------------------------------------------------
@@ -522,7 +522,7 @@ def test_tonal_contrast_is_band_minus_floor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 9 extension 1: `_mode_profile` + `_band_octave_columns` pure helpers,
+# Extension 1: `_mode_profile` + `_band_octave_columns` pure helpers,
 # `mode-signatures` subcommand (per-day artifact-shape; plan's own RED block
 # names the subcommand test literally -- extended here to two days to also
 # pin the "one PNG per RUN, not per variant" file-naming contract).
@@ -601,7 +601,7 @@ def test_mode_signatures_writes_one_png_per_run(tmp_path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 9 extension 2: `_nearest_octave_hz` + `_tonal_table` pure/impure
+# Extension 2: `_nearest_octave_hz` + `_tonal_table` pure/impure
 # helpers, `tonal-table` subcommand (artifact-shape).
 # ---------------------------------------------------------------------------
 
@@ -668,7 +668,7 @@ def test_tonal_table_subcommand_writes_artifacts(tmp_path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 9 extension 3: `_tpr_by_alpha` pure helper + `pillar3-figure`
+# Extension 3: `_tpr_by_alpha` pure helper + `pillar3-figure`
 # subcommand -- the REAL on-disk `event_eval.csv` schema verified against
 # `results/pillar3/080726-{pu,st}_strikes/**/event_eval.csv` on this branch:
 # `row_type == "summary"`, columns n_events/n_detected/event_tpr/
@@ -758,7 +758,7 @@ def test_pillar3_figure_missing_root_exits_1(tmp_path, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 9 extension 4: `digest` (plan's own RED block, extended to also check
+# Extension 4: `digest` (plan's own RED block, extended to also check
 # every subcommand name and the discovered-PNG link are present).
 # ---------------------------------------------------------------------------
 
@@ -770,7 +770,7 @@ def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
     assert ad.main(["digest", "--out", str(out)]) == 0
     readme = (out / "README.md").read_text()
     assert "Rodrigues & Zhang (2026)" in readme  # attribution present
-    assert "z-score" in readme and "fusion" in readme  # A1.1 finding documented
+    assert "z-score" in readme and "fusion" in readme  # finding documented
     assert "rotations-heatmap/audio-frozen.png" in readme  # figure actually linked
     for name in (
         "rotations-heatmap", "feature-stability", "era-step",
@@ -782,18 +782,18 @@ def test_digest_writes_readme_with_attribution_lines(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 # Polish (2026-07-21): variant-aware
 # unit labeling on mode-signatures/tonal-table (title + axis/colorbar +
-# digest caveat), item 2 tonal-table's nearest NON-CONTAINING octave floor,
-# item 3 a per-leaf parse guard on pillar3-figure's discovery, item 4 two
+# digest caveat); tonal-table's nearest NON-CONTAINING octave floor;
+# a per-leaf parse guard on pillar3-figure's discovery; two
 # digest-prose nits (fold in).
 # ---------------------------------------------------------------------------
 
-# --- item 1: `_feature_unit_label` (shared pure helper) --------------------
+# --- `_feature_unit_label` (shared pure helper) ----------------------------
 
 _FUSION_STYLE_NAMES = [
     "RAWGeneratorMic__0::ch0_band_shaft", "RAWGeneratorMic__0::ch0_octave_31",
     "RAWTurbineVib__3::ch0_band_shaft", "RAWTurbineVib__3::ch0_octave_31",
 ]  # fuse() concatenates audio+vib column NAMES unchanged -- only the VALUES
-   # are per-run z-scored (A1.1), so the names alone can't tell fusion apart
+   # are per-run z-scored, so the names alone can't tell fusion apart
    # from a raw-scale variant; the classifier keys on *variant*, not names.
 
 
@@ -814,7 +814,7 @@ def test_feature_unit_label_raw_scale_variant_reads_log10() -> None:
     assert "log10" in label
 
 
-# --- item 1: mode-signatures / tonal-table wiring (variant in the title;
+# --- mode-signatures / tonal-table wiring (variant in the title;
 # RED: fusion's axis/title reads 'z-score' and never claims 'log10') -------
 
 
@@ -863,7 +863,7 @@ def test_plot_tonal_table_title_says_nearest_non_containing_octave(tmp_path) -> 
     assert "log10" in ax.figure.axes[-1].get_ylabel()
 
 
-# --- item 1: digest carries the same caveat, one sentence per section -----
+# --- digest carries the same caveat, one sentence per section -------------
 
 
 def test_digest_mode_signatures_section_carries_the_zscore_embedding_caveat(tmp_path) -> None:
@@ -880,7 +880,7 @@ def test_digest_tonal_table_section_carries_the_zscore_embedding_caveat(tmp_path
     assert "embedding units" in section
 
 
-# --- item 2: tonal-table's nearest NON-CONTAINING octave floor -------------
+# --- tonal-table's nearest NON-CONTAINING octave floor ---------------------
 
 
 def test_nearest_octave_hz_prefers_nearest_by_absolute_distance_when_tone_free() -> None:
@@ -951,7 +951,7 @@ def test_tonal_table_blade_pass_skips_the_containing_octave_31() -> None:
     assert row["tonal_contrast"] == pytest.approx(15.0)  # -20.0 - (-35.0)
 
 
-# --- item 3: `_discover_pillar3_leaves` per-leaf parse guard ---------------
+# --- `_discover_pillar3_leaves` per-leaf parse guard ------------------------
 
 
 def test_discover_pillar3_leaves_skips_a_corrupt_csv_with_warning(tmp_path, caplog) -> None:
@@ -975,7 +975,7 @@ def test_discover_pillar3_leaves_skips_a_corrupt_csv_with_warning(tmp_path, capl
     )
 
 
-# --- item 4: digest prose nits (fold in) ------------------------------------
+# --- digest prose nits (fold in) --------------------------------------------
 
 
 def test_digest_fusion_finding_points_below_not_above(tmp_path) -> None:
@@ -1029,7 +1029,7 @@ def test_transition_taxonomy_counts_dwell_and_ramp() -> None:
 
 # --- `transitions` subcommand: CLI-level artifact-shape tests, mirroring the
 # other five subcommands' own `_install_features_and_gt`-style seam install
-# (`_run_states_and_power` monkeypatched directly, D3a's own seam). ----------
+# (`_run_states_and_power` monkeypatched directly, its own seam). -----------
 
 
 def _install_states_and_power(
@@ -1102,7 +1102,7 @@ def test_transitions_unknown_run_name_exits_2(tmp_path, monkeypatch, capsys) -> 
 
 def test_transitions_run_without_scada_exits_2(tmp_path, monkeypatch, capsys) -> None:
     """`_run_states_and_power` raises ValueError for a run with no Betriebsdaten
-    coverage (D3a's own interface contract) -- the CLI must fail loudly, never
+    coverage -- the CLI must fail loudly, never
     silently drop the run (unlike era-step's optional-GT "unmatched" point,
     the taxonomy needs GT on every requested run)."""
     runs = [Run(name="dayNoGT", files={}, day_root=Path("/d/dayNoGT"))]
@@ -1131,7 +1131,7 @@ def test_transitions_run_without_scada_exits_2(tmp_path, monkeypatch, capsys) ->
 
 
 def test_transitions_prepare_run_runtime_error_exits_2(tmp_path, monkeypatch, capsys) -> None:
-    """P9 hardening T4b: unlike the ValueError case above (raised INSIDE
+    """Unlike the ValueError case above (raised INSIDE
     `_run_states_and_power` itself), this drives the failure through
     `_run_states_and_power`'s OWN internal `prepare_run` call -- NOT wrapped in
     its own try/except there. Mirrors every other subcommand's guard in this
@@ -1163,7 +1163,7 @@ def test_transitions_prepare_run_runtime_error_exits_2(tmp_path, monkeypatch, ca
 
 
 def test_transitions_digest_section_carries_attribution(tmp_path) -> None:
-    """A1.8/spec §4: the SCADA transition taxonomy echoes the partner's own
+    """The SCADA transition taxonomy echoes the partner's own
     transition/dwell analysis -- the digest section carries the same one-line
     attribution pattern every other partner-inspired analysis type does here."""
     text = ad._render_digest(tmp_path / "analysis-days")

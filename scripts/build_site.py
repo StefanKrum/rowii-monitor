@@ -1,5 +1,5 @@
-"""Build the public-facing demo site under `docs/site/` (project package P10): a
-landing page, an as-built sensor-geometry schematic, a thin navigation wrapper
+"""Build the public-facing demo site under `docs/site/`: a landing page, an
+as-built sensor-geometry schematic, a thin navigation wrapper
 around the EXISTING `docs/demo/demo_dashboard.html` control room, and a listening
 library of induced-strike / normal-operation / model-flagged-candidate audio clips.
 Nothing here re-extracts audio from raw data or re-runs any model -- every byte comes

@@ -1,13 +1,13 @@
-"""Tests for scripts/sweep_min_dwell.py (Package-9 D3b): the min_dwell->window-count
+"""Tests for scripts/sweep_min_dwell.py: the min_dwell->window-count
 conversion (5/10/20; duration_filter no-op at min_dwell<=1) + a monkeypatched
 fit_pooled/GT-seam CLI writing a state_ari-by-min_dwell table -- no real data.
 
-Plan's own RED tests (verbatim) are `test_min_dwell_windows_conversion` and
+The baseline tests are `test_min_dwell_windows_conversion` and
 `test_duration_filter_noop_at_min_dwell_one`. This file extends them with direct
-unit tests of the D3b-only `_recalibrate_far` aggregation (the "plus one Step-2
-chain FAR spot-check" the plan describes only in prose, `_min_dwell_verdict`/
-`_sweep_table`'s pure shape, and the "monkeypatched CLI ARI table" the plan's own
-Task 4 checkbox names but does not spell out in code -- an end-to-end `main()` run
+unit tests of the `_recalibrate_far` aggregation (the "plus one Step-2
+chain FAR spot-check"), `_min_dwell_verdict`/
+`_sweep_table`'s pure shape, and the "monkeypatched CLI ARI table" (not spelled
+out in code otherwise) -- an end-to-end `main()` run
 on hand-built PreparedRuns (`tests/test_run_modebank.py`'s own `_prepared`/
 `_install` seam shape, reused here for the SAME reason: `build_pool` +
 `FittedDetector.fit_pooled` need real segment-blocked splits to exercise for real).
@@ -55,8 +55,8 @@ def test_duration_filter_noop_at_min_dwell_one() -> None:
 
 
 # ---------------------------------------------------------------------------
-# `_recalibrate_far`: the D3b "plus one Step-2 chain FAR spot-check" (spec
-# §3.D3(b)) -- the trimmed, recalibrate-only duplication of
+# `_recalibrate_far`: the "plus one Step-2 chain FAR spot-check" -- the
+# trimmed, recalibrate-only duplication of
 # scripts/run_step2.py::_cross_day_pooled_tables's recalibrate branch.
 # ---------------------------------------------------------------------------
 

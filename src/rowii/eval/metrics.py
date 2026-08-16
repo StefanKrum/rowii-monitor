@@ -12,14 +12,14 @@ Two families of metrics, both computed by every `evaluate()` call:
   `state_macro_f1`, `state_ari`, `state_confusion`): each predicted cluster maps
   INDEPENDENTLY onto whichever GT state is the majority vote among its own eval
   windows (no 1:1 constraint). This is the metric family that matches the thesis
-  design (spec §5: "load sub-structure appears as extra clusters ... or reported as
+  design ("load sub-structure appears as extra clusters ... or reported as
   sub-clusters") -- a machine operating mode (standstill/turbine/pump) can
   legitimately contain several unsupervised load-level sub-clusters, and a detector
   that cleanly finds such sub-clusters should NOT be penalized as if it had confused
   two different modes.
 - **Strict metrics -- secondary** (`ari`, `macro_f1`, `mapping`, `confusion`): a
   strict 1:1 Hungarian correspondence between clusters and GT states (see `_hungarian_mapping`
-  below). Kept unchanged for continuity with Task 13's baseline numbers and as a
+  below). Kept unchanged for continuity with earlier baseline numbers and as a
   diagnostic for genuine over-segmentation (a large gap between `state_macro_f1` and
   `macro_f1` signals exactly the "extra clusters are sub-modes, not confusion"
   pattern this module now also measures directly).
@@ -30,7 +30,7 @@ module) -- `_hungarian_mapping` recovers the best 1:1 correspondence via the Hun
 algorithm (`scipy.optimize.linear_sum_assignment`) on the GT-state x predicted-cluster
 contingency table, maximizing the total number of matched windows. When there are more
 predicted clusters than GT states (k > #states, e.g. load sub-structure appearing as
-extra clusters -- spec §5), every cluster beyond the 1:1 assignment is left over; each
+extra clusters), every cluster beyond the 1:1 assignment is left over; each
 such leftover cluster maps independently onto whichever GT state its own column in the
 contingency table maximizes (not restricted to already-matched states), so a k-sweep
 run never leaves a predicted cluster unmapped. `_majority_mapping` (state-level) uses
@@ -38,7 +38,7 @@ this same "own column argmax" rule for EVERY cluster, not just the 1:1 leftovers
 i.e. it is what `_hungarian_mapping`'s fallback branch already does, applied
 universally.
 
-`load_alignment` (Task 13b item 2) answers a narrower, orthogonal question: within the
+`load_alignment` answers a narrower, orthogonal question: within the
 single dominant operating mode (turbine, or pump as a fallback -- see its own
 docstring), do the detector's sub-clusters track SCADA-derived load LEVEL rather than
 just "this is turbine"? This is independent of `evaluate`'s mode-vs-mode metrics above
@@ -165,9 +165,10 @@ def derive_state_names(
     *,
     min_plurality: float = 0.5,
 ) -> dict[int, str]:
-    """Cluster id -> operating-mode name, the commissioning-time map D2 persists as
-    an optional snapshot member (spec D2(a) + A1.5). Reuses `_majority_mapping`; the
-    {unknown, transition} windows are masked BEFORE the vote (A1.5, narrower than
+    """Cluster id -> operating-mode name, the commissioning-time map this
+    module persists as
+    an optional snapshot member. Reuses `_majority_mapping`; the
+    {unknown, transition} windows are masked BEFORE the vote (narrower than
     `evaluate`'s unknown-only mask). A cluster keeps its majority name only when it
     is present in the masked prediction AND its winner covers >= `min_plurality` of
     its masked windows; otherwise -- absent from the masked pred, zero GT-known

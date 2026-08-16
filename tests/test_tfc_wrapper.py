@@ -1,4 +1,4 @@
-"""TfcFeaturizer contract tests (package-4 spec D1/D4): stub encoder, no torch.
+"""TfcFeaturizer contract tests: stub encoder, no torch.
 
 Stub-encoder tests inject a deterministic `TfcEncoderProtocol` stub via
 `TfcFeaturizer`'s `encoder=` parameter, so they exercise the mono-mix/resample/

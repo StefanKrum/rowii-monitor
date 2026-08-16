@@ -1,6 +1,6 @@
 """Thesis result figures (Chapter 3, Evaluation): four publication-style PDFs built
 directly from the committed `results/` artifacts -- never a re-derived, invented or
-partner number (A1.8/A1.1 firewall). Every number plotted here already appears in
+partner number (the firewall). Every number plotted here already appears in
 `thesis/hsg-thesis/content/evaluation.tex`'s tables or prose; this script only adds the
 visual companion the chapter was missing.
 

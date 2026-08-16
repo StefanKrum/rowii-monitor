@@ -1,10 +1,10 @@
-"""Per-window log-mel featurizer for the `logmel` variant (package-3 spec D3).
+"""Per-window log-mel featurizer for the `logmel` variant.
 
 Feeds the reconstruction scorers (`rowii.anomaly.recon`): each 1-second window
 becomes a flattened (frames x mels) log-mel patch whose window-INTERNAL time
 axis is the sequence the LSTM/Conv autoencoders consume -- no cross-window
 contiguity is needed, so the `Scorer` protocol holds unchanged. Primary mic
-stream only (size bound; spec D3). Pure NumPy (Hann window + rFFT + triangular
+stream only (size bound). Pure NumPy (Hann window + rFFT + triangular
 mel filterbank); no torch/librosa dependency.
 
 Shape contract: `LogmelFeaturizer.transform` accepts both the pipeline's own

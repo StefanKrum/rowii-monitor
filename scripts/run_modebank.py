@@ -8,22 +8,22 @@ disjointness guard (`_run_day_groups`, duplicated here -- script-sibling rule;
 `rowii.anomaly.pools`' own module docstring explains why scripts never import a
 sibling script's internals).
 
-Bank labels (spec D1) are SCADA ground truth on the fit days ONLY -- deployment
+Bank labels are SCADA ground truth on the fit days ONLY -- deployment
 story: SCADA exists during the supervised commissioning window; the bank then runs
 LABEL-FREE (`ModeBank.assign`) on every other day, and GT is used for EVALUATION
 only, never as a runtime input. This is a deliberate INFORMATION-advantage contrast
 to the unsupervised KMeans+HMM default (`rowii.state.detect.FittedDetector`, which
 needs no SCADA ever) -- both arms are reported side by side in one `metrics.json`,
-one row tagged `"supervised"` (the bank) and the other `"unsupervised"` (the P7
-pooled comparator, RECOMPUTED here via `FittedDetector.fit_pooled` on this
-rotation's own pooled fit features -- spec A1.3: "the bank's edge is an
+one row tagged `"supervised"` (the bank) and the other `"unsupervised"` (the
+cross-day-pooled pooled comparator, RECOMPUTED here via `FittedDetector.fit_pooled`
+on this rotation's own pooled fit features -- "the bank's edge is an
 INFORMATION advantage ..., not a method win").
 
-Primary metric = ARI (spec A1.3, mapping-invariant), computed on windows masked to
-GT `not in {"unknown", "transition"}` -- BOTH arms, identically (spec A1.5;
-narrower than `rowii.eval.metrics.evaluate`'s `unknown`-only mask -- see
-`_masked_ari`'s own docstring for the delta this creates vs P7's own k-selection
-mask). Accuracy is reported for the bank ONLY: its modes ARE GT names, so
+Primary metric = ARI (mapping-invariant), computed on windows masked to
+GT `not in {"unknown", "transition"}` -- BOTH arms, identically (narrower
+than `rowii.eval.metrics.evaluate`'s `unknown`-only mask -- see
+`_masked_ari`'s own docstring for the delta this creates vs `scripts/run_step1.py`'s
+own `--k-sweep` mask). Accuracy is reported for the bank ONLY: its modes ARE GT names, so
 `assigned == gt_state` is a direct, meaningful equality; a KMeans cluster id has no
 GT identity to compare against. `--smooth` applies `rowii.state.segments.
 duration_filter` ONLY (never `rowii.state.smooth`'s HMM-EM re-estimation) so the
@@ -48,12 +48,12 @@ denominators are therefore never directly comparable.
 
 Artifacts under `results/step2/modebank/<test_run>/<variant>-<family>/`:
 `metrics.json` (bank ARI/accuracy/no_mode_fits_rate/low_confidence_modes +
-P7-comparison ARI, supervised/unsupervised tags), `confusion.csv` (GT state x
-assigned-mode window counts, masked identically to the ARI), `assignments.parquet`
-(window, valid, gt_state, assigned, no_mode_fits -- one row per window of the test
-run's OWN grid, invalid windows carrying the `""`/`False` scatter-back sentinel,
-mirroring `scripts/run_step2.py`'s `_INVALID_LABEL` convention), `notes.md` (pool
-composition + the spec's D1 attribution line).
+cross-day-pooled-comparison ARI, supervised/unsupervised tags), `confusion.csv`
+(GT state x assigned-mode window counts, masked identically to the ARI),
+`assignments.parquet` (window, valid, gt_state, assigned, no_mode_fits -- one row
+per window of the test run's OWN grid, invalid windows carrying the `""`/`False`
+scatter-back sentinel, mirroring `scripts/run_step2.py`'s `_INVALID_LABEL`
+convention), `notes.md` (pool composition + the attribution line).
 """
 from __future__ import annotations
 
@@ -91,16 +91,16 @@ from rowii.state.segments import duration_filter  # noqa: E402
 logger = logging.getLogger(__name__)
 
 _VARIANT_CHOICES: tuple[str, ...] = ("fusion", "vibration", "audio-beats")
-"""D1's own representation list (spec §3.D1 "Representations" bullet) -- narrower
+"""This CLI's own representation list -- narrower
 than `scripts/run_step2.py`'s full `_VARIANT_CHOICES`: the bank technically scores
-any variant's features, but the package's evaluation plan commits to exactly these
+any variant's features, but the evaluation plan commits to exactly these
 three (the vibration arm tests the partner-reported vibration advantage
-independently; fusion stays in scope for D1 -- only D2's level-only recalibration
-excludes it, A1.1)."""
+independently; fusion stays in scope here -- only `--level-recal` excludes it,
+since level-recalibration is undefined for fusion)."""
 _FAMILY_CHOICES: tuple[str, ...] = ("gaussian", "knn", "gmm")
 
 _EXCLUDED_GT = ("unknown", "transition")
-"""Duplicated from `rowii.state.modebank._EXCLUDED_GT` (spec A1.5) rather than
+"""Duplicated from `rowii.state.modebank._EXCLUDED_GT` rather than
 importing a private module symbol: every ARI/accuracy/confusion computation in
 this CLI must mask identically to what the bank itself trained on, so this tuple
 is the single local source of truth for that mask -- if `ModeBank`'s own set ever
@@ -141,7 +141,7 @@ def _unknown_run_names(names: list[str], index: RecordingIndex) -> list[str]:
 
 
 def _run_day_groups(run: Run) -> set[str]:
-    """The A3.8-style day groups of *run*: the SET of calendar days
+    """The day groups of *run*: the SET of calendar days
     (`"YYYY-MM-DD"`) parsed from every burst file's NAME across all streams --
     duplicated VERBATIM from `scripts/run_step2.py`'s helper of the same name
     (script-sibling rule; see that function's own docstring for the full
@@ -178,7 +178,7 @@ def _run_day_groups(run: Run) -> set[str]:
 def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list[Path]:
     """Betriebsdaten files whose hourly span intersects *grid*'s UTC time range --
     duplicated from `scripts/run_step2.py`'s helper of the same name
-    (script-sibling rule); see that function's own docstring for the full D3
+    (script-sibling rule); see that function's own docstring for the full
     timebase-shift rationale (candidate file headers are still on the raw DAQ
     axis and must be shifted before the intersection test)."""
     grid_end_ns = int(grid.edges_ns()[-1])
@@ -204,8 +204,8 @@ def _run_gt_states(
     Unlike `run_step2.py`'s own `_load_run_scada` (which returns `None` for a run
     with no SCADA coverage and lets its own callers treat GT as an optional
     diagnostic), GT is NOT optional here: every fit run supplies bank TRAINING
-    labels and the test run supplies bank EVALUATION labels (module docstring,
-    spec D1) -- a run with no Betriebsdaten coverage overlapping its own grid
+    labels and the test run supplies bank EVALUATION labels (module docstring)
+    -- a run with no Betriebsdaten coverage overlapping its own grid
     cannot participate in a rotation at all, so this raises instead of returning
     a sentinel a caller could silently ignore.
 
@@ -253,17 +253,18 @@ def _pool_gt_labels(pool: PoolResult, gt_by_run: dict[str, np.ndarray]) -> np.nd
 
 def _masked_ari(gt: np.ndarray, pred: np.ndarray) -> tuple[float, int]:
     """Adjusted Rand Index between *gt* and *pred*, restricted to windows whose
-    GT state is NOT in `_EXCLUDED_GT` (spec A1.5: BOTH `"unknown"` AND
+    GT state is NOT in `_EXCLUDED_GT` (BOTH `"unknown"` AND
     `"transition"` excluded -- narrower than `rowii.eval.metrics.evaluate`'s
     `unknown`-only mask, which callers must account for when comparing this
-    against P7's own k-selection mask). The bank's own ARI and the P7-comparison
-    row's ARI are both computed through this SAME helper, so the two arms are
-    masked identically (spec A1.3's fair-comparison rule).
+    against `scripts/run_step1.py`'s own `--k-sweep` mask). The bank's own ARI
+    and the cross-day-pooled-comparison row's ARI are both computed through this
+    SAME helper, so the two arms are masked identically.
 
     Args:
         gt: `(W,)` object array of GT state strings.
-        pred: `(W,)` array of predicted labels (bank mode strings, or P7 cluster
-            ids) -- any dtype `sklearn.metrics.adjusted_rand_score` accepts.
+        pred: `(W,)` array of predicted labels (bank mode strings, or
+            cross-day-pooled cluster ids) -- any dtype
+            `sklearn.metrics.adjusted_rand_score` accepts.
 
     Returns:
         `(ari, n_masked)`; `ari` is `nan` when `n_masked == 0` (nothing to score,
@@ -277,7 +278,7 @@ def _masked_ari(gt: np.ndarray, pred: np.ndarray) -> tuple[float, int]:
 
 
 def _masked_accuracy(gt: np.ndarray, assigned: np.ndarray) -> tuple[float, int]:
-    """Bank accuracy (spec A1.3: bank-only, direct string equality since the
+    """Bank accuracy (bank-only, direct string equality since the
     bank's modes ARE GT names) under the SAME `_EXCLUDED_GT` mask `_masked_ari`
     uses. Returns `(accuracy, n_masked)`; `accuracy` is `nan` when
     `n_masked == 0`."""
@@ -289,7 +290,7 @@ def _masked_accuracy(gt: np.ndarray, assigned: np.ndarray) -> tuple[float, int]:
 
 
 def _smooth_ids(labels: np.ndarray, min_dwell: int) -> np.ndarray:
-    """`--smooth`'s ONLY transform (spec A1.3, binding): `rowii.state.segments.
+    """`--smooth`'s ONLY transform (binding): `rowii.state.segments.
     duration_filter` on dense integer ids -- NEVER `rowii.state.smooth`'s HMM-EM
     re-estimation, which would make the bank-vs-clusterer comparison isolate two
     different smoothers' emission fits instead of the labeling mechanism alone.
@@ -387,7 +388,7 @@ def _notes_markdown(
     p7_k: int,
     smoothed: bool,
 ) -> str:
-    """Pool composition + the spec's D1 attribution line (spec §4: "every
+    """Pool composition + the attribution line ("every
     analysis type inspired by the partner's work carries a one-line attribution
     in the script docstring AND the digest")."""
     lines = [
@@ -417,8 +418,8 @@ def _notes_markdown(
 
 
 def _out_dir(results_root: Path, test_run: str, variant: str, family: str) -> Path:
-    """`results/step2/modebank/<test_run>/<variant>-<family>/` (plan's literal
-    Task 3 layout) -- keyed by the HELD-OUT run, mirroring
+    """`results/step2/modebank/<test_run>/<variant>-<family>/` -- keyed by the
+    HELD-OUT run, mirroring
     `scripts/run_step2.py`'s cross-day-pooled `_cross_day_pooled_out_dir`."""
     return results_root / "step2" / "modebank" / test_run / f"{variant}-{family}"
 

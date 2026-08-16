@@ -1,4 +1,4 @@
-"""Labeled MIMII clip-iterator tests (package-6 pillar-3, plan Task 4):
+"""Labeled MIMII clip-iterator tests (pillar-3):
 synthetic wav trees only -- no real MIMII downloads anywhere in this file
 (this repo's downloads-never-run-in-tests rule; `tests/test_tfc_corpora.py`
 sets the synthetic-fixture convention this file mirrors, including its
@@ -166,7 +166,7 @@ class TestIterLabeledClipsWavDir:
 
 
 # ---------------------------------------------------------------------------
-# P6 combined-review hardening: window_s != 1.0 + machine-id collisions
+# window_s != 1.0 + machine-id collisions
 # ---------------------------------------------------------------------------
 
 

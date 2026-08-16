@@ -1,5 +1,4 @@
-"""Tests for `scripts/download_corpora.py` (package-4 spec D2, Task 2; grown
-by package-7 spec D5/A3.10, Task 7 -- sections 7/8 below): CLI-level tests
+"""Tests for `scripts/download_corpora.py` (see sections 7/8 below): CLI-level tests
 with a monkeypatched `urllib.request.urlopen` -- NO real network access
 anywhere in this file. `--dry-run` tests additionally assert `urlopen` is
 never even CALLED, via a raising stub (module docstring's own network
@@ -121,7 +120,7 @@ def test_unknown_corpus_exits_2(capsys) -> None:
 
 # ---------------------------------------------------------------------------
 # 4. Sentinel sha256: "compute and print, then update manifest" -- never
-#    "verify" (plan's Task-2 binding contract).
+#    "verify".
 # ---------------------------------------------------------------------------
 
 
@@ -345,11 +344,11 @@ def test_sha_mismatch_exits_nonzero_removes_file_and_writes_no_manifest(
 
 
 # ---------------------------------------------------------------------------
-# 7. Package-7 K003-K006 additions (spec D5/A3.10, Task 7): the REMAINING
+# 7. K003-K006 additions: the REMAINING
 #    Paderborn healthy bearings join the table -- same BearingDataCenter URL
-#    scheme as K001/K002 (NOT Zenodo; only MIMII is Zenodo -- A3.10). Each
+#    scheme as K001/K002 (NOT Zenodo; only MIMII is Zenodo). Each
 #    carried the `_SHA256_TBD` sentinel until its first verified download
-#    (2026-07-21, the execution task's live-HEAD + compute-and-transcribe
+#    (2026-07-21, that download's own live-HEAD + compute-and-transcribe
 #    procedure; downloads never run in tests) -- the transcribed hashes are
 #    pinned below exactly like the established entries. Growing the table
 #    must never touch a pre-existing entry -- the regression pin holds every
@@ -371,7 +370,7 @@ def _paderborn_entry(filename: str) -> download_corpora._CorpusFile:
 def test_paderborn_k003_k006_use_bearingdatacenter_urls(stem: str) -> None:
     entry = _paderborn_entry(f"{stem}.rar")
 
-    assert entry.url == f"{_BEARINGDATACENTER_BASE}/{stem}.rar"  # A3.10: NOT Zenodo
+    assert entry.url == f"{_BEARINGDATACENTER_BASE}/{stem}.rar"  # NOT Zenodo
     assert entry.license == "CC BY-NC 4.0"
 
 
@@ -407,7 +406,7 @@ def test_dry_run_lists_k003_k006(monkeypatch, tmp_path, capsys) -> None:
 
 
 def test_established_entries_unchanged_by_k003_k006_addition() -> None:
-    """Regression pin (Task 7): every pre-package-7 entry stays byte-identical
+    """Regression pin: every pre-existing entry stays byte-identical
     (URL + measured sha256 transcribed literally) -- the table only GROWS."""
     files = download_corpora._CORPUS_FILES
 
@@ -458,16 +457,16 @@ def test_established_entries_unchanged_by_k003_k006_addition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Downstream contracts the K003-K006 growth relies on (Task 7):
+# 8. Downstream contracts the K003-K006 growth relies on:
 #    (a) `rowii.tfc.corpora.iter_windows_paderborn_dir` walks its root
 #        RECURSIVELY (`root.rglob("*.mat")`), so freshly extracted
 #        `K003/`-`K006/` trees are picked up with NO loader change -- pinned
 #        against a synthetic K003-style tree mirroring the real extraction
 #        layout (`K003.rar` -> `paderborn/K003/K003/<file>.mat`, the nested
 #        layout the K001/K002 rars produce on disk).
-#    (b) `pretrain_tfc --corpus bearings --out-name tfc_vib_v2.pt` (D5's
-#        re-pretrain name) parses; the `--out-name` flag itself landed in
-#        Task 6, and main()'s honoring of it is covered end-to-end by
+#    (b) `pretrain_tfc --corpus bearings --out-name tfc_vib_v2.pt` (the
+#        re-pretrain name) parses; the `--out-name` flag itself, and main()'s
+#        honoring of it, is covered end-to-end by
 #        tests/test_pretrain_tfc.py::test_out_name_override_applies_to_public_corpora
 #        over the SAME corpus-agnostic resolution
 #        (`args.out_name or _CHECKPOINT_NAMES[args.corpus]`).

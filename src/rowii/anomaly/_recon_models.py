@@ -1,7 +1,7 @@
-"""Autoencoder architectures for `rowii.anomaly.recon` (package-3 spec D2,
-Task-3 review refinement): the ONE module under `rowii.anomaly` that imports
-torch at module level -- so it must only ever be imported lazily, from inside
-`recon.py`'s `fit()` methods after `recon._require_torch()` has confirmed
+"""Autoencoder architectures for `rowii.anomaly.recon`: the ONE module under
+`rowii.anomaly` that imports torch at module level -- so it must only ever be
+imported lazily, from inside `recon.py`'s `fit()` methods after
+`recon._require_torch()` has confirmed
 torch is importable, never at another module's import time. The split mirrors
 `rowii.signals.beats` (torch-free until called) delegating to
 `rowii.signals.beats_model` (eager torch), and is what keeps `mypy --strict`
@@ -94,7 +94,7 @@ class _LstmAe(torch.nn.Module):
     architecture): encoder LSTM over the `(n_frames, n_mels)` patch -> final
     hidden state -> repeated across `n_frames` steps -> decoder LSTM ->
     per-step `Linear(hidden, n_mels)` projection. Takes and returns the
-    FLATTENED `(N, n_frames * n_mels)` layout (frame-major, Task 2's logmel
+    FLATTENED `(N, n_frames * n_mels)` layout (frame-major, the logmel
     flatten order), reshaping internally, so `recon.py`'s shared training/
     scoring paths treat all three architectures identically."""
 

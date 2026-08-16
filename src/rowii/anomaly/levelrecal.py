@@ -18,13 +18,13 @@ recentring the run's level distribution onto the reference's -- i.e. this module
 aligns "the run being recalibrated" onto "the anchor", never the other way round. Since
 the offset is a difference of medians of the STORED log10 features, it is
 self-consistently in log10 units by construction; a partner "dB" figure is never our
-unit and is never imported here (D2 computes its own offsets from our own caches).
+unit and is never imported here (this module computes its own offsets from our own caches).
 Which side is "run" and which is "reference" is a caller decision -- `run_step2
---level-recal` anchors on the pooled-fit median (A1.4), `monitor --level-recal` anchors
+--level-recal` anchors on the pooled-fit median, `monitor --level-recal` anchors
 on the snapshot-stored median -- this module's four functions are surface-agnostic:
 they operate on features + names in, offsets/recalibrated features out.
 
-**Fusion is out of scope by design (A1.1) -- refused upstream, not by this
+**Fusion is out of scope by design -- refused upstream, not by this
 module's empty-set guard.** `fuse()` (`rowii.signals.features`) is
 `np.hstack([zscore(a), zscore(b)])`: it z-scores VALUES per run but never
 renames or drops a column, so a `"fusion"` variant's `feature_names` is
@@ -33,7 +33,7 @@ literally its audio stream's names followed by its vibration stream's names
 `level_columns` returns the SAME non-empty set for `"fusion"` as for
 `"audio"`/`"vibration"`, and `column_medians`/`apply_level_recal` do NOT
 raise on it. The empty-set guard below is the EMBEDDING-variant refusal path
-instead (A1.9): `"audio-beats"`, `"audio-tfc"`, `"audio-student"`,
+instead: `"audio-beats"`, `"audio-tfc"`, `"audio-student"`,
 `"vibration-tfc"`, and `"logmel"` are single-stream variants whose one
 featurizer (`BeatsFeaturizer`/`TfcFeaturizer`/`StudentFeaturizer`/
 `LogmelFeaturizer`) names every column `beats_<i>`/`tfc_e<i>`/`student_e<i>`/
@@ -45,11 +45,11 @@ meaningful on a raw level feature -- has no physical meaning once applied to
 a z-score, even though fusion's columns still pattern-match a level name.
 That exclusion is enforced by the caller, not this module: `run_step2
 --level-recal` requires `--variant audio` or `vibration` and errors
-otherwise (commit d791d13); `monitor --level-recal` (package-8 Task 7, not
+otherwise (commit d791d13); `monitor --level-recal` (not
 yet built) is designed to inherit the same restriction transitively, since a
 fusion-fit snapshot could never carry `level_recal_medians` once `run_step2
 --save-snapshot --level-recal` itself already refused fusion at fit time.
-D2's variants are `audio` and `vibration` only; this module stays agnostic
+Only `audio` and `vibration` are supported; this module stays agnostic
 to which variant it is fed and cannot by itself stop a caller from
 misapplying it to fusion's z-scored columns.
 """
@@ -118,7 +118,7 @@ def column_medians(rows: np.ndarray, feature_names: list[str]) -> dict[str, floa
     Raises:
         ValueError: if `feature_names` selects zero level columns -- an EMBEDDING
             variant (`beats_<i>`/`tfc_e<i>`/`student_e<i>`/`logmel_f<i>_m<j>` names
-            carry no level token at all, A1.9); NOT fusion, whose names retain the
+            carry no level token at all); NOT fusion, whose names retain the
             level tokens (module docstring) and are excluded by callers on
             value-domain grounds instead. Also raises if `rows` is not 2-D with
             `len(feature_names)` columns (loud geometry, the snapshot posture), or
@@ -159,7 +159,7 @@ def level_recal_offsets(
             (`column_medians` on that run's own rows).
         reference_median: Name-keyed level-column medians of the anchor/reference
             (e.g. the pooled-fit median in `run_step2 --level-recal`, or the
-            snapshot-stored median in `monitor --level-recal`, A1.4).
+            snapshot-stored median in `monitor --level-recal`).
 
     Returns:
         `{k: run_median[k] - reference_median[k]}` for every key SHARED by both
@@ -218,7 +218,7 @@ def apply_level_recal(
         every other column is copied unchanged.
 
     Raises:
-        ValueError: if `feature_names` selects zero level columns (A1.9, the same
+        ValueError: if `feature_names` selects zero level columns (the same
             EMBEDDING refusal as `column_medians` -- not fusion, whose names retain
             the level tokens, module docstring); if `features` is not 2-D with
             `len(feature_names)` columns (loud geometry); if `offsets` names a

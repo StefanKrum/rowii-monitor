@@ -7,7 +7,7 @@ introduced by the multi-day delivery). Two stages: (1)
 window, (2) `gt_labels` turns those window means into a discrete state + load bin per the
 plant's operating rules.
 
-Rule ordering inside `gt_labels` (addendum spec §3, exact order matters):
+Rule ordering inside `gt_labels` (exact order matters):
 `_base_state` -> `_apply_ph_promotion` -> `_apply_ramp` -> `_apply_transition_buffer`.
 Phase-shifter promotion runs BEFORE the ramp rule so the ramp rule can explicitly protect
 already-promoted windows (a phase-shifter run's own near-zero power should rarely trip the
@@ -45,24 +45,24 @@ rather than to one offset's per-file scatter."""
 GT_CHANNELS: Mapping[str, str] = {
     "power": "1_P_Ist",
     # "1_Drehzahl UPM" ("Umdrehungen Pro Minute" = rpm) is the genuine rpm channel --
-    # verified against the real 2026-06-25 delivery (Task 13b): its plateau during
+    # verified against the real 2026-06-25 delivery: its plateau during
     # full-power turbine generation is 378.832 rpm, vs. "1_Drehzahl_Ist"'s ~101 on the
     # SAME file (ratio ~3.75x, consistent with a percent-of-nominal-ish quantity, not
-    # rpm). Task 13 originally wired GT_CHANNELS["speed"] to "1_Drehzahl_Ist" and
-    # measured ITS plateau (~101 rpm), silently taking the wrong channel's number as
+    # rpm). GT_CHANNELS["speed"] was originally wired to "1_Drehzahl_Ist", and its
+    # measured plateau (~101 rpm) silently took the wrong channel's number as
     # the machine's nominal speed -- see results/parameter_verification.md's Revision
     # 2026-07-07 section for the corrected derivation.
     "speed": "1_Drehzahl UPM",
     "guide_vane": "1_Leitapparat Stell.",
     "flow_tu": "Durchfluss TU",
     "flow_pu": "Durchfluss PU",
-    # Multi-day/phase-shifter addendum (spec §3): loaded for verification/reporting --
+    # Multi-day/phase-shifter addendum: loaded for verification/reporting --
     # the phase-shifter promotion rule itself uses speed+power+dwell (± the ks_valve
     # gate below when enabled), never reactive power directly.
     "reactive": "1_Q_Ist",
     # Spherical inlet valve position -- optional conjunctive gate for phase-shifter
     # promotion (see `GtRules.ph_requires_ks_closed`). Verified present (exact name) in
-    # every SCADA-bearing day's Betriebsdaten during the addendum's own data audit.
+    # every SCADA-bearing day's Betriebsdaten.
     "ks_valve": "1_KS Stellung",
 }
 
@@ -102,21 +102,21 @@ def load_scada_window_means(
     files from `dataset.discover`) and are concatenated in the given order before slicing
     into *grid*'s windows. Windows with zero SCADA samples get NaN in every column.
 
-    Task 10 (D3, DAQ epoch-2000 clock quirk): *files*' raw on-disk timestamps carry
+    DAQ epoch-2000 clock quirk: *files*' raw on-disk timestamps carry
     the SAME quirk as burst audio/vibration files (`rowii.io.dataset` module
     docstring) -- before slicing, this function shifts them onto true UTC by
     *files*' OWN derived offset (`rowii.io.dataset.betriebsdaten_utc_offset_ns`),
     never by `audio_run_offset_ns` (SCADA is independent hardware from the
     audio/vibration DAQ, even though the two clocks are expected to agree closely
-    for the same day -- D3's "do not blindly reuse the audio run's offset").
+    for the same day -- "do not blindly reuse the audio run's offset").
     *grid* is assumed to already be on the true-UTC axis (as
-    `rowii.pipeline.build_run_grid` now produces, D2); passing a raw-axis grid here
+    `rowii.pipeline.build_run_grid` now produces); passing a raw-axis grid here
     would misalign every window against these now-true-UTC timestamps.
 
     Args:
         files: Betriebsdaten file paths, already time-sorted.
         grid: The window grid to slice against -- true-UTC for every real caller
-            post-D2 (`scripts/run_step1.py`/`run_step2.py`/`apply_detector.py`'s
+            (`scripts/run_step1.py`/`run_step2.py`/`apply_detector.py`'s
             `load_run_gt`/`_load_run_scada`/`_fit_detector_and_mapping`, all of
             which pass a `rowii.pipeline.prepare_run`-derived grid).
         channels: GT channel name mapping.
@@ -191,7 +191,7 @@ def _base_state(scada: pd.DataFrame, rules: GtRules) -> pd.Series:
         np.abs(power) < rules.power_eps_mw
     )
     # "1_Drehzahl UPM" (GT_CHANNELS["speed"]) is SIGNED by rotation direction at this
-    # plant (verified Task 13/13b, real 2026-06-25 data): positive during turbine
+    # plant (verified against real 2026-06-25 data): positive during turbine
     # operation, negative during pump operation (a reversible pump-turbine spins the
     # opposite way in each mode) -- the nominal-speed gate must compare the MAGNITUDE
     # against the threshold, exactly like is_standstill already does above, or every
@@ -223,7 +223,7 @@ def _ph_candidate_mask(scada: pd.DataFrame, rules: GtRules) -> np.ndarray:
     "`_base_state` says transition" -- a sub-nominal ramp-up/down window also falls
     through `_base_state` to `"transition"`, but must NOT be a phase-shifter
     candidate (only the unloaded-but-AT-nominal-speed sub-case is a genuine phase-
-    shifter candidate; addendum spec §3).
+    shifter candidate).
 
     Uses `rules.ph_power_eps_mw` (a DEDICATED threshold), not `rules.power_eps_mw` --
     see `GtRules.ph_power_eps_mw`'s own docstring for why: real phase-shifter idling
@@ -316,15 +316,15 @@ def _apply_ramp(
     n = len(power)
     dpdt = np.full(n, np.nan)
     # Centered difference over window means; windows are uniform, so dt = 2 * window_s
-    # between the two neighbors used (Task-4 WindowGrid guarantees uniform window_ns).
+    # between the two neighbors used (WindowGrid guarantees uniform window_ns).
     for i in range(1, n - 1):
         if not (np.isnan(power[i - 1]) or np.isnan(power[i + 1])):
             dpdt[i] = (power[i + 1] - power[i - 1]) / (2.0 * window_s)
 
     out = state.to_numpy(copy=True)
     ramp_hit = ~np.isnan(dpdt) & (np.abs(dpdt) > rules.ramp_mw_per_s)
-    # Phase-shifter windows are never demoted by the ramp rule (addendum spec §3:
-    # "ramp rule ... never demotes PH interiors") -- a promoted run's own near-zero
+    # Phase-shifter windows are never demoted by the ramp rule --
+    # a promoted run's own near-zero
     # power rarely trips this threshold anyway, but this guard makes the invariant
     # explicit rather than relying on that coincidence.
     out[(out != "unknown") & (out != _PH_STATE) & ramp_hit] = _TRANSITION_STATE
@@ -381,7 +381,7 @@ def gt_labels(scada: pd.DataFrame, rules: GtRules, *, window_s: float) -> pd.Dat
     field (that dataclass is a fixed, already-committed interface) nor derivable from
     *scada* alone (its index carries no timestamps).
 
-    Rule ordering (addendum spec §3, see module docstring): base -> PH promotion ->
+    Rule ordering (see module docstring): base -> PH promotion ->
     ramp -> transition buffer. The transition buffer's own change-point detection uses
     the POST-promotion base (`ph_promoted`, not the pre-promotion `base`) -- a
     phase-shifter run's own edges are a genuine base-state boundary (e.g.

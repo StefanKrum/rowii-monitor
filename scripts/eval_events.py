@@ -6,8 +6,8 @@ Campaign day = `scripts/monitor.py` (snapshot + new recording -> alarms.parquet)
 then THIS script (alarms.parquet + the campaign's labeled fault intervals ->
 `event_eval.csv` + `event_notes.md`), nothing else. Until the induced-fault
 campaign delivers real labels, every invocation runs on synthetic intervals and
-is a workflow DEMO -- `event_notes.md` restates this on every run (spec §4
-honesty rule).
+is a workflow DEMO -- `event_notes.md` restates this on every run (honesty
+rule).
 
 All semantics live in `rowii.eval.events.evaluate_events` (its module docstring:
 inclusive-start/exclusive-end membership over window-START timestamps, tolerance

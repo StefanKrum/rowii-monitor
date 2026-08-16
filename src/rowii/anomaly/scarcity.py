@@ -1,4 +1,4 @@
-"""Calibration-scarcity curves for Step-2 (package-2 spec D3, both curves).
+"""Calibration-scarcity curves for Step-2.
 
 Answers the partner's "enough data per mode" question quantitatively: how does the
 realized false-alarm rate (and its spread) behave as the per-mode conformal
@@ -7,7 +7,7 @@ of scorer dependencies -- it operates on PRECOMPUTED score arrays (the scorer is
 fitted once on the full fit-side reference and both score arrays computed once;
 only the threshold is recomputed per subsample), which makes a 50-repetition sweep
 over 8 budgets a sub-second operation per state. `segment_accumulation_curve` (the
-SECONDARY, deployment-view curve, package-2 Task 5) breaks that scorer-free
+SECONDARY, deployment-view curve) breaks that scorer-free
 pattern on purpose: it shrinks the FIT/reference side too, not just the
 calibration size, so it must refit a fresh scorer at every checkpoint --
 "how many more recording MINUTES until this mode is curvable" needs a bigger
@@ -20,7 +20,7 @@ Per-repetition realized FAR at calibration size n is Beta-distributed -- see the
 S-package derivation in tests/test_conformal.py's validity suite -- so `beta_band`
 overlays the EXACT `Beta(n + 1 - idx, idx)` quantiles (idx = threshold_index(n,
 alpha)), not a binomial approximation. Scoring-side sampling noise adds on top of
-that band; reports must say so (spec D3).
+that band; reports must say so.
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def scarcity_curve(
         conformal_scores: `(n_pool,)` finite calibration scores of this state's
             held-out normal windows (full pool; subsampled per budget x rep).
         scoring_scores: `(m,)` finite scores of this state's FIXED scoring windows
-            (never subsampled -- spec D3: scoring split fixed across repetitions).
+            (never subsampled -- scoring split fixed across repetitions).
         label: State label carried into the output rows (int cluster id or str).
         cfg: See `ScarcityConfig`.
 
@@ -167,7 +167,7 @@ def segment_accumulation_curve(
     scoring_windows: np.ndarray,
     cfg: SegmentAccumulationConfig,
 ) -> pd.DataFrame:
-    """Deployment-view scarcity curve (package-2 spec D3 secondary): "how many more
+    """Deployment-view scarcity curve: "how many more
     recording MINUTES per mode until calibration is achievable and stable" --
     unlike `scarcity_curve` (which only resamples the CALIBRATION SIZE out of an
     already-fixed, already-fit reference pool), this shrinks the FIT/reference side
@@ -205,7 +205,7 @@ def segment_accumulation_curve(
             rep) that clears the `min_ref`/conformal floor, so every fit is
             independent (no state leaks across checkpoints or reps).
         scoring_windows: `(m,)` FIXED window indices held out from every prefix for
-            good (spec D3: "scoring split fixed across repetitions") -- never
+            good (scoring split fixed across repetitions) -- never
             resampled, and their own segments never enter `non_scoring_segments`.
         cfg: See `SegmentAccumulationConfig`.
 
@@ -216,8 +216,8 @@ def segment_accumulation_curve(
         `labels[scoring_windows]`. `minutes` is the SAME value across every label
         at one (rep, checkpoint) pair -- it counts TOTAL valid windows drawn into
         that checkpoint's combined fit+conformal pool, across every label at once
-        (per-state counts are coupled through shared segments, spec D3: "stated
-        openly"), divided by 60 (1-second windows).
+        (per-state counts are coupled through shared segments -- stated
+        openly), divided by 60 (1-second windows).
     """
     non_scoring_segments = np.setdiff1d(
         np.unique(segment_ids[valid_mask & (segment_ids != -1)]),

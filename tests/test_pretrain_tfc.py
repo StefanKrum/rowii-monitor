@@ -1,8 +1,8 @@
-"""Tests for `scripts/pretrain_tfc.py` (package-4 spec D3, Task 3): CLI-level
+"""Tests for `scripts/pretrain_tfc.py`: CLI-level
 end-to-end tests against synthetic tmp corpus dirs (mirrors
 `tests/test_tfc_corpora.py`'s/`tests/test_download_corpora.py`'s own
 fixture-builder pattern) plus focused unit tests for the two pieces of new
-logic this task adds that have no natural home in Task 1/2's own test files
+logic here that have no natural home elsewhere
 (`_reservoir_sample`, `_augment_time_view`). No real corpus/download anywhere
 in this file -- CPU-forced throughout (`ROWII_FORCE_CPU=1`), matching
 `tests/test_tfc_model.py`'s/`tests/test_tfc_wrapper.py`'s own convention.
@@ -42,7 +42,7 @@ def _force_cpu(monkeypatch):
 
 def _write_noise_wav(path, *, duration_s: float, rate_hz: int = 16_000, seed: int = 0) -> None:
     """Mirrors `tests/test_tfc_corpora.py`'s own helper of the same name
-    (Task 2) -- duplicated, not imported: test modules are not a shared
+    -- duplicated, not imported: test modules are not a shared
     library other test modules import from in this project."""
     path.parent.mkdir(parents=True, exist_ok=True)
     n = int(round(duration_s * rate_hz))
@@ -156,8 +156,8 @@ def test_import_torch_or_exit_raises_systemexit_with_install_hint(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 3. End-to-end: --corpus mimii, tiny synthetic corpus, CPU (resolution 5's
-#    literal parameters: --epochs 2 --batch-size 8 --limit-clips 4
+# 3. End-to-end: --corpus mimii, tiny synthetic corpus, CPU
+#    (--epochs 2 --batch-size 8 --limit-clips 4
 #    --max-windows 64)
 # ---------------------------------------------------------------------------
 
@@ -260,7 +260,7 @@ def test_no_windows_found_exits_nonzero(tmp_path, capsys):
 
 # ---------------------------------------------------------------------------
 # 4. Determinism: two full runs, same seed -> identical checkpoint state_dict
-#    tensors (resolution 5's literal requirement)
+#    tensors
 # ---------------------------------------------------------------------------
 
 
@@ -508,9 +508,9 @@ class TestCorpusManifestSha256:
 
 
 # ---------------------------------------------------------------------------
-# 9. --corpus pshp-pool + --continue-from + --out-name (package-7 spec D4 as
-#    amended by A3.9, Task 6): materialize-once npz, cache reuse, checkpoint/
-#    sidecar lineage, out-name override. All PSHP plumbing (load_config /
+# 9. --corpus pshp-pool + --continue-from + --out-name: materialize-once npz,
+#    cache reuse, checkpoint/sidecar lineage, out-name override. All PSHP
+#    plumbing (load_config /
 #    discover / iter_target_windows) is monkeypatched -- no real plant data,
 #    mirroring tests/test_adapt_beats.py's stubbed-target-windows convention.
 # ---------------------------------------------------------------------------
@@ -532,7 +532,7 @@ def _patch_pool_environment(monkeypatch, src_dir: Path, *, windows_per_run, call
     dummy mic burst file under *src_dir* -- the file-signature
     fingerprint stats these, so content-staleness tests can mutate them; the
     fake iterator yields 8000-sample float32 windows with that run's constant
-    values and asserts the D4 contract `target_hz=8000` while recording every
+    values and asserts the contract `target_hz=8000` while recording every
     extra kwarg into `calls["iter_kwargs"]` (the seed-pinning tripwire).
     *calls* counts invocations of both.
     """
@@ -578,7 +578,7 @@ def _patch_pool_environment(monkeypatch, src_dir: Path, *, windows_per_run, call
 def _stub_train(monkeypatch, captured=None):
     """Replace `pretrain_tfc._train` with a fast stub returning a tiny real
     `TfcModel` (so `_save_checkpoint` still has a genuine state dict to
-    persist) while recording every argument -- the Task-6 probe for "the
+    persist) while recording every argument -- probing "the
     --continue-from init reaches training BEFORE any step runs"."""
     from rowii.tfc.model import TfcModel
     from rowii.tfc.wrapper import TfcConfig
@@ -598,7 +598,7 @@ def _stub_train(monkeypatch, captured=None):
 
 
 def _write_source_checkpoint(path: Path, *, channels=(4, 8), seed: int = 123):
-    """Write a Task-1-format TF-C checkpoint (`load_tfc_model`'s documented
+    """Write a TF-C checkpoint (`load_tfc_model`'s documented
     dict) for --continue-from tests; returns its model state dict."""
     from rowii.tfc.model import TfcModel
     from rowii.tfc.wrapper import TfcConfig
@@ -718,8 +718,8 @@ def test_pshp_pool_end_to_end_materializes_npz_and_checkpoint(tmp_path, monkeypa
     assert sidecar["pool_fingerprint"] == fingerprint
     assert sidecar["pool_window_counts"] == {"runA": 3, "runB": 2}
     note = sidecar["note"].lower()
-    assert "calibration" in note  # windows are calibration-side only (P5 leakage rule)
-    assert "universal" in note  # A2.1 universality framing
+    assert "calibration" in note  # windows are calibration-side only (leakage rule)
+    assert "universal" in note  # universality framing
     for run_name in ("runa", "runb"):
         assert run_name in note  # the note states the pool runs
 

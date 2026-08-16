@@ -54,11 +54,11 @@ class DetectionResult:
 @dataclass(frozen=True)
 class FittedDetector:
     """The Step-1 detection chain, split into fit (learn on day A) and apply
-    (label any day with day-A parameters) -- package-2 spec D1. Everything the
+    (label any day with day-A parameters). Everything the
     chain learns is captured here; `apply` never re-estimates anything:
     standardization uses the FIT day's per-column mean/std (`run_detection`
     z-scores per run, so transfer MUST carry these), labeling is Viterbi decode
-    with the FIT day's HMM. Not serialized to disk in this package (spec D1:
+    with the FIT day's HMM. Not serialized to disk in this package (a
     future runtime-prototype serialization point).
 
     Two usage caveats (final whole-branch review, 2026-07-15): the per-window
@@ -174,7 +174,7 @@ class FittedDetector:
         construction (same flags, `_sticky_transmat` transition matrix, uniform
         startprob) -- but with **no `model.fit` call anywhere**.
 
-        **The no-EM decision (A3.4, binding).** `fit_decode`'s Baum-Welch
+        **The no-EM decision (binding).** `fit_decode`'s Baum-Welch
         refinement is a single-run operation: running it over CONCATENATED runs
         would let EM treat the artificial jump from the last window of one run to
         the first window of the next as a real observed transition -- a cross-run
@@ -184,7 +184,7 @@ class FittedDetector:
         windows against the fixed pooled emission model. For the same reason,
         callers must never concatenate several runs into a single `apply` call.
 
-        **k is not chosen here.** Per A3.4, k is selected at execution time by a
+        **k is not chosen here.** k is selected at execution time by a
         GT-state-ARI sweep (k in {4, 5, 6} on the pool days) and reported; this
         method only fits the k it is given.
 
@@ -203,8 +203,7 @@ class FittedDetector:
         component/id invariant `rowii.runtime.snapshot._hmm_arrays` asserts, so
         the returned detector round-trips through the EXISTING snapshot
         extraction unchanged. `k == 1` mirrors `fit_decode`'s degenerate path
-        (`last_model_ is None`; `apply` labels every window 0 -- snapshot
-        amendment A1.2).
+        (`last_model_ is None`; `apply` labels every window 0).
 
         Args:
             pooled_features: (N, F) stacked feature rows of ALL pool runs' fit
@@ -212,7 +211,7 @@ class FittedDetector:
             cfg: Project config -- `cfg.detect` supplies `random_seed`,
                 `self_transition`, and `min_dwell_s`.
             k: Number of pooled clusters to fit (>= 1).
-            clusterer: Only `"kmeans"` is supported: A3.4 names KMeans, and a
+            clusterer: Only `"kmeans"` is supported: a
                 GMM's `fit_predict` cannot guarantee every component owns >= 1
                 window, which the `0..k-1` label-id invariant above requires.
 
@@ -256,7 +255,7 @@ class FittedDetector:
         )
 
         if k == 1:
-            # fit_decode's own k<=1 degenerate contract (snapshot A1.2): no HMM
+            # fit_decode's own k<=1 degenerate contract: no HMM
             # at all; `decode` labels every window with the single fitted id 0.
             smoother._fitted_ids = np.arange(1, dtype=np.int64)
             return cls(
@@ -290,7 +289,7 @@ class FittedDetector:
         model.transmat_ = transmat
         model.means_ = means
         model.covars_ = covars
-        # A3.4: NO model.fit(...) here -- assignment only (docstring rationale).
+        # NO model.fit(...) here -- assignment only (docstring rationale).
         # The one fit-side effect the assignment path must replicate: hmmlearn's
         # `covars_` GETTER (used by the snapshot extraction, `_hmm_arrays`) needs
         # `n_features`, which `fit`/`_check` would set. `predict` sets it too,
@@ -384,7 +383,7 @@ def run_detection(
         clusterer: Which clustering algorithm to use: `"kmeans"` or `"gmm"`.
         k: Number of clusters to request, overriding `cfg.n_states` when given.
             Not part of the original Step-1 plan signature; added because the
-            CLI (Task 12, `--k` / `--k-sweep`) needs to sweep cluster counts
+            CLI (`--k` / `--k-sweep`) needs to sweep cluster counts
             without constructing a new `DetectConfig` per value. When `None`
             (the default), behaviour is identical to the original plan: `k`
             defaults to `cfg.n_states`.

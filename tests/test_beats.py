@@ -1,4 +1,4 @@
-"""Tests for the frozen-BEATs featurizer (Task 14, `[beats]` extra).
+"""Tests for the frozen-BEATs featurizer (`[beats]` extra).
 
 Stub-encoder tests (below `# stub-encoder tests`) inject a deterministic
 `BeatsEncoderProtocol` stub via `BeatsFeaturizer`'s `encoder=` parameter, so
@@ -10,8 +10,8 @@ opt-in via the `[beats]` extra).
 
 `select_quantized_engine`/`load_quantized_beats_model` (below `# quantized
 backend engine selection`/`# load_quantized_beats_model`) and `BeatsFeaturizer`'s
-own `int8_model_path` branch (below `# int8 branch`) are Step-2 package-5 spec
-D6, Task 5's additions: post-training INT8 dynamic quantization support. These
+own `int8_model_path` branch (below `# int8 branch`) test
+post-training INT8 dynamic quantization support. These
 sections build a tiny REAL (2-layer) vendored `BEATs` instance and quantize it
 FOR REAL (`torch.ao.quantization.quantize_dynamic`, proven <1s even at the
 real `BEATS_EMBED_DIM`=768 width -- no checkpoint weights loaded, mirrors
@@ -298,7 +298,7 @@ def test_beats_featurizer_device_selection_defaults_to_best_device_when_unset() 
 
 
 # ---------------------------------------------------------------------------
-# quantized backend engine selection (rowii.signals.beats_model, spec D6)
+# quantized backend engine selection (rowii.signals.beats_model)
 # ---------------------------------------------------------------------------
 
 
@@ -329,7 +329,7 @@ class TestSelectQuantizedEngine:
 
 
 # ---------------------------------------------------------------------------
-# load_quantized_beats_model (rowii.signals.beats_model, spec D6)
+# load_quantized_beats_model (rowii.signals.beats_model)
 # ---------------------------------------------------------------------------
 
 
@@ -359,7 +359,7 @@ class TestLoadQuantizedBeatsModel:
 
 
 # ---------------------------------------------------------------------------
-# BeatsFeaturizer(int8_model_path=...) branch (spec D6)
+# BeatsFeaturizer(int8_model_path=...) branch
 # ---------------------------------------------------------------------------
 
 

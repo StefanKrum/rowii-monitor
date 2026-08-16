@@ -2,7 +2,7 @@
 evaluation design's central figure (detection performance vs. fraction of target-normal training
 data, per representation), run NOW on a public proxy because PSHP fault labels
 do not exist yet: MIMII ships `abnormal/` clips, PSHP awaits the induced-fault
-campaign. Every output therefore restates the honesty framing (spec section 4):
+campaign. Every output therefore restates the honesty framing:
 these are PUBLIC-PROXY results in the machine-id domain, never PSHP evidence.
 
 Protocol per (representation x machine id), all splits CLIP-level (windows of
@@ -21,19 +21,19 @@ one clip stay together -- the leakage rule):
    `KnnScorer(k=1, cosine)` fit on the FIT clips' windows; clip score = MEAN
    over the clip's window scores (MIMII's standard clip-level evaluation);
    conformal threshold = `calibrate(cal_clip_scores, alpha)` on CLIP-LEVEL
-   calibration scores -- amendment A1.4's coherence rule: never
+   calibration scores -- the coherence rule: never
    window-calibrated/clip-applied. Evaluated on TEST-normal clips + ALL
    abnormal clips (abnormal clips never touch fitting or calibration).
 4. Metrics per cell: `auc_clip`; `pauc_clip` = `sklearn.metrics.roc_auc_score(
    ..., max_fpr=0.1)`, the STANDARDIZED (McClish 1989) partial AUC (definition
-   named in the md and in a CSV header comment line -- amendment A1.4, pinned
+   named in the md and in a CSV header comment line, pinned
    by a hand-computed test case); `tpr_at_alpha` (abnormal clips above the
    conformal threshold); `realized_normal_clip_far`; `auc_window` (secondary,
    window-level over the same test/abnormal windows). A draw whose fit or cal
    side is empty yields NaN metrics + `degenerate=True` + a log line -- never
    a crash.
 
-Standardization caveat (amendment A1.5, restated in every output): the loader
+Standardization caveat (restated in every output): the loader
 per-window standardizes every window for EVERY representation -- removes
 clip-gain confounds but also erases absolute-level anomaly cues (the
 conservative choice). `AudioFeaturizer`'s output width varies with `rate_hz`
@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 
 _WINDOW_S = 1.0
 _TARGET_HZ = 16_000
-"""16 kHz corpus rate (amendment A1.5: BEATs-native; every featurizer resamples
+"""16 kHz corpus rate (BEATs-native; every featurizer resamples
 from its `rate_hz` argument anyway) -- also the `rate_hz` handed to every
 `transform` call, since the loader already resampled the windows."""
 _PAUC_MAX_FPR = 0.1
@@ -125,7 +125,7 @@ class _Representation:
 
 
 def _resolve_representation(name: str, cfg: Config) -> tuple[_Representation | None, str]:
-    """Availability gate (spec D4: `benchmark_inference`'s skip-with-log
+    """Availability gate (`benchmark_inference`'s skip-with-log
     semantics): `(representation, "")` when *name* can run on this machine,
     `(None, reason)` when it must be skipped -- checkpoint env unset, or set but
     pointing at a missing file. Never an error. For `beats`, the fp32 checkpoint
@@ -154,10 +154,10 @@ def _resolve_representation(name: str, cfg: Config) -> tuple[_Representation | N
 
 
 def _build_featurizer(rep: _Representation) -> _Featurizer:
-    """The DIRECT featurizer instance for *rep* (spec D4: this harness drives
+    """The DIRECT featurizer instance for *rep* (this harness drives
     the featurizer classes directly on `(n, S, 1)` windows at 16 kHz -- no
     pipeline variant). Torch-dependent classes are imported lazily HERE, never
-    at module import (plan global constraint), so `handcrafted`/`logmel` runs
+    at module import, so `handcrafted`/`logmel` runs
     -- and every all-cache-hit rerun -- need no torch install."""
     if rep.name == "handcrafted":
         from rowii.signals.features import AudioFeaturizer
@@ -195,7 +195,7 @@ def _clip_manifest(
     `iter_labeled_clips_wav_dir` will read for *machine_id* under *cap*, in the
     iterator's own yield order (sorted machine dirs, `abnormal` before `normal`,
     sorted filenames, per-directory cap) -- computed from `stat()` alone so a
-    cache HIT never touches audio. `mtime_ns` (P6 combined review): size alone
+    cache HIT never touches audio. `mtime_ns`: size alone
     misses a same-size in-place edit; size+mtime catches every realistic
     mutation short of a deliberate timestamp forgery. NOTE: a same-NAME id_*
     directory under two different parents would merge here exactly like in the
@@ -224,10 +224,10 @@ def _clip_manifest(
 def _fingerprint(
     rep: _Representation, cap: int | None, manifest: list[tuple[str, int, int]]
 ) -> str:
-    """sha256 over everything that determines the extracted features (spec D4):
+    """sha256 over everything that determines the extracted features:
     representation + its resolved checkpoint paths, the fixed window geometry,
     the cap, and the sorted clip relpaths + byte sizes + mtimes (the mtime
-    line is the P6-review hardening -- see `_clip_manifest`)."""
+    line is a hardening -- see `_clip_manifest`)."""
     payload = json.dumps(
         {
             "representation": rep.name,
@@ -288,7 +288,7 @@ def _save_cache(
     labels: np.ndarray,
     relpaths: list[str],
 ) -> None:
-    """npz members (spec D4, pickle-free -- loaded with `allow_pickle=False`):
+    """npz members (pickle-free -- loaded with `allow_pickle=False`):
     `features` (N, F) float64 per-window features stacked in clip order;
     `clip_bounds` (C+1,) int64 boundaries (clip i = rows bounds[i]:bounds[i+1]);
     `labels` (C,) int64 (0 normal / 1 abnormal); `relpaths` (C,) unicode clip
@@ -329,7 +329,7 @@ def _load_cache(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 # ---------------------------------------------------------------------------
-# Split protocol + per-cell evaluation (spec D4 + amendment A1.4)
+# Split protocol + per-cell evaluation
 # ---------------------------------------------------------------------------
 
 
@@ -363,7 +363,7 @@ def _clip_scores(
 def _standardized_pauc(y_true: np.ndarray, scores: np.ndarray) -> float:
     """`sklearn.metrics.roc_auc_score(..., max_fpr=0.1)` -- the STANDARDIZED
     (McClish 1989) partial AUC over FPR <= 0.1: the raw partial area is rescaled
-    so 0.5 = chance and 1.0 = perfect (amendment A1.4: the definition is named
+    so 0.5 = chance and 1.0 = perfect (the definition is named
     in every output and pinned by a hand-computed test case)."""
     return float(roc_auc_score(y_true, scores, max_fpr=_PAUC_MAX_FPR))
 
@@ -380,7 +380,7 @@ def _evaluate_cell(
     seed: int,
     alpha: float,
 ) -> dict[str, object]:
-    """One CSV row (spec D4 + amendment A1.4 -- see module docstring for the
+    """One CSV row (see module docstring for the
     full protocol). Degenerate draws (empty fit or cal side; also a machine
     with no test-normal or no abnormal clips, where no metric is defined)
     yield NaN metrics + `degenerate=True` + a log line, never a crash."""
@@ -419,7 +419,7 @@ def _evaluate_cell(
     )
     scorer = KnnScorer(k=1, metric="cosine").fit(fit_windows)
     cal_clip_scores, _ = _clip_scores(scorer, features, clip_bounds, cal_clips)
-    threshold = calibrate(cal_clip_scores, alpha)  # CLIP-level calibration (A1.4)
+    threshold = calibrate(cal_clip_scores, alpha)  # CLIP-level calibration
 
     test_clip_scores, test_window_scores = _clip_scores(
         scorer, features, clip_bounds, test_normal
@@ -456,7 +456,7 @@ def _evaluate_cell(
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     with path.open("w", newline="") as fh:
-        fh.write(f"# {_PAUC_DEFINITION}\n")  # A1.4: definition named in a header comment
+        fh.write(f"# {_PAUC_DEFINITION}\n")  # definition named in a header comment
         writer = csv.DictWriter(fh, fieldnames=list(_CSV_COLUMNS))
         writer.writeheader()
         writer.writerows(rows)
@@ -545,7 +545,7 @@ def _empty_panel(ax: Axes, message: str) -> None:
 def _plot_curve(
     out_path: Path, table: pd.DataFrame, *, corpus: str, cap: int | None, alpha: float
 ) -> None:
-    """The scarcity figure (spec D4): 2 panels (`auc_clip`, `tpr_at_alpha`) vs
+    """The scarcity figure: 2 panels (`auc_clip`, `tpr_at_alpha`) vs
     fraction (log-x); per representation, the line is the mean over
     (machine_ids x seeds) and the shaded band spans min..max over seeds (each
     seed first averaged over machine ids). Degenerate cells are excluded.
@@ -642,7 +642,7 @@ def _machine_cells(
 ) -> list[dict[str, object]]:
     """Every (fraction, seed) cell row for one (representation, machine):
     the shared TEST/POOL split plus the per-cell evaluation -- factored out so
-    the cache-fallback path (P6 review: corpus files gone, cache served
+    the cache-fallback path (corpus files gone, cache served
     UNVALIDATED) runs EXACTLY the code the normal path runs. Returns [] with a
     warning for a pathological zero-clip cache."""
     if labels.size == 0:
@@ -754,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
         for machine_id in machine_ids:
             manifest = _clip_manifest(args.root, machine_id, cap)
             if not manifest:
-                # P6-review MEDIUM: the corpus files being gone must never
+                # The corpus files being gone must never
                 # silently shrink the CSV under a clean exit. If a cache for
                 # this (rep, machine) exists, serve it -- its fingerprint is
                 # unvalidatable without the files, said loudly; otherwise the
@@ -827,7 +827,7 @@ def main(argv: list[str] | None = None) -> int:
         "scarcity_detection.md", out / "scarcity_detection.csv", len(rows),
     )
     if hard_skips:
-        # P6-review MEDIUM: a partial table must never look like a clean run.
+        # A partial table must never look like a clean run.
         print(
             "scarcity_detection: INCOMPLETE -- "
             + ", ".join(f"{r} x {m}" for r, m in hard_skips)

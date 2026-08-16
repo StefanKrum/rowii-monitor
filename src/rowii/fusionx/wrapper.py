@@ -1,4 +1,4 @@
-"""Cross-attention fusion-head wrapper (Step-2 package-5 spec D8, Task 6): the
+"""Cross-attention fusion-head wrapper: the
 third fusion level -- a lightweight cross-attention head on FROZEN per-branch
 features (`audio-beats`' own 768-d embeddings, the `fusion` cache's own
 vibration-branch columns), trained CLIP-style (audio and vibration views of the
@@ -60,8 +60,8 @@ limit)."""
 
 @dataclasses.dataclass(frozen=True)
 class XattnConfig:
-    """Cross-attention fusion head architecture (Step-2 package-5 spec D8, Task
-    6) -- torch-free by design (a plain dataclass), mirroring
+    """Cross-attention fusion head architecture -- torch-free by design (a plain
+    dataclass), mirroring
     `rowii.tfc.wrapper.TfcConfig`/`rowii.adapt.student.StudentConfig`'s
     identical role: readable out of a checkpoint's `cfg` field, logged, or
     hashed without ever importing torch.
@@ -158,7 +158,7 @@ def load_xattn_head(checkpoint: Path, device: torch.device) -> XattnHead:
         checkpoint: Path to a `.pt` file containing `{"cfg":
             dataclasses.asdict(XattnConfig(...)), "model": state_dict, "run":
             str, "vib_dim": int, "epochs": int}` -- the format fixed HERE
-            (Task 6) and written, unmodified, by `scripts/train_xattn.py`.
+            and written, unmodified, by `scripts/train_xattn.py`.
         device: Torch device to place the model on.
 
     Returns:

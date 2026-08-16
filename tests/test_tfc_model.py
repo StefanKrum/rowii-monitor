@@ -1,4 +1,4 @@
-"""TF-C model/loss unit tests (package-4 spec D1). CPU-forced, seeded."""
+"""TF-C model/loss unit tests. CPU-forced, seeded."""
 from __future__ import annotations
 
 import pytest

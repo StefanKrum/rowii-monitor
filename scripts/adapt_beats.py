@@ -35,8 +35,8 @@ encoder (`_native_tokens` below). The resulting NATIVE patch tokens are what
 `masked_token_loss` masks and reconstructs, and what the (adapted)
 `model.encoder` consumes -- so the adapters train on the SAME token basis the
 deployed inference path (`extract_features`, driven downstream by
-`BeatsFeaturizer._RealBeatsEncoder.extract`) will feed them. This is Amendment
-A1's whole point: the original frame-level objective (`masked_patch_loss`)
+`BeatsFeaturizer._RealBeatsEncoder.extract`) will feed them. This is the
+whole point: the original frame-level objective (`masked_patch_loss`)
 cannot consume BEATs' patchified tokens (its frame-count-preserving contract
 is structurally unsatisfiable across `patch_embedding` -- a strided Conv2d
 that downsamples BOTH fbank axes and flattens the patch grid into ~48 tokens
@@ -70,7 +70,7 @@ UNMASKED token rows the encoder attends to (the masked-target side is
 detached inside `masked_token_loss`; see its docstring's stop-gradient
 rationale).
 
-Torch import discipline (plan's Global Constraints: eager only in
+Torch import discipline (eager only in
 `rowii.adapt.objective`/`rowii.adapt.lora`/`rowii.adapt.student`'s model part/
 `rowii.fusionx.model`; lazy everywhere else): every torch-touching name here is
 imported lazily inside the function that needs it, INCLUDING `load_beats_model`/
@@ -118,7 +118,7 @@ from rowii.signals.beats_model import BEATS_SAMPLE_RATE_HZ, load_beats_model  # 
 logger = logging.getLogger(__name__)
 
 _MODE_DEFAULTS: dict[str, tuple[int, float]] = {
-    # (epochs, lr) -- spec D4's own mode-specific defaults, applied only when
+    # (epochs, lr) -- mode-specific defaults, applied only when
     # the matching CLI flag is omitted (`_resolve_mode_defaults`).
     "lora": (5, 1e-4),
     "full": (2, 1e-5),
@@ -167,7 +167,7 @@ def _require_beats_checkpoint(cfg: Config) -> Path:
 
 
 def _resolve_mode_defaults(mode: str, epochs: int | None, lr: float | None) -> tuple[int, float]:
-    """`--epochs`/`--lr` resolution (module docstring / spec D4): an explicit
+    """`--epochs`/`--lr` resolution (module docstring): an explicit
     CLI flag always wins; an omitted one falls back to *mode*'s own default
     (`_MODE_DEFAULTS`). Pure and parse-level -- no torch, no I/O -- so tests
     can assert the mode-default contract directly, without running `main()`.
@@ -180,7 +180,7 @@ def _resolve_mode_defaults(mode: str, epochs: int | None, lr: float | None) -> t
 
 def _parse_runs_or_error(parser: argparse.ArgumentParser, raw: str) -> list[str]:
     """`--runs "a,b,c"` -> `["a", "b", "c"]`, with parse-level validation via
-    *parser*`.error` (exit 2, argparse's own convention; P7 spec D6/A3.11):
+    *parser*`.error` (exit 2, argparse's own convention):
     whitespace around names is stripped; an empty list (nothing but commas/
     blanks) and duplicate names are both rejected -- a duplicated run would
     occupy TWO slots of the round-robin rotation and silently double-weight
@@ -219,7 +219,7 @@ def _prepare_model_for_mode(mode: str, model: BEATs) -> int:
     freezes anything, so without this blanket freeze every non-adapter
     parameter (`pos_conv`, per-layer norms, `k_proj`/`out_proj`, FFN,
     `patch_embedding`, ...) would default to trainable too -- this call is
-    what makes "only adapter params train" (spec D2) a true statement about
+    what makes "only adapter params train" a true statement about
     the model's own `requires_grad` flags, not merely an artifact of which
     parameters happen to end up in the optimizer (`_trainable_params`).
 
@@ -245,8 +245,8 @@ def _prepare_model_for_mode(mode: str, model: BEATs) -> int:
 
 def _native_tokens(model: BEATs, fbank: torch.Tensor) -> torch.Tensor:
     """*fbank* `(B, frames, n_mels)` -> the model's NATIVE pre-encoder patch
-    tokens `(B, T, encoder_embed_dim)` -- Amendment A1's token construction,
-    replicating `BEATs.extract_features`'s own stages between `preprocess`
+    tokens `(B, T, encoder_embed_dim)`, replicating `BEATs.extract_features`'s
+    own stages between `preprocess`
     and `self.encoder`, in order: `unsqueeze(1)` (the Conv2d's channel dim)
     -> `patch_embedding` -> `reshape(B, embed_dim, -1)` (flattening the
     time-patch x mel-patch grid into one token axis) -> `transpose(1, 2)` ->
@@ -281,7 +281,7 @@ def _native_tokens(model: BEATs, fbank: torch.Tensor) -> torch.Tensor:
 def _encoder_forward(model: BEATs) -> Callable[[torch.Tensor], torch.Tensor]:
     """Builds `masked_token_loss`'s `encoder_forward` closure over the
     (adapted) `model.encoder` -- the vendored `TransformerEncoder`, the ONLY
-    submodule LoRA touches (D2: q/v projections under
+    submodule LoRA touches (q/v projections under
     `encoder.layers[*].self_attn`). Its `forward(x, padding_mask=None)`
     returns `(x, layer_results)` (verified in
     `rowii/vendor/beats/backbone.py`); only `x` (`(B, T, encoder_embed_dim)`,
@@ -330,7 +330,7 @@ def _train(
     """Trains *model* (already loaded, NOT yet mode-prepared) in place on
     *windows* (`(N, 16000)` float32 16 kHz waveforms, already leakage-filtered
     by the caller via `iter_target_windows`) against `masked_token_loss`
-    (module docstring's native token-level proxy objective, Amendment A1),
+    (module docstring's native token-level proxy objective),
     for *epochs* full passes in *batch_size*-row mini-batches, shuffled each
     epoch by a *seed*-seeded CPU `torch.Generator` -- mirrors
     `scripts/pretrain_tfc.py`'s own `_train` (`_train_autoencoder`'s
@@ -414,7 +414,7 @@ def _save_and_verify(
 ) -> float:
     """Saves *model* to *checkpoint_path* as `{"cfg": model.cfg.__dict__,
     "model": model.state_dict()}` -- the SAME `{"cfg", "model"}` shape
-    `load_beats_model` already reads (D2/D4: "loads it unchanged"); `model.
+    `load_beats_model` already reads; `model.
     cfg.__dict__` (rather than a second raw read of the ORIGINAL base
     checkpoint's own "cfg" dict) is used deliberately: `model.cfg` is the
     EXACT `BEATsConfig` instance that already determined *model*'s real
@@ -427,7 +427,7 @@ def _save_and_verify(
     for `--mode lora`, already `.eval()`'d by `_train`) via `model.
     extract_features` -- BEATs' own PRODUCTION inference path (patch_embedding
     -> encoder -> ..., the SAME method `BeatsFeaturizer`'s `_RealBeatsEncoder.
-    extract` drives, and since Amendment A1 also the same token basis
+    extract` drives, and also the same token basis
     `_native_tokens` trained on) -- is compared against the SAME forward pass
     through the checkpoint immediately RELOADED from disk via `load_beats_model` (the
     real, established loader; module docstring explains why this name is a
@@ -564,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.monotonic()
     windows_per_run: dict[str, int] | None = None
     if args.runs is not None:
-        # Multi-run pool (P7 spec D6/A3.11 -- module docstring): round-robin
+        # Multi-run pool (module docstring): round-robin
         # draw across every named run's own calibration side, --max-windows
         # as the TOTAL budget, per-run counts recorded for the sidecar.
         unknown = [name for name in run_names if name not in by_name]
@@ -585,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         windows_list = [window for _name, window in pairs]
-        # Zero-contribution runs stay visible in the counts (A4.1's
+        # Zero-contribution runs stay visible in the counts (the
         # coverage-visibility principle: never silently absent).
         windows_per_run = dict.fromkeys(run_names, 0)
         for name, _window in pairs:
@@ -664,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Provenance block: the single-run sidecar keeps its exact historical
     # shape ("run"); a multi-run sidecar instead carries the runs list plus
-    # the A3.11-required per-run window counts.
+    # the per-run window counts.
     if windows_per_run is None:
         provenance: dict[str, object] = {"run": label}
     else:

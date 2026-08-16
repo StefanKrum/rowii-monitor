@@ -25,8 +25,8 @@ Four subcommands:
                        included, since those are themselves tracked files under
                        `assets/`, not a live real-data read).
     build-dashboard   Template-inject BOTH 080726 sessions' once-calibrated state/
-                       score/alarm timelines (`results/step2/once-calibrated/`, D2/
-                       D3c's `state_name`/`near_transition` columns included),
+                       score/alarm timelines (`results/step2/once-calibrated/`, its
+                       `state_name`/`near_transition` columns included),
                        ground-truth strike events (`docs/groundtruth/`), and the
                        SAME already-extracted clips into `docs/demo/
                        demo_dashboard_template.html`, producing `docs/demo/
@@ -132,15 +132,15 @@ PU_EVENTS_CSV = REPO_ROOT / "docs" / "groundtruth" / "080726_events_pu.csv"
 ST_EVENTS_CSV = REPO_ROOT / "docs" / "groundtruth" / "080726_events_st.csv"
 
 ONCE_CALIBRATED_DIR = REPO_ROOT / "results" / "step2" / "once-calibrated"
-"""Package-9's "run once per instrumentation era, decide frozen-vs-recalibrate per
+"""The "run once per instrumentation era, decide frozen-vs-recalibrate per
 sentinel verdict" replay output (`scripts/run_once_calibrated.py`) -- the ONLY
 existing artifact family that carries the two fields the control-room dashboard's
 state tile needs natively (`state_name`, `near_transition`, both `scripts/
-monitor.py` D2/D3c columns of `alarms.parquet`), so `build_dashboard_data` reads
+monitor.py`'s own columns of `alarms.parquet`), so `build_dashboard_data` reads
 its per-run `monitor/<run>/<mode>/` outputs directly rather than the older,
 KMeans-clustered `results/pillar3/` family `render_figures`/`extract_clips` above
-read from (that family predates package-9's named states and has no `state_name`/
-`near_transition` column at all)."""
+read from (that family predates `scripts/run_once_calibrated.py`'s named states
+and has no `state_name`/`near_transition` column at all)."""
 DASHBOARD_REPRESENTATION = "audio-beats"
 """Mic-only (BEATs-embedding) scorer -- matches this module's own six demo clips,
 all cut from the `RAWGeneratorMic__0` mono stream (module docstring), so the score
@@ -155,7 +155,7 @@ DASHBOARD_THRESHOLD_MODE = "recalibrate"
 """Of once-calibrated's two threshold arms (`frozen` keeps the very first
 calibration forever; `recalibrate` refits thresholds -- never the state/score
 references themselves -- on each run's own calibration-side windows), `recalibrate`
-is `audio-beats.json`'s own "package-2 cross-day evidence: the only recipe whose
+is `audio-beats.json`'s own "cross-day evidence: the only recipe whose
 realized false-alarm rate stayed at its nominal alpha" -- the operationally
 recommended regime, not `frozen`'s deliberately-naive stress test (which alarms on
 most of a held-out day almost by design, to prove the sentinel's drift detection
@@ -415,7 +415,7 @@ def peak_normalize(samples: np.ndarray, target_dbfs: float = TARGET_DBFS) -> np.
 def quantile_threshold(scores: Sequence[float], alpha: float) -> float:
     """The (1 - alpha) quantile of *scores* -- the illustrative, POOLED-across-the-
     whole-day conformal-style threshold line drawn on the Section-1 score-histogram
-    figure (`render_figures`, Task A #4). This is NOT the literal per-state
+    figure (`render_figures`). This is NOT the literal per-state
     operational threshold: the real pipeline (`monitor_notes.md` for e.g. this demo's
     own `audio-beats-a0.01` run) fits one threshold PER detected state on that state's
     own calibration-side windows -- 0.0498 for state 1 vs. 0.0679 for state 3 on this
@@ -446,7 +446,7 @@ def nearest_sorted_index(times: Sequence[float], target: float) -> int:
     compares both straddling neighbors and picks the closer one (a tie -- equal
     distance either side -- keeps the EARLIER index, `bisect_left`'s own convention).
 
-    This is the reference implementation for this demo's two Task-B/A call sites
+    This is the reference implementation for this demo's two call sites
     that both need "closest entry to a given instant in a monotonically increasing
     but IRREGULARLY spaced array of times": (1) here, in `render_figures`, to pick
     which real `demo-data` trace row backs the Section-1 feature-bars figure's example
@@ -552,8 +552,8 @@ def extract_window_samples(
     """The `[start_s, start_s + duration_s)` slice of *pcm* (samples, any dtype --
     typically the int16 array `scipy.io.wavfile.read` returns for one of this demo's
     own clip WAVs), converted to `float64`. The pure "which samples feed the figure"
-    contract behind the Section-1 waveform/spectrogram renderers (Task A #1/#2,
-    `render_figures`), kept separate from those two so the slice arithmetic is
+    contract behind the Section-1 waveform/spectrogram renderers
+    (`render_figures`), kept separate from those two so the slice arithmetic is
     unit-testable without matplotlib (mirrors this module's existing IO-touching vs.
     pure-helper split, module docstring).
 
@@ -1115,7 +1115,7 @@ def _clip_card_html(clip: dict[str, Any], wav_bytes: bytes, pcm: np.ndarray) -> 
     anchor_id = f"clip-{kind}-{_ANCHOR_SANITIZE_RE.sub('_', label_raw)}"
     kind_label = _CLIP_KIND_LABEL.get(kind, kind)
     kind_attr = html.escape(kind)
-    # `data-start-utc`/`data-duration-s` (feat/demo-replay, Task B #4/#5): the
+    # `data-start-utc`/`data-duration-s`: the
     # live-replay JS reads these to align this clip's own audio.currentTime onto the
     # shared `demo-data` trace time axis (`(new Date(data-start-utc) - t0) / 1000`)
     # when its "Follow live" button is clicked -- kept as machine-readable
@@ -1197,7 +1197,7 @@ def _pyplot() -> ModuleType:
 
 def _strip_axes_frame(ax: Any, *, keep: str = "bottom") -> None:
     """Hide every spine except *keep* (or all of them, `keep=""`) and color the
-    survivor `_FIG_GRID` -- the "minimal axes" look (Task A) shared by all four
+    survivor `_FIG_GRID` -- the "minimal axes" look shared by all four
     figures below."""
     for side in ("top", "right", "left", "bottom"):
         spine = ax.spines[side]
@@ -1214,8 +1214,8 @@ def _render_waveform_png_bytes(
     "raw signal" pipe-step tile -- real samples (one of this demo's own
     `docs/demo/assets/*.wav` clips), not synthetic. Unlike the pre-existing per-clip
     sparkline (`_render_sparkline_png_base64`, a bare axis-less envelope), this keeps
-    a small time axis: Task A calls these four figures "real mini graphics",
-    distinct from that purely cosmetic sparkline.
+    a small time axis, distinguishing these four "real mini graphics" from that
+    purely cosmetic sparkline.
     """
     plt = _pyplot()
     t = np.arange(len(samples)) / sample_rate_hz
@@ -1492,7 +1492,7 @@ def build_html(
 # events) plus the already-extracted docs/demo/assets/ clips; never touches
 # ROWII_DATA_ROOT or a model. Mirrors build_html's own "real artifacts in, one
 # self-contained HTML out" shape, so the two subcommands stay symmetric, but reads
-# a different (newer, package-9) artifact family -- see ONCE_CALIBRATED_DIR's own
+# a different (newer) artifact family -- see ONCE_CALIBRATED_DIR's own
 # docstring for why. Not unit-tested (real CSV/parquet/markdown disk reads,
 # `json.dumps` assembly) -- the DATA feeding it (`parse_state_table`,
 # `parse_event_summary_table`, `matching_event_kind`, `state_display_name`) is the

@@ -1,4 +1,4 @@
-"""Tests for `scripts/warm_cache.py` (Step-2 package 2, Task 6): CLI-level tests
+"""Tests for `scripts/warm_cache.py`: CLI-level tests
 against a synthetic, monkeypatched `discover` -- no real ROWII data or BEATs
 checkpoint anywhere (mirrors `tests/test_step2_cli.py`'s established pattern),
 plus a monkeypatched `prepare_run` recorder so a "real" (non-dry-run) invocation
@@ -316,7 +316,7 @@ def test_import_beats_or_exit_raises_systemexit_with_install_hint(monkeypatch) -
 
 
 # ---------------------------------------------------------------------------
-# 7. _import_tfc_or_exit (package-4 spec D4): mirrors #6 above, plus the
+# 7. _import_tfc_or_exit: mirrors #6 above, plus the
 #    checkpoint-name-mismatch case _import_beats_or_exit has no analogue for
 #    (BEATs has one checkpoint; TF-C has two, one per branch).
 # ---------------------------------------------------------------------------
@@ -364,7 +364,7 @@ def test_import_tfc_or_exit_names_the_right_env_var_when_checkpoint_missing(
 
 
 # ---------------------------------------------------------------------------
-# 8. audio-student variant + _import_student_or_exit (package-5 spec D5):
+# 8. audio-student variant + _import_student_or_exit:
 #    mirrors #6/#7 above, simplified to ONE checkpoint (no variant-based
 #    checkpoint selection).
 # ---------------------------------------------------------------------------

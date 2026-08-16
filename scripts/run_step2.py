@@ -1503,10 +1503,10 @@ _SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 _SUMMARY_COLUMNS_LEGACY: tuple[str, ...] = tuple(c for c in _SUMMARY_COLUMNS if c != "protocol")
-"""`_SUMMARY_COLUMNS` before package 2 added `protocol` as the 2nd column --
+"""`_SUMMARY_COLUMNS` before `protocol` was added as the 2nd column --
 `_read_summary_csv_or_none` still accepts a `summary.csv` written in this older shape
 (backfilling `protocol` onto it, never quarantining it as corrupt) so appending to a
-file left over from before this package never produces a ragged CSV."""
+file left over from before that change never produces a ragged CSV."""
 
 
 @dataclass(frozen=True)

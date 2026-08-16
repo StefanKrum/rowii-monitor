@@ -204,7 +204,7 @@ def channel_level_profile(levels: np.ndarray, strike_mask: np.ndarray) -> np.nda
 
 def outlier_channel(profile: np.ndarray) -> int:
     """`argmax(|profile - median(profile)|)`: the ring-outlier channel INDEX only --
-    channel-anonymous, no azimuth claim (A1.6: no azimuth->channel map is in-repo)."""
+    channel-anonymous, no azimuth claim (no azimuth->channel map is in-repo)."""
     p = np.asarray(profile, dtype=np.float64)
     return int(np.argmax(np.abs(p - np.median(p))))
 
@@ -255,8 +255,8 @@ def _reference_window_index(grid: WindowGrid, reference_ns: int) -> int:
     """*reference_ns*'s window index on *grid* (`floor((reference_ns - t0_ns) /
     window_ns)`), clamped into `[0, grid.n_windows - 1]` -- a reference outside the
     day's own coverage still yields the nearest in-range window rather than an
-    out-of-bounds index, so `locate_changeover`'s reference-windowed search (T1
-    review finding 1) always has a valid centre to search around."""
+    out-of-bounds index, so `locate_changeover`'s reference-windowed search
+    always has a valid centre to search around."""
     raw_index = (reference_ns - grid.t0_ns) // grid.window_ns
     return int(min(max(raw_index, 0), grid.n_windows - 1))
 
@@ -393,11 +393,11 @@ def _vib_ch0_liveness_rows(
     index: RecordingIndex, stream: str, all_files: bool
 ) -> list[dict[str, object]]:
     """Per-(day root, run, sampled file) ch0 liveness rows. Default samples only the
-    EARLIEST file of each run (D4.2's own objective is "which days carry live ch0",
+    EARLIEST file of each run (the objective is "which days carry live ch0",
     a per-run/per-day question -- burst files within one run share the same physical
     wiring, so checking every file of a multi-hundred-MB stream is redundant for that
     question); `--all-files` widens the sample to every file for full per-file
-    thoroughness (D4.2's literal "per-file" wording). The earliest-file default is
+    thoroughness. The earliest-file default is
     ASYMMETRIC: it can only produce a false DEAD verdict (never a false LIVE one)
     for a channel that only goes live partway through a run -- a live earliest file
     already proves the wiring was live at least once."""

@@ -2,7 +2,7 @@
 primary-mic-stream, 16 kHz target-normal training-window iterator BEATs adaptation draws from.
 
 Torch-free module under test -- no `pytest.importorskip("torch")` needed,
-unlike `tests/test_adapt_lora.py`/`tests/test_adapt_objective.py` (Task 1's
+unlike `tests/test_adapt_lora.py`/`tests/test_adapt_objective.py` (the
 eager-torch modules); `iter_target_windows` never imports torch at all.
 
 No `@pytest.mark.data`: every run here is a synthetic gantner tree built via
@@ -113,7 +113,7 @@ def _cfg(tmp_path: Path) -> Config:
 def _split_by_known_segments(prepared: PreparedRun, calib_segment_ids: set[int]) -> SegmentSplit:
     """A REAL, valid `SegmentSplit` restricted to a caller-chosen set of
     segment (file) ids -- mirrors `split_by_segments`'s own calibration/
-    scoring mask construction (spec D3) exactly, but with the partition
+    scoring mask construction exactly, but with the partition
     chosen directly instead of coming from the RNG-driven segment shuffle.
     Used to monkeypatch a fully deterministic, known-in-advance split so
     tests can assert precisely which windows are and are not yielded.
@@ -128,7 +128,7 @@ def _split_by_known_segments(prepared: PreparedRun, calib_segment_ids: set[int])
 
 
 # ---------------------------------------------------------------------------
-# 1. Leakage: only calibration-side windows are ever yielded (spec D3)
+# 1. Leakage: only calibration-side windows are ever yielded
 # ---------------------------------------------------------------------------
 
 
@@ -528,7 +528,7 @@ def _window_of(value: float) -> np.ndarray:
 
 
 _MULTI_SEQUENCES: dict[str, list[float]] = {
-    # Unequal lengths on purpose (the A3.11 test shape): run-b exhausts after
+    # Unequal lengths on purpose (the test shape): run-b exhausts after
     # its first window, run-c after its second -- the pinned rotation is then
     # a, b, c, a, c, a.
     "run-a": [10.0, 11.0, 12.0],

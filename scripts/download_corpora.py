@@ -131,8 +131,8 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
             license=_CWRU_LICENSE,
         ),
         # 12k Drive End Bearing Fault Data, 0.007" fault diameter, load 0 hp
-        # -- one file per fault location (a SMALL, diverse subset per spec
-        # D2, not the full load x diameter x location matrix).
+        # -- one file per fault location (a SMALL, diverse subset,
+        # not the full load x diameter x location matrix).
         _CorpusFile(  # IR007_0 (inner race), 2_910_768 B
             url="https://engineering.case.edu/sites/default/files/105.mat",
             filename="105.mat",
@@ -167,9 +167,9 @@ _CORPUS_FILES: dict[str, tuple[_CorpusFile, ...]] = {
             sha256="1040da8b74d169c4e8c8545afa335d7a3a320bcaf36a471250c3e434bc4caffd",
             license=_PADERBORN_LICENSE,
         ),
-        # Healthy bearings K003-K006 (package-7 spec D5/A3.10): the REMAINING
+        # Healthy bearings K003-K006: the REMAINING
         # Paderborn healthy set, same BearingDataCenter URL scheme as
-        # K001/K002 above (NOT Zenodo -- only MIMII is Zenodo, A3.10). Hashes
+        # K001/K002 above (NOT Zenodo -- only MIMII is Zenodo). Hashes
         # measured and transcribed from the paderborn MANIFEST.json after the
         # first verified full download on 2026-07-21 (this module's own
         # docstring policy -- the same flow that produced K001/K002's hashes).
@@ -227,8 +227,8 @@ def _stream_download(url: str, dest_path: Path) -> tuple[str, int]:
     Resume-less: a plain `urllib.request.urlopen(url)` GET, no
     `Range`/`If-Range` request and no on-disk resume state -- an
     interrupted download must be restarted from scratch. Acceptable for
-    this project's one-off, orchestrator-supervised corpus downloads (spec
-    D2): simplicity over resumability. Progress is logged (INFO) every
+    this project's one-off corpus downloads: simplicity over resumability.
+    Progress is logged (INFO) every
     `_PROGRESS_LOG_INTERVAL_BYTES` (100 MB) streamed, so a multi-GB MIMII
     download shows liveness in a background log without flooding it.
 
@@ -298,8 +298,7 @@ def _write_manifest(corpus_dir: Path, rows: list[_ManifestRow]) -> None:
 
 def _find_rar_extractor() -> str | None:
     """First of `unar`/`unrar` found on PATH, or `None` if neither is
-    present (`_extract_paderborn_rars`'s fallback -- spec D2's documented
-    rar-extraction policy)."""
+    present (`_extract_paderborn_rars`'s fallback)."""
     for name in ("unar", "unrar"):
         if shutil.which(name) is not None:
             return name
@@ -307,7 +306,7 @@ def _find_rar_extractor() -> str | None:
 
 
 def _extract_mimii_zip(zip_path: Path, dest_root: Path) -> Path:
-    """Extract *zip_path* into `dest_root/mimii/pump_0db/` (spec D2's fixed
+    """Extract *zip_path* into `dest_root/mimii/pump_0db/` (the fixed
     layout for the MIMII 0 dB pump zip), returning that directory."""
     extract_dir = dest_root / "mimii" / "pump_0db"
     extract_dir.mkdir(parents=True, exist_ok=True)
@@ -332,8 +331,8 @@ def _extract_paderborn_rars(paderborn_dir: Path) -> None:
     directory (`K001.rar` -> `K001/`), via `unar`/`unrar` if either is on
     PATH. If neither is present, prints precise manual instructions
     (stderr) per file and LEAVES it unextracted -- the download step has
-    already succeeded regardless (spec D2's documented fallback: a missing
-    extractor is not a download failure).
+    already succeeded regardless (a missing extractor is not a download
+    failure).
     """
     extractor = _find_rar_extractor()
     for spec in _CORPUS_FILES["paderborn"]:

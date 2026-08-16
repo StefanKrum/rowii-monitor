@@ -214,11 +214,11 @@ def test_run_step1_parser_accepts_arbitrary_day_prefixed_run_names() -> None:
 
 
 def test_run_step1_variant_all_excludes_logmel_but_includes_tfc_variants() -> None:
-    # Package-3 spec D3 scopes logmel as a Step-2 autoencoder INPUT, not a Step-1
+    # logmel is scoped as a Step-2 autoencoder INPUT, not a Step-1
     # clustering candidate: `--variant all` must NOT sweep it (a 3136-dim z-scored
     # matrix into the full-covariance GMM is statistically underdetermined at typical
     # per-run window counts), while `--variant logmel` stays explicitly selectable.
-    # Package-4 spec D4 draws the OPPOSITE conclusion for audio-tfc/vibration-tfc:
+    # audio-tfc/vibration-tfc draw the OPPOSITE conclusion:
     # TF-C's 256-d embedding is well-conditioned for the GMM, so both ARE swept by
     # `--variant all`, same treatment as the handcrafted/beats variants.
     import run_step1
@@ -229,7 +229,7 @@ def test_run_step1_variant_all_excludes_logmel_but_includes_tfc_variants() -> No
     assert "vibration-tfc" in run_step1._CONCRETE_VARIANTS
     assert "audio-tfc" in run_step1._VARIANT_CHOICES
     assert "vibration-tfc" in run_step1._VARIANT_CHOICES
-    # Package-5 spec D5: audio-student is a genuine state-detection candidate
+    # audio-student is a genuine state-detection candidate
     # (768-d, the same well-conditioned geometry as audio-beats -- the student
     # is distilled to regress it) -- ALSO expanded by --variant all.
     assert "audio-student" in run_step1._CONCRETE_VARIANTS
@@ -275,8 +275,8 @@ def test_beats_variant_without_extra_raises_systemexit_with_install_hint(monkeyp
 
 
 def test_tfc_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
-    """Mirrors the beats-extra guard test above, for TF-C's own `_import_tfc_or_exit`
-    (package-4 spec D4): torch missing -> SystemExit naming the shared `[beats]`
+    """Mirrors the beats-extra guard test above, for TF-C's own `_import_tfc_or_exit`:
+    torch missing -> SystemExit naming the shared `[beats]`
     extra, checked BEFORE the checkpoint -- a machine with neither torch nor a
     checkpoint configured must report the (more fundamental) missing-extra problem,
     not a confusing "checkpoint not set" message."""
@@ -311,7 +311,7 @@ def test_tfc_variant_without_extra_raises_systemexit_with_install_hint(monkeypat
 def test_tfc_variant_without_checkpoint_raises_systemexit_naming_env_var(
     variant, env_var
 ) -> None:
-    """`_import_tfc_or_exit` extends the beats-guard pattern (package-4 spec D4):
+    """`_import_tfc_or_exit` extends the beats-guard pattern:
     even with torch importable, a tfc variant with NO checkpoint configured for its
     OWN branch must exit naming the RIGHT env var (audio-tfc -> AUDIO, vibration-tfc
     -> VIB -- never the other one)."""
@@ -335,7 +335,7 @@ def test_tfc_variant_without_checkpoint_raises_systemexit_naming_env_var(
 
 def test_student_variant_without_extra_raises_systemexit_with_install_hint(monkeypatch) -> None:
     """Mirrors the tfc-extra guard test above, for the distilled student's own
-    `_import_student_or_exit` (package-5 spec D5): torch missing -> SystemExit
+    `_import_student_or_exit`: torch missing -> SystemExit
     naming the shared `[beats]` extra, checked BEFORE the checkpoint."""
     import builtins
 
@@ -363,7 +363,7 @@ def test_student_variant_without_extra_raises_systemexit_with_install_hint(monke
 
 def test_student_variant_without_checkpoint_raises_systemexit_naming_env_var() -> None:
     """Even with torch importable, audio-student with NO checkpoint configured
-    must exit naming ROWII_STUDENT_CHECKPOINT (package-5 spec D5)."""
+    must exit naming ROWII_STUDENT_CHECKPOINT."""
     import run_step1
 
     from rowii.config import Config
@@ -389,15 +389,15 @@ _E2E_LOCAL_HOUR_UTC = datetime(2026, 6, 25, 4, 0, 0, tzinfo=UTC)
 """The true UTC instant every `_E2E_T0_NS`-based file's own filename hour ("...
 2026-06-25_06-00-00...") resolves to: local Europe/Vienna 06:00:00 (CEST, UTC+2)."""
 _E2E_T0_NS = int((_E2E_LOCAL_HOUR_UTC - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds()) * 10**9
-"""Task 10 (DAQ epoch-2000 clock quirk): every synthetic file below's real UDBF
+"""DAQ epoch-2000 clock quirk: every synthetic file below's real UDBF
 header t0_ns must agree with its OWN filename's local-time hint (`rowii.io.dataset.
 run_utc_offset_ns`/`betriebsdaten_utc_offset_ns` now derive a per-file-set offset
 from exactly that hint-vs-header relationship) -- an "already correct clock"
-fixture (offset 0, the D1 plausibility gate), not the pre-Task-10 arbitrary
+fixture (offset 0, the plausibility gate), not the earlier arbitrary
 constant this used to be (`header.t0_ns` used to be the ONLY source of truth for
 alignment, filenames only needed to PARSE, never to agree numerically)."""
 
-# Pinned pre-refactor values (Step-2 Task S1's regression guard): captured 2026-07-09 by
+# Pinned pre-refactor values (regression guard): captured 2026-07-09 by
 # running this exact scenario against `scripts/run_step1.py` @ HEAD cdcf513, BEFORE the
 # `_prepare_run_features`/grid/mask/feature-assembly logic was extracted into
 # `src/rowii/pipeline.py`. That extraction is a pure code-motion refactor (plus an
@@ -423,7 +423,7 @@ def _build_e2e_data_root(root: Path) -> Path:
     file with a clear standstill -> turbine step at t=30s, all sharing the same UTC
     time base (`_E2E_T0_NS`, an "already correct clock" file set -- filename hour and
     real UDBF header t0_ns agree, so `run_utc_offset_ns`/`betriebsdaten_utc_offset_ns`
-    both derive offset 0, D1's plausibility gate). The Betriebsdaten file's own
+    both derive offset 0, the plausibility gate). The Betriebsdaten file's own
     filename hour ("06-00-00") matches the burst files' so all three streams anchor to
     the identical true-UTC instant, preserving the SCADA/burst time overlap the GT
     step below needs.
@@ -624,7 +624,7 @@ def test_run_combo_k_sweep_writes_four_rows_with_silhouette_and_k_sweep_note(
 
 
 def test_extract_stream_features_tolerates_one_sample_clock_jitter(tmp_path) -> None:
-    # Task 13 real-data finding: real DAQ files do NOT tile perfectly into
+    # Real-data finding: real DAQ files do NOT tile perfectly into
     # `round(rate_hz * window_s)` samples per window -- natural clock jitter puts some
     # windows at expected_samples +/- 1 (measured on the real June-25 TU mic/vib streams:
     # ~33% of windows off by exactly 1 sample, with NO actual data gap). Before the fix,
@@ -721,7 +721,7 @@ def test_run_combo_audio_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, mon
 
     # The stub encoder must actually have been exercised -- otherwise this test
     # would spuriously pass even if run_step1 silently fell back to the
-    # handcrafted AudioFeaturizer (the pre-Task-14 bug: audio-beats/fusion-beats
+    # handcrafted AudioFeaturizer (the bug: audio-beats/fusion-beats
     # were accepted by argparse and routed through _streams_for_variant/
     # assemble_variant_features, but _prepare_run_features's per-stream
     # featurizer selection never actually branched on the variant, so both
@@ -808,7 +808,7 @@ def test_run_combo_fusion_beats_kmeans_end_to_end_with_stub_encoder(tmp_path, mo
 
 
 def test_assemble_variant_features_fusion_survives_a_few_nan_rows() -> None:
-    # Task 13 real-data run (TU/fusion): a real run always has a handful of invalid
+    # Real-data run (TU/fusion): a real run always has a handful of invalid
     # windows (coverage gaps at file boundaries, ~11/8286 on the June-25 TU run) whose
     # rows are NaN in every per-stream feature matrix -- this is normal and expected
     # (see _StreamFeatureResult.features' own docstring). `assemble_variant_features`'s
@@ -851,7 +851,7 @@ def test_assemble_variant_features_fusion_survives_a_few_nan_rows() -> None:
 
 # ---------------------------------------------------------------------------
 # 7. Multi-day parent root: Betriebsdaten must be scoped per day tree, not
-#    pooled flat across the whole discovered index (addendum spec §2/§4).
+#    pooled flat across the whole discovered index.
 # ---------------------------------------------------------------------------
 
 
@@ -865,7 +865,7 @@ def _build_one_day_tree(
     Deliberately reuses the exact SAME filename hour ("...06-00-00...") and
     `_E2E_T0_NS` header value for every day tree built this way (unlike
     `_build_e2e_data_root`, which is free to use any fixed epoch since it only
-    ever builds one day) -- both derive offset 0 (D1's plausibility gate, an
+    ever builds one day) -- both derive offset 0 (the plausibility gate, an
     already-correct clock), so every day's burst/Betriebsdaten files land on the
     exact SAME true-UTC instant as every OTHER day's, overlapping in absolute
     time. `_betriebsdaten_for_grid`'s time-overlap filter alone could therefore

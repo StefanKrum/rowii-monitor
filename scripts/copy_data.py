@@ -111,7 +111,7 @@ def _plan_optional_top_level(source: Path) -> list[_PlannedFile]:
 
 
 def build_copy_plan(source: Path) -> list[_PlannedFile]:
-    """Resolve the exact copy plan (spec §3) against a concrete *source* tree."""
+    """Resolve the exact copy plan against a concrete *source* tree."""
     planned: list[_PlannedFile] = []
     for group in _DAT_GLOB_GROUPS:
         planned.extend(_plan_dat_group(source, group))

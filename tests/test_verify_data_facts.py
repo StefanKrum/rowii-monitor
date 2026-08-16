@@ -1,4 +1,4 @@
-"""Tests for scripts/verify_data_facts.py (Package-8 D4, A1.6): PURE-logic unit tests
+"""Tests for scripts/verify_data_facts.py: PURE-logic unit tests
 on the variance criterion, the changeover locator (synthetic series, incl. its
 reference-windowed search and top-k alternatives), the
 chronological day-root sort, and the channel-anonymous

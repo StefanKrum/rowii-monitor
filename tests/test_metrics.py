@@ -221,11 +221,11 @@ def test_evaluate_raises_clear_error_when_all_gt_windows_are_unknown() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mode-level (state) metrics -- primary view (Task 13b)
+# Mode-level (state) metrics -- primary view
 #
 # The strict Hungarian mapping is a 1:1 correspondence: two predicted clusters
 # that are both genuinely a turbine-load sub-cluster (a legitimate partition
-# refinement per the design spec §5 -- "load sub-structure appears as extra
+# refinement -- "load sub-structure appears as extra
 # clusters ... or reported as sub-clusters") get Hungarian-assigned to TWO
 # DIFFERENT GT states when there are exactly as many clusters as states, which
 # then penalizes ARI/macro_f1 as if the split were a genuine misclassification.
@@ -248,7 +248,7 @@ def test_state_level_two_clusters_both_majority_turbine_count_as_turbine() -> No
     # 0 + 15 = 15) -- Hungarian is indifferent on raw count here but the mapping it
     # picks forces cluster1, 15/16 of which is genuinely turbine, onto a single
     # GT state that only fits its 1 contaminating window -- this is the exact
-    # failure mode Task 13b targets: a legitimate load sub-cluster loses its
+    # failure mode being tested here: a legitimate load sub-cluster loses its
     # "turbine" identity to satisfy a global 1:1 constraint it has no reason to
     # respect. state_macro_f1 must score strictly higher than the strict
     # macro_f1 on this exact scenario (see module-level docstring above).
@@ -421,7 +421,7 @@ def test_state_confusion_diverges_from_confusion_when_majority_disagrees_hungari
 
 
 # ---------------------------------------------------------------------------
-# load_alignment: sub-cluster vs load-bin analysis (Task 13b item 2)
+# load_alignment: sub-cluster vs load-bin analysis
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +541,7 @@ def test_derive_state_names_maps_clean_two_mode() -> None:
 
 
 def test_derive_state_names_masks_both_unknown_and_transition() -> None:
-    """A1.5: BOTH masked before the vote -- narrower than evaluate's unknown-only."""
+    """BOTH masked before the vote -- narrower than evaluate's unknown-only."""
     from rowii.eval.metrics import derive_state_names
     gt = np.array(["turbine", "transition", "unknown", "turbine", "turbine"], dtype=object)
     pred = np.array([0, 0, 0, 0, 0], dtype=np.int64)
@@ -571,7 +571,7 @@ def test_derive_state_names_fallback_sub_50pct_plurality() -> None:
 
 
 def test_derive_state_names_exact_50pct_plurality_keeps_name() -> None:
-    """Boundary pin (P9 hardening T1): `frac >= min_plurality` uses `>=`, so an
+    """Boundary pin: `frac >= min_plurality` uses `>=`, so an
     EXACT tie at the default 50% plurality KEEPS the majority name rather than
     falling back -- the complement of test_derive_state_names_fallback_sub_50pct_
     plurality's 40%-fallback / 60%-keep cases, neither of which touches the

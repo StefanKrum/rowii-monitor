@@ -1,7 +1,6 @@
 """Tests for `rowii.runtime.snapshot`: pickle-free `MonitorSnapshot` round-trip (bitwise
 apply/score parity), format guards (version mismatch, runtime-scorer whitelist), the k<=1 degenerate
-detector (A1.2), and split parity with `run_sweep`'s exact top/nested discipline
-(A1.6).
+detector, and split parity with `run_sweep`'s exact top/nested discipline.
 
 Fixture sizing note (empirically verified before hardcoding, matching
 `test_sweep.py`'s established practice for segment-split constructions whose outcome
@@ -79,7 +78,7 @@ def _two_state_prepared(n_segments: int = _N_SEGMENTS, seed: int = 0) -> Prepare
 
 def _one_state_prepared() -> PreparedRun:
     """A single tight blob -- with `k=1` the detector's smoother stays degenerate
-    (`last_model_ is None`, amendment A1.2)."""
+    (`last_model_ is None`)."""
     rng = np.random.default_rng(3)
     n = _N_SEGMENTS * _SEG_LEN
     features = rng.normal(5.0, 0.1, (n, 2))
@@ -138,7 +137,7 @@ def _rewrite_meta(path: Path, **overrides: object) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. Round-trip apply + score parity (the central D1 guarantee)
+# 1. Round-trip apply + score parity
 # ---------------------------------------------------------------------------
 
 
@@ -198,7 +197,8 @@ def test_snapshot_npz_has_no_pickle(tmp_path: Path) -> None:
         assert all(data[name].dtype != object for name in data.files)
         meta = json.loads(str(data["meta"][0]))
 
-    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 2  # v2 since package-7 Task 4
+    # v2: format gained optional session_stats / level_recal_medians members
+    assert meta["format_version"] == SNAPSHOT_FORMAT_VERSION == 2
     assert meta["scorer"] == "knn"
     assert meta["variant"] == "fusion"
     assert meta["fit_run"] == "fit-day"
@@ -231,7 +231,7 @@ def test_version_mismatch_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Geometry-guard fields round-trip (the monitor's refusal basis, Task 2)
+# 4. Geometry-guard fields round-trip (the monitor's refusal basis)
 # ---------------------------------------------------------------------------
 
 
@@ -272,7 +272,7 @@ def test_save_refuses_non_runtime_scorer(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. k<=1 degenerate detector (amendment A1.2)
+# 6. k<=1 degenerate detector
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +310,7 @@ def test_degenerate_single_state_round_trip(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Split parity with run_sweep (amendment A1.6): hand-run of the same splits
+# 7. Split parity with run_sweep: hand-run of the same splits
 # ---------------------------------------------------------------------------
 
 
@@ -523,8 +523,8 @@ def test_truncated_archive_raises_snapshot_level_value_error(tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
-# 11. fit_snapshot_from_parts (package-7 Task 3, spec A3.11) + save_snapshot
-#     provenance kwarg -- the pooled-artifact assembly path
+# 11. fit_snapshot_from_parts + save_snapshot provenance kwarg -- the
+#     pooled-artifact assembly path
 # ---------------------------------------------------------------------------
 
 
@@ -685,8 +685,8 @@ def test_save_snapshot_provenance_round_trip(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. Format v2: session stats (package-7 Task 4, spec D3/A3.5) -- round trips
-#     with and without stats, v1-FILE compatibility, geometry refusal
+# 12. Format v2: session stats -- round trips with and without stats,
+#     v1-FILE compatibility, geometry refusal
 # ---------------------------------------------------------------------------
 
 
@@ -736,8 +736,8 @@ def test_v2_without_stats_carries_no_session_members(tmp_path: Path) -> None:
     prepared = _two_state_prepared()
     snapshot, _ = _fit(prepared)
     assert snapshot.session_stats is None  # fit_snapshot never fits session stats
-    assert snapshot.level_recal_medians is None  # nor level-recal medians (P8 T7)
-    assert snapshot.format_version == 2  # NEW saves are v2 either way (Task 4)
+    assert snapshot.level_recal_medians is None  # nor level-recal medians
+    assert snapshot.format_version == 2  # NEW saves are v2 either way
 
     path = tmp_path / "v2_bare.npz"
     save_snapshot(path, snapshot)
@@ -755,7 +755,7 @@ def test_v2_without_stats_carries_no_session_members(tmp_path: Path) -> None:
 
 
 def test_v1_file_loads_with_session_stats_none(tmp_path: Path) -> None:
-    """A pre-package-7 snapshot FILE (format_version 1, no session members) must
+    """A v1 snapshot FILE (format_version 1, no session members) must
     keep loading -- the reader accepts {1, 2}; refusing v1 is the MONITOR's job,
     and only under --session-norm (tests/test_monitor_cli.py)."""
     prepared = _two_state_prepared()
@@ -789,7 +789,7 @@ def test_from_parts_session_stats_geometry_refusal() -> None:
 
 def test_scorer_for_label_session_stats_transforms_the_reference() -> None:
     """`scorer_for_label(..., session_stats=...)` must fit on the session-normalized
-    reference (the monitor's reference-side transform seam, D3/A3.5) -- parity with
+    reference (the monitor's reference-side transform seam) -- parity with
     a hand-transformed KnnScorer, bitwise."""
     prepared = _two_state_prepared()
     snapshot, _ = _fit(prepared)
@@ -806,9 +806,9 @@ def test_scorer_for_label_session_stats_transforms_the_reference() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Format v2 (cont'd): level-recal medians (package-8 Task 7, spec
-#     D2/A1.4/A1.10/A1.11) -- OPTIONAL v2 member, NO version bump, mutually
-#     exclusive with session_stats by fit path, name-keyed geometry guard.
+# 13. Format v2 (cont'd): level-recal medians -- OPTIONAL v2 member, NO
+#     version bump, mutually exclusive with session_stats by fit path,
+#     name-keyed geometry guard.
 # ---------------------------------------------------------------------------
 
 
@@ -818,7 +818,7 @@ def test_snapshot_round_trips_level_recal_medians(tmp_path: Path) -> None:
     snapshot = _from_parts(
         detector, references, cal_scores, thresholds, level_recal_medians=medians
     )
-    assert snapshot.format_version == SNAPSHOT_FORMAT_VERSION == 2  # no version bump (A1.10)
+    assert snapshot.format_version == SNAPSHOT_FORMAT_VERSION == 2  # no version bump
     assert snapshot.level_recal_medians == medians
     assert snapshot.session_stats is None
 
@@ -826,8 +826,7 @@ def test_snapshot_round_trips_level_recal_medians(tmp_path: Path) -> None:
     save_snapshot(path, snapshot)
 
     with np.load(path, allow_pickle=False) as data:
-        # No new npz array -- the small dict lives entirely in the meta JSON
-        # (module docstring / A1.10: "no new npz array").
+        # No new npz array -- the small dict lives entirely in the meta JSON.
         assert not any(name.startswith("session_") for name in data.files)
         meta = json.loads(str(data["meta"][0]))
     assert meta["level_recal_medians"] == medians
@@ -840,7 +839,7 @@ def test_snapshot_round_trips_level_recal_medians(tmp_path: Path) -> None:
 
 
 def test_level_recal_and_session_stats_are_mutually_exclusive() -> None:
-    """A1.10: session_stats and level_recal_medians are two different fit paths
+    """session_stats and level_recal_medians are two different fit paths
     (session-normalization vs level-only recalibration) and must never both be
     stored in one snapshot."""
     _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
@@ -853,8 +852,8 @@ def test_level_recal_and_session_stats_are_mutually_exclusive() -> None:
 
 
 def test_from_parts_level_recal_medians_geometry_refusal() -> None:
-    """Every level_recal_medians key must be one of feature_names (A1.10's
-    geometry guard, the same posture as the session-stats width check) -- a
+    """Every level_recal_medians key must be one of feature_names (the same
+    geometry-guard posture as the session-stats width check) -- a
     stray key would silently promise an anchor the snapshot cannot back."""
     _prepared, detector, references, cal_scores, thresholds = _detector_and_parts()
     with pytest.raises(ValueError, match="feature_names"):
@@ -865,9 +864,9 @@ def test_from_parts_level_recal_medians_geometry_refusal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Format v2 (cont'd): state_names (Step-2 package-9 Task 2, spec D2/A1.8) --
-#     OPTIONAL v2 member, NO version bump, keyed over FITTED ids (not the
-#     threshold-label subset), NO mutual-exclusivity with level_recal_medians.
+# 14. Format v2 (cont'd): state_names -- OPTIONAL v2 member, NO version
+#     bump, keyed over FITTED ids (not the threshold-label subset), NO
+#     mutual-exclusivity with level_recal_medians.
 # ---------------------------------------------------------------------------
 
 
@@ -895,7 +894,7 @@ def test_state_names_keys_must_be_fitted_ids(tmp_path: Path) -> None:
 
 
 def test_state_names_coexists_with_level_recal_medians(tmp_path: Path) -> None:
-    """NO mutual-exclusivity (A1.5): state_names is a naming layer, not a transform."""
+    """NO mutual-exclusivity: state_names is a naming layer, not a transform."""
     _p, detector, references, cal_scores, thresholds = _detector_and_parts()
     fitted = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
     snap = _from_parts(
@@ -908,10 +907,9 @@ def test_state_names_coexists_with_level_recal_medians(tmp_path: Path) -> None:
 
 
 def test_state_names_coexists_with_session_stats(tmp_path: Path) -> None:
-    """NO mutual-exclusivity (A1.5): state_names is a naming layer, not a
+    """NO mutual-exclusivity: state_names is a naming layer, not a
     transform -- mirrors test_state_names_coexists_with_level_recal_medians for
-    the OTHER v2 scoring-space member state_names must coexist with (P9
-    hardening T2a)."""
+    the OTHER v2 scoring-space member state_names must coexist with."""
     _p, detector, references, cal_scores, thresholds = _detector_and_parts()
     fitted = [int(i) for i in np.asarray(detector.smoother._fitted_ids)]
     stats = _session_stats_2f()

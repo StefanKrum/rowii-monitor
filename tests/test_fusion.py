@@ -82,8 +82,7 @@ class TestSplitBranchColumns:
 
 class TestFisherStatistic:
     def test_known_value(self) -> None:
-        # -2 * (ln 0.05 + ln 0.05) ~= 11.9829 (orchestrator resolution 2's own
-        # worked example).
+        # -2 * (ln 0.05 + ln 0.05) ~= 11.9829.
         stat = fisher_statistic(np.array([0.05]), np.array([0.05]))
         assert stat[0] == pytest.approx(11.9829, abs=1e-3)
 
@@ -119,7 +118,7 @@ class TestTippettStatistic:
         assert stat[0] < stat[1] < stat[2]
 
     def test_order_equivalent_to_textbook_min_p_rule(self) -> None:
-        """Orchestrator resolution 1: ranking by `tippett_statistic` DESCENDING
+        """Ranking by `tippett_statistic` DESCENDING
         (higher = more anomalous, this module's convention) must reproduce EXACTLY
         the same window order as ranking by the textbook Tippett rule `min(p_a, p_v)`
         ASCENDING (smaller = more anomalous, the classical convention)."""
@@ -137,8 +136,8 @@ class TestTippettStatistic:
 
 
 # ---------------------------------------------------------------------------
-# FAR-validity test across dependence regimes (centerpiece, orchestrator
-# resolution 5; sharpened + multi-regime per the 2026-07-15 review fix)
+# FAR-validity test across dependence regimes (centerpiece,
+# sharpened + multi-regime per the 2026-07-15 review fix)
 # ---------------------------------------------------------------------------
 
 _VALIDITY_REGIMES = ("independent", "corr", "anti", "identical")
@@ -190,7 +189,7 @@ def _combined_far_over_reps(
     n-1 -- the same footing a scoring point gets); the review-time mutant check
     passed the DEFECTIVE self-referential `lambda s: p_values(s, s)` (each point in
     its own reference) through the Fisher path to demonstrate the Fisher test catches
-    exactly that defect (scratch run, see the task-5 fix report: the mutant fails 6
+    exactly that defect (the mutant fails 6
     of the 8 (regime, n) cases, worst mean FAR ~0.10 at alpha=0.05 for
     anti-correlated branches at n=39). For `tippett_statistic` the choice of
     *calibration_p_fn* is decision-neutral -- a min-rule statistic is a strictly
@@ -232,8 +231,8 @@ class TestFarValidityAcrossDependenceRegimes:
     reaches 1/(n+1)), so the combined statistic is NOT one fixed transform applied to
     both sides and its calibration/scoring exchangeability breaks -- measured
     anti-conservative up to mean FAR ~0.10 at alpha=0.05 (n=39, anti-correlated;
-    review finding 2026-07-15, reproduced in this test's own mutant check, task-5 fix
-    report). The LOO form leaves a one-unit granularity residual (LOO min p = 1/n vs
+    review finding 2026-07-15, reproduced in this test's own mutant check).
+    The LOO form leaves a one-unit granularity residual (LOO min p = 1/n vs
     scoring 1/(n+1)) whose direction is conservative -- hence the one-sided sharp
     bound for Fisher.
 

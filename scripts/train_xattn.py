@@ -43,7 +43,7 @@ window (a warning, not an abort, when nonzero) -- `SystemExit(2)` otherwise,
 since a coarser mismatch would make "window index i" refer to different
 physical time slots in the two caches.
 
-## Leakage rule (spec D3, reused here)
+## Leakage rule (reused here)
 
 Training draws on calibration-side windows ONLY: `rowii.anomaly.references.
 split_by_segments` on the `fusion` cache's own `segment_ids`/`valid_mask`
@@ -71,7 +71,7 @@ weight init, called BEFORE the model is constructed) -- verified only on CPU
 (this project's tests never run torch training on a non-CPU device; the
 established MPS/CUDA caveat is `rowii.anomaly.recon`'s own module docstring).
 
-Torch import discipline (plan's Global Constraints): every torch-touching name
+Torch import discipline: every torch-touching name
 here is imported lazily inside the function that needs it, INCLUDING
 `discover`/`split_by_segments`, which are a deliberate exception (mirrors
 `scripts/distill_beats.py`'s own module docstring: a module-level import
@@ -265,8 +265,8 @@ def _check_cache_alignment(run_name: str, audio: PreparedRun, vib_source: Prepar
 def _select_calibration_windows(
     vib_source: PreparedRun, audio: PreparedRun, *, seed: int
 ) -> np.ndarray:
-    """The leakage-safe calibration-side window indices to train on (spec D3's
-    rule, reused here per the module docstring's "Leakage rule" section):
+    """The leakage-safe calibration-side window indices to train on (reused
+    here per the module docstring's "Leakage rule" section):
     `split_by_segments` on the `fusion` *vib_source* cache's own `segment_ids`/
     `valid_mask` (`_CALIBRATION_FRAC`, *seed*) -- the SAME top-level
     calibration/scoring split every Step-2 sweep draws for this run, so a
@@ -286,7 +286,7 @@ def _select_calibration_windows(
     with an undefined (NaN) audio embedding -- ANDing the masks keeps every
     drawn window's audio side finite, without weakening the leakage rule
     itself (segment ids AND the scoring-side exclusion still come from the
-    `fusion` cache alone, per D3).
+    `fusion` cache alone).
 
     Returns:
         `(N,)` int64 ascending window indices, valid in BOTH caches.

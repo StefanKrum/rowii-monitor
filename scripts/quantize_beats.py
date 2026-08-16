@@ -17,11 +17,10 @@ loader `BeatsFeaturizer`'s `int8_model_path` branch uses) + a sidecar
 `created_at`). CPU-only inference (documented here and at the loader):
 dynamically quantized Linear kernels are a CPU-only PyTorch backend -- this
 project's actual deployment target for the compact/quantized pole is an
-on-premise server with no GPU (design spec D6).
+on-premise server with no GPU.
 
-`inplace=True` (READ THIS -- load-bearing, not a style choice, and NOT
-documented anywhere in the design spec): `torch.ao.quantization.
-quantize_dynamic`'s default (`inplace=False`) internally `copy.deepcopy()`s
+`inplace=True` (READ THIS -- load-bearing, not a style choice):
+`torch.ao.quantization.quantize_dynamic`'s default (`inplace=False`) internally `copy.deepcopy()`s
 the model before swapping `nn.Linear` leaves for quantized counterparts, but
 the vendored `TransformerEncoder` (`rowii.vendor.beats.backbone.
 TransformerEncoder.__init__`) wraps its positional conv in `torch.nn.utils.
@@ -41,7 +40,7 @@ beats_model.select_quantized_engine`, which this script calls before
 quantizing (the SAME helper `BeatsFeaturizer`'s int8-loading branch calls
 before `torch.load`-ing the result back).
 
-Torch import discipline (plan's Global Constraints: eager only in dedicated
+Torch import discipline (eager only in dedicated
 model modules, lazy everywhere else): every torch-touching name here is
 imported lazily inside the function that needs it, INCLUDING `load_beats_
 model`, which is a deliberate exception (mirrors `scripts/adapt_beats.py`'s/
@@ -53,8 +52,8 @@ own `from ... import ...` statement would just re-resolve the REAL symbol on
 every call).
 
 `cosine_drift` (numpy-only, no torch): mean row-paired cosine similarity
-between two `(N, D)` embedding matrices, exposed here for the execution phase
-(design spec D9) -- comparing fp32 vs int8 `audio-beats` embeddings for the
+between two `(N, D)` embedding matrices, exposed here for the execution
+phase -- comparing fp32 vs int8 `audio-beats` embeddings for the
 SAME real cached windows, in the SAME order, is the INT8 embedding-drift
 evidence the design calls for. `--drift-run <name>` performs that measurement
 INSIDE this CLI (first primary-mic burst file, `--drift-windows` 1-s windows,
@@ -129,8 +128,8 @@ def _row_cosines(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 def cosine_drift(a: np.ndarray, b: np.ndarray) -> float:
     """Mean cosine similarity between ROW-paired vectors of *a* and *b*.
 
-    Exposed for the execution phase (design spec D9): the INT8 quantization
-    evidence compares fp32 vs int8 BEATs embeddings for the SAME real cached
+    Exposed for the execution phase: the INT8 quantization evidence compares
+    fp32 vs int8 BEATs embeddings for the SAME real cached
     windows, in the SAME order -- e.g. `cosine_drift(fp32_embeddings,
     int8_embeddings)` on `results/cache/<run>--audio-beats.npz`'s own
     `features` array, loaded once per checkpoint env (fp32 then int8). `1.0`
@@ -184,10 +183,10 @@ def _drift_windows_for_run(run_name: str, n: int, cfg: Config) -> np.ndarray:
 def _measure_drift(
     run_name: str, n_windows: int, fp32_checkpoint: Path, int8_path: Path, cfg: Config
 ) -> dict[str, object]:
-    """fp32-vs-int8 embedding drift on real windows, PERSISTED (design spec D9;
-    final-review finding: the execution's original drift figure lived only in a
-    log). Embeds the SAME raw windows through `BeatsFeaturizer` twice -- fp32
-    from *fp32_checkpoint* and int8 from *int8_path* -- BOTH on CPU (the int8
+    """fp32-vs-int8 embedding drift on real windows, PERSISTED (previously, the
+    drift figure lived only in a log). Embeds the SAME raw windows through
+    `BeatsFeaturizer` twice -- fp32 from *fp32_checkpoint* and int8 from
+    *int8_path* -- BOTH on CPU (the int8
     kernels are CPU-only; running fp32 on CPU too keeps the comparison
     device-homogeneous), then reports row-cosine stats.
     """
