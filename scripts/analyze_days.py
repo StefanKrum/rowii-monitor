@@ -2292,8 +2292,8 @@ _FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
 
 def _render_digest(out_root: Path) -> str:
     """The `results/analysis-days/README.md` markdown text: a short intro,
-    the A1.1 fusion-z-score finding, then one section per `_FIGURE_READINGS`
-    entry (its plain-language reading, an A1.8 attribution line when that
+    the fusion-z-score finding, then one section per `_FIGURE_READINGS`
+    entry (its plain-language reading, an attribution line when that
     analysis type is partner-inspired, and a markdown link to every PNG
     THIS module has actually written so far under `out_root/<name>/`)."""
     lines: list[str] = [
