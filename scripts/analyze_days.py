@@ -2265,7 +2265,7 @@ _FIGURE_READINGS: dict[str, tuple[str, str | None]] = {
     "pillar3-figure": (
         "Grouped bars of event-level TPR by alpha for every representation "
         "evaluated on the 080726 strike sessions, one panel per session; "
-        "taller bars mean more of the induced strike/sweep events were "
+        "taller bars mean more of the strike/sweep events were "
         "detected at that operating point. Read straight from our own "
         "results/pillar3/**/event_eval.csv summary rows -- no partner "
         "number involved. `fusion-snorm` is fusion's own session-norm "

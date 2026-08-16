@@ -4,7 +4,7 @@ TPR, detection latency, and false-alarm rates.
 
 Campaign day = `scripts/monitor.py` (snapshot + new recording -> alarms.parquet)
 then THIS script (alarms.parquet + the campaign's labeled fault intervals ->
-`event_eval.csv` + `event_notes.md`), nothing else. Until the induced-fault
+`event_eval.csv` + `event_notes.md`), nothing else. Until the controlled-event
 campaign delivers real labels, every invocation runs on synthetic intervals and
 is a workflow DEMO -- `event_notes.md` restates this on every run (honesty
 rule).
@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Event-level evaluation of a per-window alarms table against labeled "
             "fault intervals: per-event TPR, detection latency, and false-alarm "
             "rates (rowii.eval.events.evaluate_events). PREPARED-ONLY: until the "
-            "induced-fault campaign delivers real fault labels, every run is a "
+            "controlled-event campaign delivers real labels, every run is a "
             "workflow demo (module docstring)."
         )
     )
@@ -118,7 +118,7 @@ def _notes_markdown(
         "",
         "**PREPARED-ONLY harness (spec §4 honesty rule): NO fault labels exist yet "
         "for any recording in this project -- this harness is PREPARED for the "
-        "induced-fault campaign. Any run on synthetic or hand-crafted event "
+        "controlled-event campaign. Any run on synthetic or hand-crafted event "
         "intervals is a workflow demo of the campaign-day pipeline "
         "(scripts/monitor.py -> scripts/eval_events.py), never a detection "
         "result.**",

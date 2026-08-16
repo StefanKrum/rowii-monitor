@@ -1476,7 +1476,7 @@ def test_rolling_minutes_overflow_guard_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# 10. --exclude-calibration-events: induced-event intervals are
+# 10. --exclude-calibration-events: controlled-event intervals are
 #     BANNED from the calibration side and rescued into the scoring side, so
 #     strike days calibrate on strike-free windows and every event is evaluable.
 # ---------------------------------------------------------------------------
@@ -1497,7 +1497,7 @@ def _anomalous_calibration_prepared() -> PreparedRun:
 
 def _write_events_csv(path: Path, rows: list[tuple[str, str]]) -> Path:
     lines = ["# provenance comment line (must be skipped)", "start_utc,end_utc,kind"]
-    lines += [f"{s},{e},induced-strike" for s, e in rows]
+    lines += [f"{s},{e},hammer-strike" for s, e in rows]
     path.write_text("\n".join(lines) + "\n")
     return path
 

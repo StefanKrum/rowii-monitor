@@ -1,6 +1,6 @@
 """Build real-audio assets for the interactive live demo (`docs/demo/demo_live.html`)
 and the single-screen control-room dashboard (`docs/demo/demo_dashboard.html`): short
-WAV clips cut from the 080726 induced-Schonhammer-strike campaign day, plus the
+WAV clips cut from the 080726 controlled-event campaign day, plus the
 manifest describing them, plus (second/third subcommand) the pipeline-overview
 figures and the self-contained demo page itself, plus (fourth subcommand) the
 dashboard's own once-calibrated state/score/alarm data export.
@@ -40,7 +40,7 @@ Clip selection (six clips total):
     - One STATE clip per cluster id (`>= 0`) that actually appears in
       `results/pillar3/080726-pu_strikes/audio-beats-a0.01/segments.csv`: the LONGEST
       segment of that cluster, 10 s cut from its middle (`center_window`), nudged away
-      from any induced strike (`dodge_collision` against `docs/groundtruth/
+      from any hammer strike (`dodge_collision` against `docs/groundtruth/
       080726_events_pu.csv`, +/-10 s pad) if the two happen to collide.
     - Three STRIKE clips, 10 s from the logged event start: the pump-operation
       'plate-tur_0' strike (run 080726-pu_strikes), the standstill 'plate-gen_0'
@@ -171,7 +171,7 @@ _SESSION_LABEL = {
 }
 DASHBOARD_DEFAULT_SESSION = ST_RUN_NAME
 """`080726-st_strikes` opens first: a compact ~24 min session whose own two demo
-clips (module docstring's six-clip list) are BOTH induced strikes, so pressing the
+clips (module docstring's six-clip list) are BOTH hammer strikes, so pressing the
 main Play button starts real audio (and, within that first clip's own 10 s, a real
 alarm) almost immediately -- `080726-pu_strikes`, in contrast, is a ~3.6 h day whose
 own first clip (a normal-state one) sits ~29 min in. Both sessions stay one click
@@ -181,7 +181,7 @@ DEFAULT_DASHBOARD_OUT = REPO_ROOT / "docs" / "demo" / "demo_dashboard.html"
 
 CLIP_DURATION_S = 10.0
 COLLISION_PAD_S = 10.0
-"""Padding (seconds, both sides) around every induced-strike event a STATE clip's
+"""Padding (seconds, both sides) around every hammer-strike event a STATE clip's
 window must clear -- task instruction: "±10s" against `080726_events_pu.csv`."""
 TARGET_SAMPLE_RATE_HZ = 16_000
 TARGET_DBFS = -1.0
@@ -953,7 +953,7 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=pu_events,
             gt_kind="plate-tur_0",
             description=(
-                'Induced Schonhammer strike "plate-tur_0" (reference plate, '
+                'Schonhammer strike "plate-tur_0" (reference plate, '
                 "turbine side, 0°) during pump operation – SCADA-confirmed at "
                 "approx. −279 MW / −377.8 rpm."
             ),
@@ -965,7 +965,7 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=st_events,
             gt_kind="plate-gen_0",
             description=(
-                'Induced Schonhammer strike "plate-gen_0" (reference plate, '
+                'Schonhammer strike "plate-gen_0" (reference plate, '
                 "generator side, 0°) at standstill (calibration session)."
             ),
         ),

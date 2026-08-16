@@ -1,4 +1,4 @@
-# 080726_strikes_seconds_st.csv -- seconds-level per-strike ground truth for the 08.07.2026 induced-Schonhammer-strike campaign (upgrades docs/groundtruth/080726_events_{st,pu}.csv from minute-level to per-strike UTC timestamps).
+# 080726_strikes_seconds_st.csv -- seconds-level per-strike ground truth for the 08.07.2026 controlled-event campaign (upgrades docs/groundtruth/080726_events_{st,pu}.csv from minute-level to per-strike UTC timestamps).
 # Provenance: interactive per-strike annotation (scripts/annotation_kit.py build's index.html) by the author.
 # Source: /Users/stefankrummenacher/Downloads/annotation_marks_st.csv
 # Compiled: 2026-08-15 (scripts/annotation_kit.py compile-marks --csv <marks csv>, --date kept explicit for reproducibility).

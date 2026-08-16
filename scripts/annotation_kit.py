@@ -1,4 +1,4 @@
-"""Strike-annotation kit for the 08.07.2026 induced-Schonhammer-strike campaign:
+"""Strike-annotation kit for the 08.07.2026 controlled-event campaign:
 upgrades the existing MINUTE-level ground truth (`docs/groundtruth/080726_events_
 {st,pu}.csv`, 13 events each) to SECONDS-level per-strike UTC timestamps -- needed
 for per-strike TPR and first-alarm-latency evaluation, neither of which is
@@ -2005,7 +2005,7 @@ def write_compiled_csv(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     comment = (
         f"# {out_path.name} -- seconds-level per-strike ground truth for the 08.07.2026 "
-        "induced-Schonhammer-strike campaign (upgrades docs/groundtruth/080726_events_"
+        "controlled-event campaign (upgrades docs/groundtruth/080726_events_"
         "{st,pu}.csv from minute-level to per-strike UTC timestamps).\n"
         f"# Provenance: {provenance}\n"
         f"# Source: {source_path}\n"

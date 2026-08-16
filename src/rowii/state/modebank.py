@@ -6,7 +6,7 @@ At apply time the bank runs LABEL-FREE: argmin distance / argmax likelihood
 assigns each window a mode, and a per-mode split-conformal threshold (`rowii.
 anomaly.conformal.calibrate`) on that mode's own calibration-side scores flags a
 window rejected by EVERY member as `no_mode_fits` (the "keins passt" novelty
-signal, reported as a rate, never a detector without induced-event evidence).
+signal, reported as a rate, never a detector without controlled-event evidence).
 
 Standardization: `gaussian`/`gmm` standardize with the GLOBAL pool-FIT-side
 mean/std (`rowii.signals.features.zscore_stats` over every surviving mode's fit

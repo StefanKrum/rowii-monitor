@@ -1,4 +1,4 @@
-# Ground truth: induced Schonhammer strikes, ROWII machine 1, 2026-07-08 — STANDSTILL session (Kalibrierung_ST).
+# Ground truth: Schonhammer strikes, ROWII machine 1, 2026-07-08 — STANDSTILL session (Kalibrierung_ST).
 # Provenance: minute-level protocol independently verified against the raw data by the campaign's
 # crosscheck (illwerke-080726-analysis/crosscheck-notes-v1.md, 2026-07-13): every logged minute
 # contains strikes, gap minutes are silent. Each event spans its logged minute.

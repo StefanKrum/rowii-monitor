@@ -1196,7 +1196,7 @@ format, so every downstream path loads them unchanged.
 ## Step 2: runtime prototype and event-level (pillar-3) readiness (2026-07-17)
 
 This closes out the core implementation work: the "runs at the plant" requirement
-made concrete, the labeled-fault evaluation prepared for the induced-fault
+made concrete, the labeled-fault evaluation prepared for the controlled-event
 campaign, and the evaluation design's central figure realized on a public proxy.
 
 ### One artifact runs the plant recipe: snapshot + monitor CLI
@@ -1280,7 +1280,7 @@ Does the pipeline hold up ACROSS days, configurations, and modes — and which
 representation earns the best-system statement? Multi-day reference pools with
 held-out-day-group rotations, session normalization, TF-C continued pretraining
 on the plant's own audio, a 4x-larger vibration corpus, multi-day adaptation,
-rolling recalibration, and the first induced-anomaly evaluation (080726 hammer
+rolling recalibration, and the first controlled-event evaluation (080726 hammer
 strikes). Universality tags used throughout this section: [same-cfg] = fit and
 test days share a DAQ config era (MeasName), [cross-cfg] = they do not,
 [cross-mode] = the monitored mode is absent from the fit day.
@@ -1399,7 +1399,7 @@ alarm rate 0.0547 (M=30) / 0.0510 (M=60) / 0.0506 (M=120) at alpha=0.05, with
 the fit-day-fallback share dropping from 41% (M=30) to 24% (M>=60). Rolling
 approximates full recalibration without a second pass; M=60 is the default.
 
-### Pillar 3 — induced hammer strikes (080726, era C): the headline
+### Pillar 3 — hammer strikes (080726, era C): the headline
 
 Corrected ground truth, ±5 s tolerance, event-level TPR | realized window-FAR;
 pool-B1 snapshots, recalibrate mode WITH event-free calibration
@@ -1458,7 +1458,7 @@ pumping-transient detector — representation choice is task-dependent (though
 even it reaches 13/13 at standstill from alpha 0.05); (4) fusion's vibration
 channels add nothing over audio-only for these (airborne-dominated) strikes;
 (5) evaluation methodology is itself a result: without event-free calibration
-the SAME artifacts read as TPR ceilings of 0.38 (ST) / 0.77 (PU) — induced-
+the SAME artifacts read as TPR ceilings of 0.38 (ST) / 0.77 (PU) — controlled-
 event days MUST ban event windows from calibration or they understate the
 detector and contaminate its thresholds.
 
@@ -1466,7 +1466,7 @@ detector and contaminate its thresholds.
 
 Per-state kNN + split conformal on FROZEN representations, pooled multi-day
 references, per-day or rolling (M=60) recalibration with event-aware
-calibration exclusion on induced-event days. Representation by target: fusion
+calibration exclusion on controlled-event days. Representation by target: fusion
 for cross-day FAR control (0.03–0.10 across all six rotations), frozen BEATs
 for strict-alpha event detection (11/13 pumping + 13/13 standstill at
 alpha 0.01), handcrafted audio or the 0.8 MB student for maximum event recall
@@ -1478,7 +1478,7 @@ we can justify, which is the thesis' universality claim made empirical. The
 final deployed artifact pools ALL available days; the rotation numbers
 above are its honest generalization estimate.
 
-Honesty: no real machine faults exist in any recording — induced strikes are
+Honesty: no real machine faults exist in any recording — the hammer strikes are
 surrogate transients (verified minute-level ground truth, seconds pending);
 detection numbers reflect these sensors and this plant's noise, not
 exhaustively tuned detectors; the audio-student rotation on 290626-tu is
@@ -1489,7 +1489,7 @@ deployment-reality defects now under test: ground-truth CSV comment parsing,
 channel-availability drift between fit and monitored days (monitor now projects
 onto the snapshot's feature contract), DAQ stream-set grid skew between
 audio-beats and logmel caches (distill now pairs by integer window shift), and
-event-contaminated calibration on induced-event days (monitor now supports
+event-contaminated calibration on controlled-event days (monitor now supports
 `--exclude-calibration-events`; found by the final whole-branch review).
 
 ## Step 2: mode model bank, level recalibration, and explainability (2026-07-21)

@@ -34,7 +34,7 @@
       "start_utc": "2026-07-08T12:54:00+00:00",
       "duration_s": 10.0,
       "source_run": "080726-pu_strikes",
-      "description": "Induced Schonhammer strike \"plate-tur_0\" (reference plate, turbine side, 0°) during pump operation – SCADA-confirmed at approx. −279 MW / −377.8 rpm."
+      "description": "Schonhammer strike \"plate-tur_0\" (reference plate, turbine side, 0°) during pump operation – SCADA-confirmed at approx. −279 MW / −377.8 rpm."
     },
     {
       "file": "strike_standstill_plate_gen_0.wav",
@@ -43,7 +43,7 @@
       "start_utc": "2026-07-08T10:17:00+00:00",
       "duration_s": 10.0,
       "source_run": "080726-st_strikes",
-      "description": "Induced Schonhammer strike \"plate-gen_0\" (reference plate, generator side, 0°) at standstill (calibration session)."
+      "description": "Schonhammer strike \"plate-gen_0\" (reference plate, generator side, 0°) at standstill (calibration session)."
     },
     {
       "file": "strike_standstill_vane_sweep.wav",

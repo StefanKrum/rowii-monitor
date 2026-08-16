@@ -38,7 +38,7 @@ full-population frozen FAR as a labeled secondary column;
 for the EVENT-BEARING day (`080726-pu_strikes`) the headline instead sources
 all three arms from `scripts/eval_events.py`'s own event-free
 `realized_window_far` (the common-window/raw-parquet reading
-silently includes the induced-strike windows, which correctly alarm,
+silently includes the strike windows, which correctly alarm,
 inflating it ~2.5-3x), labeled `far_basis="event-free per eval_events"`,
 keeping the raw scored-window FAR as the SAME labeled
 `frozen_far_full_population` secondary so the two readings are never
@@ -52,7 +52,7 @@ entry. `250526-pu-afternoon` is deliberately EXCLUDED (only its fusion
 cache exists on disk). `010726-tu_ph_tu`/`010726-pu` are B1 pool members, so
 their frozen/once monitoring is IN-SAMPLE and tagged `"in-sample"` --
 computed exactly like every other day, just labeled for interpretation.
-`080726-pu_strikes` (era C, the induced-strike day) is EVENT-BEARING
+`080726-pu_strikes` (era C, the strike day) is EVENT-BEARING
 (`events_csv` set): `--exclude-calibration-events
 docs/groundtruth/080726_events_pu.csv` (by design: calibration windows must
 never contain labelled events) is
@@ -61,7 +61,7 @@ never contaminated by a strike window (frozen mode ignores the flag with a
 warning -- it draws no calibration from the monitored run at all, so there is
 nothing to protect there). That calibration protection is ORTHOGONAL to the
 regime FAR reported for this entry: the raw `alarms.parquet` scored-window
-mean is NOT event-free (the induced-strike windows are still scored -- under
+mean is NOT event-free (the strike windows are still scored -- under
 recalibrate they are moved from calibration onto the scoring side by monitor's
 own `_apply_calibration_exclusion`, and under frozen they were always scored
 regardless of the flag -- and they correctly alarm, inflating the raw reading
@@ -240,7 +240,7 @@ FAR is subset onto the recalibrate arm's own scoring-split window population
 _FAR_BASIS_EVENT_FREE = "event-free per eval_events"
 """`far_basis` value for an EVENT-BEARING `_REPLAY` entry (`entry.events_csv`
 is not `None`, currently only `080726-pu_strikes`): the raw
-`alarms.parquet` scored-window mean silently includes the induced-event
+`alarms.parquet` scored-window mean silently includes the controlled-event
 windows too (they correctly alarm, inflating it ~2.5-3x for 080726) -- the
 correct event-free reading is `scripts/eval_events.py`'s own
 `realized_window_far` (`rowii.eval.events.EventEvalResult`, computed over
@@ -670,7 +670,7 @@ def _run_monitor(
     this driver never triggers that warning). `event_free`, when given, is
     passed as `--exclude-calibration-events` regardless of mode -- harmless
     (frozen mode also only warns on it) and keeps the pillar-3 rule applied
-    uniformly for the one induced-event day (module docstring).
+    uniformly for the one controlled-event day (module docstring).
     """
     cmd = [
         sys.executable, str(_SCRIPTS_DIR / "monitor.py"),
@@ -722,7 +722,7 @@ def _read_realized_window_far(event_eval_csv: Path) -> float:
     `row_type == "summary"` contract). For an EVENT-BEARING `_REPLAY` entry
     this is the ONLY correct "event-free window-FAR" reading -- `_read_
     realized_far`/`_far_on_windows` over the raw `alarms.parquet` silently
-    score the induced-event windows too (they correctly alarm, inflating the
+    score the controlled-event windows too (they correctly alarm, inflating the
     raw reading ~2.5-3x for 080726)."""
     df = pd.read_csv(event_eval_csv)
     summary = df[df["row_type"] == "summary"]
@@ -974,7 +974,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if entry.events_csv is not None:
             # EVENT-BEARING entry: the raw alarms.parquet
-            # scored-window mean silently includes the induced-event windows
+            # scored-window mean silently includes the controlled-event windows
             # (they correctly alarm -- under recalibrate they were moved from
             # calibration onto the scoring side by monitor's own
             # `_apply_calibration_exclusion`; under frozen they were always
@@ -1123,7 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
             "role=='scored' windows OUTSIDE every tolerance-padded strike "
             "interval -- for all three regime arms, NEVER the raw "
             "alarms.parquet scored-window mean (which silently counts the "
-            "induced-strike windows too, since they correctly alarm; that raw "
+            "strike windows too, since they correctly alarm; that raw "
             "reading stays visible as the labeled frozen_far_full_population "
             "secondary field)."
         ),

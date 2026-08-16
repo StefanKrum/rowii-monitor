@@ -1,5 +1,5 @@
 """Per-strike detection + first-alarm latency: the brand-new seconds-level
-induced-strike ground truth (`docs/groundtruth/080726_strikes_seconds_
+hammer-strike ground truth (`docs/groundtruth/080726_strikes_seconds_
 {st,pu}.csv`) vs. the alarms.parquet artifacts ALREADY on disk under
 `results/step2/once-calibrated/` and `results/pillar3/`.
 
@@ -445,7 +445,7 @@ def _summary_markdown(
     }
 
     lines = [
-        "# Per-strike detection + first-alarm latency: 08.07.2026 induced-strike campaign",
+        "# Per-strike detection + first-alarm latency: 08.07.2026 controlled-event campaign",
         "",
         "Seconds-level ground truth (`docs/groundtruth/080726_strikes_seconds_"
         "{st,pu}.csv`) vs. the alarms.parquet artifacts already on disk -- this run "

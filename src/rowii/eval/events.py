@@ -1,7 +1,7 @@
 """Pillar-3 event-level evaluation: labeled fault intervals vs per-window alarms.
 
 PREPARED-ONLY harness: no fault labels exist
-yet for any ROWII recording -- the induced-fault measurement campaign is pending.
+yet for any ROWII recording -- the controlled-event measurement campaign is pending.
 This module is the campaign-data interface, ready the day labeled fault intervals
 land; until then every invocation runs on synthetic intervals and is a workflow
 DEMO, never a detection result (honesty rule).

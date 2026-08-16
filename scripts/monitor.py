@@ -375,7 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV of tz-aware event intervals (columns start_utc,end_utc; '#' "
              "comment lines skipped -- the docs/groundtruth contract) whose "
              "windows are BANNED from the calibration side and moved to the "
-             "scoring side instead (spec A2.3.3: an induced-event day must "
+             "scoring side instead (spec A2.3.3: a controlled-event day must "
              "calibrate on event-free windows -- without this, event minutes "
              "landing in calibration segments are consumed, never alarmed, and "
              "contaminate the thresholds they feed). Applies to recalibrate and "
@@ -645,7 +645,7 @@ def _apply_calibration_exclusion(
     cal_windows: np.ndarray, scoring_windows: np.ndarray, exclusion_mask: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Calibration-side windows inside excluded event intervals are
-    moved to the SCORING side -- they must never feed a threshold (an induced
+    moved to the SCORING side -- they must never feed a threshold (a controlled
     event calibrated into the conformal set both inflates the threshold and, via
     the consumed-never-alarmed rule, becomes structurally undetectable),
     but they remain fully evaluable against the event-free thresholds. Scoring-

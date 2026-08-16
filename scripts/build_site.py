@@ -1,7 +1,7 @@
 """Build the public-facing demo site under `docs/site/`: a landing page, an
 as-built sensor-geometry schematic, a thin navigation wrapper
 around the EXISTING `docs/demo/demo_dashboard.html` control room, and a listening
-library of induced-strike / normal-operation / model-flagged-candidate audio clips.
+library of hammer-strike / normal-operation / model-flagged-candidate audio clips.
 Nothing here re-extracts audio from raw data or re-runs any model -- every byte comes
 from already-computed local artifacts (`results/annotation-kit/080726`,
 `results/candidate-kit`, `docs/demo/assets`), matching this task's own instruction to
@@ -11,8 +11,8 @@ stylesheet/script/audio/image is inline or a same-repo relative path.
 Two subcommands:
 
     curate-clips   Trim short (`CLIP_DURATION_S` = 10 s) WAV clips from the
-                   already-extracted `results/annotation-kit/080726` (induced
-                   Schonhammer strikes, one representative clip per PU-session
+                   already-extracted `results/annotation-kit/080726` (Schonhammer
+                   strikes, one representative clip per PU-session
                    event -- `curate_strike_clips`) and `results/candidate-kit`
                    (the top `CANDIDATES_PER_CLASS` model-flagged candidates per
                    class, `PINNED_CANDIDATE_IDS` guaranteed included --
@@ -192,7 +192,7 @@ def strike_window_start_s(
     lead_pad_s: float = STRIKE_LEAD_PAD_S,
 ) -> float:
     """The trim-window start offset for a *clip_duration_s*-long public clip
-    covering one annotation-kit induced-strike event, anchored just before the
+    covering one annotation-kit hammer-strike event, anchored just before the
     EARLIEST physical hammer strike in *strike_offsets_s* (seconds, relative
     to the event's own 90 s/210 s snippet WAV) -- *lead_pad_s* of lead-in so
     the strike is audible a moment into the clip rather than at frame zero.
@@ -387,7 +387,7 @@ def curate_strike_clips(
 ) -> list[dict[str, Any]]:
     """Trim one `clip_duration_s`-long clip per *session* event in
     `<annotation_kit_dir>/events_meta.json` (13 events for the `pu` session:
-    the 4 generator-ring + 4 turbine-ring + 1 turbine-bottom induced strikes,
+    the 4 generator-ring + 4 turbine-ring + 1 turbine-bottom hammer strikes,
     3 landmark strikes, and the vane sweep), anchored on that event's real
     strike time(s) via `strike_window_start_s`, into `<out_dir>/*.wav`. Picks
     the turbine-mic recording for `plate-tur_*`/`landmark`/`vane-sweep` kinds
@@ -800,7 +800,7 @@ def render_index() -> str:
   </a>
   <a class="card" href="snippets.html">
     <h2>Listening Library</h2>
-    <p>Induced test strikes, ordinary per-mode audio, and a handful of model-flagged,
+    <p>Hammer-strike tests, ordinary per-mode audio, and a handful of model-flagged,
     unverified candidates &mdash; browse and listen.</p>
     <span class="go">Open the listening library &rarr;</span>
   </a>
@@ -808,8 +808,8 @@ def render_index() -> str:
 <section class="cards" style="grid-template-columns: 1fr; margin-top: 16px;">
   <a class="card" href="review.html">
     <h2>Candidate Review</h2>
-    <p>The handover tool: every model-flagged candidate on days without induced
-    anomalies, with SCADA context, the exact trigger criterion, and an assessment form
+    <p>The handover tool: every model-flagged candidate on days without controlled
+    acoustic events, with SCADA context, the exact trigger criterion, and an assessment form
     for a plant expert to fill in.</p>
     <span class="go">Open the candidate review kit &rarr;</span>
   </a>
@@ -914,7 +914,7 @@ def _strike_clip_card(clip: Mapping[str, Any]) -> str:
   <div class="clip-head"><span class="clip-title">{html.escape(label)}</span>
   <span class="clip-tag">{clip['session'].upper()}</span></div>
   <audio controls preload="none" src="assets/{html.escape(clip['wav'])}"></audio>
-  <p class="clip-note">Induced Schonhammer strike, {html.escape(side_label)} recording, pump
+  <p class="clip-note">Schonhammer strike, {html.escape(side_label)} recording, pump
   operation. {strikes_note}.</p>
   <p class="clip-meta">{html.escape(clip['clip_utc'])}</p>
 </div>"""
@@ -981,13 +981,13 @@ def render_snippets(manifest: Mapping[str, Any], demo_manifest: Mapping[str, Any
     body = f"""
 <section class="page-head">
   <h1>Listening library</h1>
-  <p>Three kinds of audio, side by side: known induced test strikes (ground truth),
+  <p>Three kinds of audio, side by side: known hammer-strike tests (ground truth),
   ordinary audio from each detected operating mode, and windows the model itself
-  flagged as unusual on days without any induced anomaly.</p>
+  flagged as unusual on days without any controlled acoustic event.</p>
 </section>
 
 <section class="clip-section">
-  <h2>Induced test strikes</h2>
+  <h2>Hammer-strike tests</h2>
   <p>On 2026-07-08, a Schonhammer reference hammer was struck at each microphone
   position (and three additional plant landmarks, plus a guide-vane cover sweep) during
   both pump operation and standstill, to build seconds-level ground truth for detector
@@ -1007,7 +1007,7 @@ def render_snippets(manifest: Mapping[str, Any], demo_manifest: Mapping[str, Any
 
 <section class="clip-section">
   <h2>Model-flagged, unverified candidates</h2>
-  <p>On days WITHOUT any induced anomaly, the detector still occasionally scores a
+  <p>On days WITHOUT any controlled acoustic event, the detector still occasionally scores a
   window as anomalous against its own learned normal model. Every clip below is
   <strong>model-flagged and unverified</strong> &mdash; a qualitative listening
   candidate, not a confirmed fault. Alarms fire on two independent paths: a

@@ -20,7 +20,7 @@ Level: peak-normalized, mirroring `make_demo_assets.peak_normalize`'s target-dBF
 convention -- but a TRUE whole-session peak would require either reading every
 burst file twice (once to find the peak, once to write) or buffering the entire
 resampled stream on disk first; neither is warranted for what is, acoustically, a
-near-stationary machine-noise recording (this session has no induced strikes --
+near-stationary machine-noise recording (this session has no hammer strikes --
 `build_live_replay.py`'s own module docstring). Instead the peak is ESTIMATED from
 `PROBE_COUNT` short probes spread evenly across the session (covering standstill/
 transition/loaded operation alike, not just the opening minutes), with

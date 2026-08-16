@@ -1,5 +1,5 @@
 # candidate_assessments_2026-08-15.csv -- candidate-review assessments: manual listening review by the author against scripts/candidate_kit.py build's index.html; register explicitly not ground truth.
-# Provenance: this register is explicitly not ground truth (Jinyuan ruling, 2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT induced anomalies; 'assessment' records the author's own qualitative listening judgement, nothing more.
+# Provenance: this register is explicitly not ground truth (Jinyuan ruling, 2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT controlled acoustic events; 'assessment' records the author's own qualitative listening judgement, nothing more.
 # Source: /Users/stefankrummenacher/Downloads/candidate_assessments_all (1).csv
 # Compiled: 2026-08-15 (scripts/candidate_kit.py compile, --date kept explicit for reproducibility).
 session,candidate_id,class,start_utc,duration_s,min_p,state_name,near_transition,scada_state,scada_transition,assessment,note

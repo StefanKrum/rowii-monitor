@@ -1,4 +1,4 @@
-# Ground truth: induced Schonhammer strikes, ROWII machine 1, 2026-07-08 — PUMP-OPERATION session
+# Ground truth: Schonhammer strikes, ROWII machine 1, 2026-07-08 — PUMP-OPERATION session
 # (Kunstliche_Anomalie; SCADA-confirmed pumping at -279 MW / -377.8 rpm during the strike span).
 # Provenance: minute-level protocol independently verified against the raw data by the campaign's
 # crosscheck (illwerke-080726-analysis/crosscheck-notes-v1.md, 2026-07-13). Each event spans its
@@ -9,7 +9,7 @@
 # at 13:05:28 UTC in results/pillar3/080726-pu_strikes/*/segments.csv, and the ST strike span
 # falls inside the ST recording only under the -2 h reading. Recording spans 11:46-15:20 UTC
 # (13:46-17:20 local); it is otherwise strike-free pumping. The changeover is deliberately NOT
-# listed here (this file holds induced-strike ground truth only).
+# listed here (this file holds hammer-strike ground truth only).
 start_utc,end_utc,kind
 2026-07-08T12:43:00+00:00,2026-07-08T12:44:00+00:00,plate-gen_0
 2026-07-08T12:44:00+00:00,2026-07-08T12:45:00+00:00,plate-gen_90

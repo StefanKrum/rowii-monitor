@@ -1,7 +1,7 @@
 """Detection-performance scarcity harness on the labeled MIMII proxy -- the
 evaluation design's central figure (detection performance vs. fraction of target-normal training
 data, per representation), run NOW on a public proxy because PSHP fault labels
-do not exist yet: MIMII ships `abnormal/` clips, PSHP awaits the induced-fault
+do not exist yet: MIMII ships `abnormal/` clips, PSHP awaits the controlled-event
 campaign. Every output therefore restates the honesty framing:
 these are PUBLIC-PROXY results in the machine-id domain, never PSHP evidence.
 
@@ -477,7 +477,7 @@ def _write_md(
         "# Detection-performance scarcity curve (MIMII proxy)",
         "",
         f"**Corpus:** `{corpus}` -- public-proxy evidence in the machine-id domain, never "
-        "PSHP evidence: the PSHP rerun of this harness awaits the induced-fault campaign's "
+        "PSHP evidence: the PSHP rerun of this harness awaits the controlled-event campaign's "
         "labels (spec section 4 honesty framing).",
         "",
         "## Protocol (spec D4 + amendment A1.4)",

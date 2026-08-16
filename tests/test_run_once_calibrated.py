@@ -159,7 +159,7 @@ def test_pool_block_ids_unique_per_run_and_local_segment() -> None:
 # `_read_realized_window_far` -- the event-free FAR reading a
 # regimes row for an EVENT-BEARING `_REPLAY` entry must use (never the raw
 # `alarms.parquet` scored-window mean, which silently counts the
-# induced-event windows too -- they correctly alarm, inflating the raw
+# controlled-event windows too -- they correctly alarm, inflating the raw
 # reading ~2.5-3x for 080726).
 # ---------------------------------------------------------------------------
 

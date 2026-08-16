@@ -1187,7 +1187,7 @@ def test_build_impulse_pairs_more_extreme_pair_gets_smaller_min_p() -> None:
 
 def test_build_impulse_pairs_extreme_z_min_p_is_floored_not_exactly_zero() -> None:
     # norm.sf underflows to a literal 0.0 well before z=100 (real, observed on the
-    # induced-strike sessions) -- min_p must stay strictly positive so criterion_
+    # strike sessions) -- min_p must stay strictly positive so criterion_
     # sentence's norm.isf round-trip stays finite instead of displaying "z = inf".
     t0 = _utc(2026, 6, 29, 2, 0, 15)
     candidates, _ = ck.build_impulse_pairs(

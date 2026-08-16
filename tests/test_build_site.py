@@ -157,7 +157,7 @@ def test_centered_window_raises_if_the_clip_cannot_fit_at_all() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. strike_window_start_s -- annotation-kit (induced-strike) trim-window arithmetic
+# 3. strike_window_start_s -- annotation-kit (hammer-strike) trim-window arithmetic
 # ---------------------------------------------------------------------------
 
 

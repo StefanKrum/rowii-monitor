@@ -1,5 +1,5 @@
 """Candidate-review kit: the deliverable handover artifact for windows where the
-models suspect an anomaly on days WITHOUT induced anomalies -- the "candidate
+models suspect an anomaly on days WITHOUT controlled acoustic events -- the "candidate
 register explicitly not ground truth" ruling (Jinyuan, 2026-08-04) resolved into a
 separate, VERSION-CONTROLLED qualitative listening study rather than a treated-as-
 labels register. The old `results/step2/candidate_register.md` lost its own manual
@@ -111,7 +111,7 @@ Three subcommands:
                the SAME code path any out-of-SCADA-range span already took, no special
                case needed. The two 08.07.2026 sessions additionally drop any raw
                candidate within +/-30s of a known
-               induced strike (`docs/groundtruth/080726_strikes_seconds_*.csv` UNION
+               hammer strike (`docs/groundtruth/080726_strikes_seconds_*.csv` UNION
                `080726_events_*.csv` -- the latter is needed too: e.g. the real PU
                event_id 07/landmark-A_kugelschieber minute has zero compiled
                per-strike rows yet, so the strikes CSV alone would miss it) BEFORE
@@ -617,7 +617,7 @@ def load_strike_exclusion_intervals(
     minute-level shape) -- the events file is not redundant padding: on real data
     `080726_strikes_seconds_pu.csv` has ZERO compiled rows for event_id 07
     (landmark-A_kugelschieber, 12:49-12:50) and 13 (landmark-C_EG, 13:01-13:02), so
-    the strikes file alone would leave those two known-induced minutes unmasked.
+    the strikes file alone would leave those two known-strike minutes unmasked.
 
     `format="ISO8601"` is required (not the plain `pd.to_datetime` default): real
     `strike_utc` values mix microsecond-precision (`...58.212000+00:00`, the vast
@@ -898,7 +898,7 @@ class ImpulsePeakRecord:
 _MIN_P_FLOOR = float(np.finfo(np.float64).tiny)
 """Floor for `_impulse_min_p`'s `norm.sf(z)` output -- `scipy.stats.norm.sf`
 underflows to a LITERAL `0.0` for `z` beyond about 38 (real, observed on the
-080726 induced-strike sessions: a deliberate hammer strike is a genuinely huge
+080726 strike sessions: a deliberate hammer strike is a genuinely huge
 energy spike relative to background), and `norm.isf(0.0)` (`criterion_
 sentence`'s own round-trip back to a displayable z, since `Candidate` has no
 dedicated z-score field) returns `inf` -- an honest "p=0" is a defensible
@@ -3863,8 +3863,8 @@ def write_assessments_csv(
         "author against scripts/candidate_kit.py build's index.html; register explicitly not "
         "ground truth.\n"
         "# Provenance: this register is explicitly not ground truth (Jinyuan ruling, "
-        "2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT induced "
-        "anomalies; 'assessment' records the author's own qualitative listening judgement, "
+        "2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT controlled "
+        "acoustic events; 'assessment' records the author's own qualitative listening judgement, "
         "nothing more.\n"
         "# Handover scope: this file is the author's OWN qualitative listening pass (a "
         "thesis artifact / audit trail) -- it is NOT part of the expert handover deliverable. "
@@ -3891,8 +3891,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Candidate-review kit: select/build/compile a listening-review deliverable for "
-            "model-flagged windows on days WITHOUT induced anomalies (register explicitly not "
-            "ground truth)."
+            "model-flagged windows on days WITHOUT controlled acoustic events (register "
+            "explicitly not ground truth)."
         )
     )
     sub = parser.add_subparsers(dest="command", required=True)

@@ -1,4 +1,4 @@
-"""Per-strike detection and first-alarm latency: seconds-level induced-strike
+"""Per-strike detection and first-alarm latency: seconds-level hammer-strike
 ground truth vs. per-window alarms.
 
 Companion to `rowii.eval.events` (event/interval-level TPR + latency): this

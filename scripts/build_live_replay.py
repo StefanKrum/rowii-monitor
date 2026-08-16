@@ -207,7 +207,7 @@ def load_primary_timeline() -> dict[str, Any]:
     n_scored = len(scored)
     n_alarmed_windows = int(scored["alarm"].sum())
 
-    # 290626-tu has no induced events (no eval_events dir for this session);
+    # 290626-tu has no controlled events (no eval_events dir for this session);
     # realized FAR/budget instead comes from the regimes table (load_sentinel
     # below), matching every other non-event day's own reporting convention
     # (run_once_calibrated.py).

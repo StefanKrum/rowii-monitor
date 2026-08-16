@@ -1,5 +1,5 @@
 # author_listening_pass_2026-08-16.csv -- candidate-review assessments: manual listening review by the author against scripts/candidate_kit.py build's index.html; register explicitly not ground truth.
-# Provenance: this register is explicitly not ground truth (Jinyuan ruling, 2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT induced anomalies; 'assessment' records the author's own qualitative listening judgement, nothing more.
+# Provenance: this register is explicitly not ground truth (Jinyuan ruling, 2026-08-04) -- a candidate is a model-flagged window on a day WITHOUT controlled acoustic events; 'assessment' records the author's own qualitative listening judgement, nothing more.
 # Handover scope: this file is the author's OWN qualitative listening pass (a thesis artifact / audit trail) -- it is NOT part of the expert handover deliverable. The handover product is scripts/candidate_kit.py build's review tool (results/candidate-kit/index.html) with every assessment left EMPTY for the plant experts themselves to fill in (Stefan's decision 2026-08-16).
 # Source: /private/tmp/claude-501/-Users-stefankrummenacher-AI-Workspace-master-thesis/00bed1ae-dfe6-4441-9a38-00583bd6fbc8/scratchpad/assessments_bulk_2026-08-16.csv
 # Compiled: 2026-08-16 (scripts/candidate_kit.py compile, --date kept explicit for reproducibility).

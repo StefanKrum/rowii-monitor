@@ -2,7 +2,7 @@
 `scripts/eval_events.py`).
 
 Synthetic hand-built frames ONLY: the harness is PREPARED-ONLY (no real fault
-labels exist until the induced-fault campaign), so every case here pins the
+labels exist until the controlled-event campaign), so every case here pins the
 edge semantics on constructed nanosecond timestamps at window_s=1.0 --
 inclusive-start/exclusive-end membership, tolerance padding (negative latency
 kept), first-alarm-only latency, vacuous-TPR NaN, role filtering, and the
@@ -374,7 +374,7 @@ def test_cli_events_csv_with_comment_provenance_lines(tmp_path: Path) -> None:
     alarms_path, events_path = _write_cli_inputs(tmp_path)
     commented = tmp_path / "events_commented.csv"
     commented.write_text(
-        "# Ground truth: induced strikes, provenance line\n"
+        "# Ground truth: hammer strikes, provenance line\n"
         "# second provenance line (verification pointer)\n" + events_path.read_text()
     )
     out_dir = tmp_path / "out-commented"
@@ -423,7 +423,7 @@ def test_cli_smoke_writes_event_eval_csv_and_notes(tmp_path: Path) -> None:
     assert event_rows["latency_s"].tolist() == pytest.approx([2.0])
 
     notes = (out_dir / "event_notes.md").read_text()
-    assert "PREPARED for the induced-fault campaign" in notes
+    assert "PREPARED for the controlled-event campaign" in notes
     assert "demo" in notes.lower()
     assert "inclusive start" in notes.lower()
     assert "exclusive" in notes.lower()

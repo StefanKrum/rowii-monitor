@@ -32,7 +32,7 @@ then hand-set from a grid `{5, 10, 20, 30, 40}`, plus one additionally-derived
 `k_1pct` (the k whose threshold flags exactly ~1% of the B1 pool --
 "tuned once to a target", the variant a careful practitioner would use).
 Strikes never enter the threshold fit by construction: the B1 pool is four
-010726 runs, and the induced-strike day (080726) is never one of them.
+010726 runs, and the strike day (080726) is never one of them.
 
 **Experiment 1 -- flag-rate drift + mode-dependence (`flag_rates.csv`).** For
 every k (grid + `k_1pct`) and every one of 8 sessions (the 010726 pair
