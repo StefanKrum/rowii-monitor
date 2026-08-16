@@ -11,7 +11,7 @@ the third protocol below):
   score every OTHER SCADA-covered run's ("day B") valid windows against it -- a
   cross-day false-alarm-rate matrix, format-compatible with the partner's own
   cross-day comparison table (no values adopted from either side).
-- **cross-day-per-state** (package-2 Task 3, spec D2): same SCADA-covered day pairs as
+- **cross-day-per-state**: same SCADA-covered day pairs as
   `cross-day`, but day A's detector is TRANSFERRED to day B (`rowii.state.detect.
   FittedDetector.apply`, no refit) instead of pooling, and day B's windows are scored
   under their own PREDICTED state against day A's per-state reference/threshold for
@@ -29,10 +29,10 @@ artifacts every combo contributes a row/section to: `results/step2/summary.csv` 
 
 ## Labels (`--labels detected|gt`)
 
-`detected` (the default, and the only run-time-realistic mode -- design spec §2: "Per-
-state normal references built from Step-1 detected labels ... GT states used only in
-evaluation views"): `rowii.state.detect.FittedDetector.fit` (`run_detection`'s own
-delegate since package 2's Task 2) runs on this run's VALID windows only (mirrors
+`detected` (the default, and the only run-time-realistic mode: per-state normal
+references are built from Step-1's detected labels; GT states are used only in
+evaluation views): `rowii.state.detect.FittedDetector.fit` (`run_detection`'s own
+delegate) runs on this run's VALID windows only (mirrors
 `scripts/run_step1.py`'s own `_detect_and_report`), then gets scattered back into a
 full-length `(W,)` int64 array with the `-1` sentinel on invalid windows.
 That sentinel never actually reaches `run_sweep`'s internals: `rowii.anomaly.
@@ -51,12 +51,11 @@ placeholder label -- the same "exclude via mask, not via label value" mechanism
 `detected` mode uses for its own invalid windows, so both modes share one exclusion
 principle end to end.
 
-## Cross-day: pooled-only (binding simplification, spec §2)
+## Cross-day: pooled-only (binding simplification)
 
 Detected cluster ids from two different days do not refer to the same physical state
 (KMeans label 0 on day A is not comparable to label 0 on day B) and GT-state alignment
-across days is out of scope for this package (spec: "per-state cross-day needs label
-alignment across days ... out of scope; document"). Cross-day therefore NEVER calls
+across days is out of scope for this package. Cross-day therefore NEVER calls
 `run_sweep` (which is structurally single-run: one three-way split of ONE `PreparedRun`)
 -- `_cross_day_sweep` below hand-builds the same `SweepResult` shape directly: fit a
 scorer on day A's fit-part, calibrate its threshold on day A's conformal-part (both from
@@ -71,7 +70,7 @@ ELIGIBLE (excluding GT-`"unknown"` windows from both day A and day B, same mecha
 within-day), while `detected` mode never runs `run_detection` at all for cross-day (there
 is no per-label reference to build) and simply uses each day's own `valid_mask` unchanged.
 
-## Cross-day-per-state: detector transfer (package-2 spec D2)
+## Cross-day-per-state: detector transfer
 
 Per-state conditioning across two different days cannot simply reuse either day's own
 detected cluster ids, for exactly the reason the section above gives as cross-day's own
@@ -80,7 +79,7 @@ reason to mean the same physical state on both. `cross-day-per-state` dissolves 
 never fitting a SECOND detector at all: `_cross_day_per_state_sweep` fits day A's
 detector ONCE (`_detected_labels_and_detector`, `FittedDetector.fit`) and TRANSFERS it
 to day B (`_apply_detector_labels`, `FittedDetector.apply` -- fit-day standardization +
-fit-day HMM Viterbi decode, no refit/EM anywhere, package-2 spec D1). Day B's windows
+fit-day HMM Viterbi decode, no refit/EM anywhere). Day B's windows
 are then scored under their own PREDICTED (transferred) state, each against day A's
 per-state reference and per-state conformal threshold for that SAME state id --
 conditioning key = day A's cluster id, one model, one label space, so the cross-day
@@ -90,7 +89,7 @@ day_a_valid_mask, 0.5, seed)`, day A never contributes scoring windows here eith
 exactly like `cross-day`'s own day A); day B contributes ALL of its own valid windows
 to scoring, keyed by their predicted state.
 
-This is the runtime-honest path (spec D2): `--labels gt` is rejected outright for this
+This is the runtime-honest path: `--labels gt` is rejected outright for this
 protocol (`main`'s `parser.error` guard, checked before any run is even prepared)
 rather than silently reinterpreted -- there is no meaningful "GT-conditioned" transfer
 sweep to run, since GT state names are no more comparable across days than detected
@@ -102,47 +101,44 @@ side-by-side view of whether per-state conditioning controlled the false-alarm r
 both by what the detector predicted and by what actually happened physically, never
 fed back into scoring itself.
 
-The `pooled` cell of this protocol's own comparison grid (spec D2: "conditioning
-{per-state, pooled recomputed under the same transfer protocol}") is intentionally
+The `pooled` cell of this protocol's own comparison grid is intentionally
 NEVER reimplemented here: pooling ignores per-state distinctions entirely, so a pooled
 sweep under the transfer protocol is mathematically identical to `cross-day`'s own
 existing pooled sweep (`_cross_day_sweep`) -- the existing `--protocol cross-day`
 output IS that grid cell, unchanged, and doubles as the published pooled comparator
 this protocol's per-state numbers are checked against.
 
-## Cross-day-pooled: held-out-day-group evaluation (package-7 spec D2 + A3.1/A3.7/A3.8)
+## Cross-day-pooled: held-out-day-group evaluation
 
 `--protocol cross-day-pooled --fit-runs <csv> --test-run <name> [--k N] [--alpha F]
-[--save-snapshot PATH]` is package 7's "day as a dataset point" protocol, renamed
-"held-out-day-group evaluation" by amendment A3.8 (LODO-style): the artifact under
-test is fit on a POOL of days and evaluated on a day it has never seen.
+[--save-snapshot PATH]` is the "day as a dataset point" protocol (LODO-style): the
+artifact under test is fit on a POOL of days and evaluated on a day it has never seen.
 
-- **One pooled detector, one label space** (A3.4): `FittedDetector.fit_pooled` on the
+- **One pooled detector, one label space**: `FittedDetector.fit_pooled` on the
   pooled nested-FIT features of every `--fit-runs` run (`rowii.anomaly.pools.
   build_pool(side="fit")`; `--k` clusters, default `_POOLED_DEFAULT_K`), then applied
   per run -- fit runs AND test run alike -- via `_apply_detector_labels` (per-run
   Viterbi, no cross-run EM chain). The cross-day label-alignment problem the two
   pair protocols above each dissolve in their own way is dissolved here by having
   only ONE model whose id space every run shares.
-- **Pool sides, not top splits** (A3.7): pooled references come from the pool's
+- **Pool sides, not top splits**: pooled references come from the pool's
   nested-FIT side, pooled FROZEN thresholds calibrate on the pool's nested-CONFORMAL
   side -- `run_sweep`'s exact nested-split convention per run, deliberately NOT
   `_cross_day_per_state_sweep`'s top-split-as-fit shortcut (see `rowii.anomaly.pools`'
   module-docstring WARNING for why that shortcut is wrong for pooled work).
 - **Both threshold modes in one invocation**: `far_table_frozen.csv` (pool-conformal
-  thresholds, A3.7) and `far_table_recalibrate.csv` (thresholds recalibrated per
+  thresholds) and `far_table_recalibrate.csv` (thresholds recalibrated per
   state on the TEST run's own top-split calibration side -- `scripts/monitor.py`'s
   recalibrate recipe) share one scored window set: the test run's top-split SCORING
-  side only. Every FAR number therefore names its mode by which file it lives in
-  (spec §4 honesty rule).
-- **A3.1 (pool-member evaluation BAN)**: the test run must not appear in
-  `--fit-runs` (`parser.error`), and -- A3.8 -- the fit day-GROUPS and the test
+  side only. Every FAR number therefore names its mode by which file it lives in.
+- **Pool-member evaluation ban**: the test run must not appear in
+  `--fit-runs` (`parser.error`), and the fit day-GROUPS and the test
   day-group must be disjoint, where a day group is the DATE SET parsed from the
   run's burst-file names (`_run_day_groups`; catches sibling runs of one day
   like `010726-tu1`/`010726-tu2` AND midnight-crossing tails, which
   same-`day_root` checks alone would also catch but a differently-rooted
   re-ingest of the same day would not).
-- **Coverage tables (A4.1/A4.2)**: `coverage_train.csv` (pool calibration side) and
+- **Coverage tables**: `coverage_train.csv` (pool calibration side) and
   `coverage_eval.csv` (test scoring side) count windows per detected-state label via
   `rowii.anomaly.pools.coverage_table`; when Betriebsdaten exist for the runs, GT
   `"state|load_bin"` composite tables (`coverage_train_gt.csv`/`coverage_eval_gt.
@@ -152,44 +148,43 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   `MonitorSnapshot` via `rowii.runtime.snapshot.fit_snapshot_from_parts` (frozen
   pool-conformal thresholds, `fit_run="pool:<csv>"`) and saves it with per-run pool
   provenance in the meta/sidecar.
-- **Session normalization** (`--session-norm [--norm-minutes F]`, package-7 Task 4,
-  spec D3/A3.5): scoring moves into the label-free session-normalized space --
+- **Session normalization** (`--session-norm [--norm-minutes F]`): scoring moves into
+  the label-free session-normalized space --
   every run's rows (pool references, pool conformal rows, the test run's
   calibration AND scoring windows) are transformed with THAT run's OWN first-N
   median/MAD stats (`rowii.anomaly.normalize.fit_session_stats`, N =
   `--norm-minutes`, default 20; per-run stats for pool members, BINDING). The
-  pooled DETECTOR still fits/applies on RAW features (A3.5 boundary: labels are
+  pooled DETECTOR still fits/applies on RAW features (labels are
   norm-invariant). Outputs land in a `-snorm<N>` suffixed leaf
-  (`<variant>-pooled-snorm20/`) so the A2.2 N-sweep never overwrites the raw
+  (`<variant>-pooled-snorm20/`) so an N-sweep never overwrites the raw
   baseline. With `--save-snapshot`, the snapshot keeps RAW references (the field
   contract) plus POOL-GLOBAL stats over the raw pooled fit matrix
   (`fit_pool_stats`, `norm_minutes == 0.0` sentinel), and its stored conformal
   scores/thresholds are recomputed in that pool-global space so the artifact is
   SELF-CONSISTENT under the monitor's `--session-norm` reconstruction -- they
   deliberately differ from `far_table_frozen.csv`'s per-run-normalized thresholds
-  (FAR-level-only comparability, A3.5). DEFERRED (Task 4 scope decision): the
-  plan's within-day/cross-day `--session-norm` wiring is NOT implemented in this
-  package's Task 4 -- cross-day-pooled only, to keep the change reviewable; the
-  other protocols refuse the flag.
-- **Level-only recalibration** (`--level-recal`, package-8 Task 6, spec D2/
-  A1.4/A1.9/A1.11): the shape-preserving, feature-native counterpart to
+  (FAR-level-only comparability). DEFERRED: the within-day/cross-day
+  `--session-norm` wiring is NOT implemented here -- cross-day-pooled only, to
+  keep the change reviewable; the other protocols refuse the flag.
+- **Level-only recalibration** (`--level-recal`): the shape-preserving,
+  feature-native counterpart to
   `--session-norm` -- an additive offset in the log10 domain, applied ONLY to
   the TEST run's LEVEL columns (`*_log_rms`/`*_band_*`/`*_octave_*`,
   `rowii.anomaly.levelrecal`); shape columns (`*_spectral_centroid`/
   `*_rolloff95`/`*_kurtosis`) are untouched. The anchor (reference) is the
-  per-column median over the POOLED FIT side's own RAW features (A1.4); the
+  per-column median over the POOLED FIT side's own RAW features; the
   run-side statistic is the TEST run's own label-free first-
   `_DEFAULT_NORM_MINUTES` (20) minutes of valid windows (mirrors
   `fit_session_stats`' first-N-minutes membership rule, duplicated locally --
   `_first_n_minutes_rows`). Only the TEST run's SCORING-space features shift;
   the pooled FIT/CONFORMAL rows stay RAW (they define the anchor -- mirrors
-  `monitor.py`, where only the monitored run shifts, package-8 Task 7).
+  `monitor.py`, where only the monitored run shifts).
   Requires `--variant audio` or `vibration` (fusion's per-run z-scored
-  features have no meaningful level column, A1.1 -- any other variant is a
-  `parser.error`); mutually exclusive with `--session-norm` (A1.10 fit-path
+  features have no meaningful level column -- any other variant is a
+  `parser.error`); mutually exclusive with `--session-norm` (fit-path
   exclusivity); cross-day-pooled only, same precedent as `--session-norm`.
   Outputs land in a `-lrecal` suffixed leaf (`<variant>-pooled-lrecal/`). With
-  `--save-snapshot` (package-8 Task 7, spec A1.10), the pooled snapshot
+  `--save-snapshot`, the pooled snapshot
   ADDITIONALLY stores this SAME anchor as the OPTIONAL v2 member
   `level_recal_medians` (`rowii.runtime.snapshot.fit_snapshot_from_parts`'
   `level_recal_medians` kwarg; no version bump, mutually exclusive with
@@ -200,22 +195,22 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   pool-level failure (a member that cannot prepare, k too large for the pool, a
   degenerate test split) exits 2 with the cause -- "log and skip" would always mean
   "silently wrote nothing", and a silently shrunken pool would corrupt provenance.
-- Deliberately NO `summary.csv`/candidate-register rows in this package's Task 3:
-  rotation aggregation happens at execution time (plan Tasks 9/10) over the written
+- Deliberately NO `summary.csv`/candidate-register rows here:
+  rotation aggregation happens at execution time over the written
   far tables; the append-only artifacts keep their existing three-protocol schema.
 
 ## Output layout
 
 - within-day: `results/step2/within-day/<run>/<variant>-<labels>/<conditioning>-<scorer>/`
   (`far_table.csv`, `scores.parquet`, `candidates.md`) -- exactly the spec's literal path.
-  `--states K` (package-3 Task 6, within-day + detected-labels only) appends a `-k<K>`
+  `--states K` (within-day + detected-labels only) appends a `-k<K>`
   suffix to the `<variant>-<labels>` segment ONLY when K is non-default
   (`fusion-detected-k8/`), so a non-default conditioning-granularity run never collides
   with -- or overwrites -- the default-K layout; `summary.csv`'s own `variant` column
   and the combo's `candidate_register.md` section header carry the same suffix
   (`_within_day_out_dir`/`_summary_row`/`_register_section_markdown` -- the register
   would otherwise accumulate identical headers across a K-granularity sweep of one
-  run/variant). `--ensemble` (Task 4, design chapter's committed majority-voting
+  run/variant). `--ensemble` (design chapter's committed majority-voting
   ensemble) writes `far_table_ensemble.csv` + `ensemble_notes.md` into a dedicated
   `<variant>-<labels>[-k<K>]/ensemble/` sibling directory, ONE level above the
   `<conditioning>-<scorer>/` combo dirs -- the view is conditioning/scorer-
@@ -231,7 +226,7 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   <scorer>-pooled/` -- same `<variant>-<labels>` convention as within-day, plus a
   `<scorer>-pooled` leaf (conditioning is always "pooled" for cross-day, so it is folded
   into the leaf name rather than kept as a separate segment).
-- cross-day-per-state (package-2 Task 3, no literal-path precedent in either spec):
+- cross-day-per-state (no literal-path precedent in either spec):
   `results/step2/cross-day-per-state/<dayA>--to--<dayB>/<variant>-<scorer>/`
   (`_cross_day_per_state_out_dir`) -- DOUBLE-DASH `--to--`, deliberately different from
   cross-day's `__to__`, so a pair directory's own name alone already distinguishes the
@@ -243,7 +238,7 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
   are both constants for this protocol). When day B has SCADA coverage,
   `far_by_true_state.csv` (columns: `true_state, n_scored, n_alarms, realized_far`) is
   written alongside the usual three files in the same combo dir (`_far_by_true_state`).
-- cross-day-pooled (package-7 Task 3, layout pinned by the plan):
+- cross-day-pooled (layout pinned by the plan):
   `results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- keyed by the
   HELD-OUT run (the pool is named inside `notes.md` and the snapshot provenance, not
   the path; a rotation writes one directory per test run). No scorer segment: the
@@ -256,8 +251,8 @@ test is fit on a POOL of days and evaluated on a day it has never seen.
 - `results/step2/summary.csv` (append-only, one row per combo actually written this
   invocation): `run, protocol, variant, labels, conditioning, scorer, alpha,
   per_label_count, pooled_realized_far, mean_per_state_far, n_low_confidence, notes`.
-  `protocol` (package-2 addition, 2nd column) is `"within-day"`/`"cross-day"`/
-  `"cross-day-per-state"`; `_read_summary_csv_or_none` backfills it onto a pre-package-2
+  `protocol` (2nd column) is `"within-day"`/`"cross-day"`/
+  `"cross-day-per-state"`; `_read_summary_csv_or_none` backfills it onto an OLDER
   `summary.csv` that is missing the column entirely (`"cross-day"` when `run` already
   encodes a `_cross_day_summary_row`-style `"<dayA>__to__<dayB>"` pair, else
   `"within-day"` -- a file written before this package cannot contain a
@@ -291,8 +286,8 @@ fatal to the whole invocation -- mirrors `scripts/run_step1.py`'s own "no SCADA
 coverage" defensive branch, generalized to every way a single combo can legitimately
 have nothing to report. The same principle extends one level earlier: a run whose own
 `rowii.pipeline.prepare_run` raises `RuntimeError` (too short/sparse for the requested
-variant -- e.g. a real "two stray files" run like `010726-tu1-afternoon`, Task S7
-real-data finding) is logged and excluded -- the whole run for within-day
+variant -- e.g. a real "two stray files" run like `010726-tu1-afternoon`)
+is logged and excluded -- the whole run for within-day
 (`_run_within_day_for_run`), or just that one day and every pair touching it for
 cross-day (`_run_cross_day`) and cross-day-per-state (`_run_cross_day_per_state`,
 identical exclusion mechanics), never the rest of the invocation.
@@ -662,7 +657,7 @@ def _parse_run_names(run_arg: str) -> list[str] | None:
     """`--run`'s value -> `None` for the `"all"` sentinel, else the comma-split name
     list (whitespace-stripped, empty tokens dropped -- `"a, b"` and `"a,b"` parse
     identically; a single bare name is just a one-element list, preserving the
-    pre-package-2 single-name calling convention)."""
+    original single-name calling convention)."""
     if run_arg == "all":
         return None
     return [name.strip() for name in run_arg.split(",") if name.strip()]
@@ -700,7 +695,7 @@ def _import_beats_or_exit() -> None:
 
 
 def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
-    """Mirrors `_import_beats_or_exit` above (package-4 spec D4), extended: torch
+    """Mirrors `_import_beats_or_exit` above, extended: torch
     missing (checked first) -> SystemExit naming the shared `[beats]` extra; else
     the ONE checkpoint relevant to *variant* itself missing -> SystemExit naming
     its own env var. Duplicated (not imported) across every script that can reach
@@ -721,7 +716,7 @@ def _import_tfc_or_exit(cfg: Config, variant: str) -> None:
 
 
 def _import_student_or_exit(cfg: Config) -> None:
-    """Mirrors `_import_tfc_or_exit` above (package-5 spec D5), simplified: the
+    """Mirrors `_import_tfc_or_exit` above, simplified: the
     distilled student has only ONE checkpoint (unlike TF-C's two independent
     branches), so there is no variant-based checkpoint selection -- torch
     missing (checked first) -> SystemExit naming the shared `[beats]` extra;
@@ -758,16 +753,15 @@ def _betriebsdaten_for_grid(betriebsdaten: list[Path], grid: WindowGrid) -> list
     time-overlap filter is small enough that duplicating it costs less than adding a
     script-to-script coupling would).
 
-    Task 10 (D3 tracing finding): *grid* is true-UTC since `rowii.pipeline.
-    build_run_grid` (D2), but each candidate file's own `header.t0_ns` (`read_
-    header`, straight off disk) is still the raw DAQ axis -- shifted here by
-    *betriebsdaten*'s own derived offset (`rowii.io.dataset.
-    betriebsdaten_utc_offset_ns`) before the intersection test, mirroring `rowii.
-    scada.labels.load_scada_window_means`'s identical D3 fix. BEFORE this task the
-    comparison was RAW-vs-RAW (grid built on the pre-fix raw axis too) -- both
-    sides shared the SAME axis by construction, so selection worked correctly by
-    accident, not because either side was ever true UTC (see the task report for
-    the full derivation).
+    *grid* is true-UTC since `rowii.pipeline.build_run_grid`, but each candidate
+    file's own `header.t0_ns` (`read_header`, straight off disk) is still the raw
+    DAQ axis -- shifted here by *betriebsdaten*'s own derived offset (`rowii.io.
+    dataset.betriebsdaten_utc_offset_ns`) before the intersection test, mirroring
+    `rowii.scada.labels.load_scada_window_means`'s identical DAQ-epoch-2000
+    clock-offset fix. Before this fix, the comparison was RAW-vs-RAW (grid built
+    on the pre-fix raw axis too) -- both sides shared the SAME axis by
+    construction, so selection worked correctly by accident, not because either
+    side was ever true UTC.
     """
     grid_end_ns = int(grid.edges_ns()[-1])
     offset_ns = betriebsdaten_utc_offset_ns(betriebsdaten)
@@ -788,7 +782,7 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
     register context columns (P/rpm/KS/Q, any label mode) and, by the caller, to derive
     `gt` labels.
 
-    *run* also supplies the D3 audio-side cross-check (`run_utc_offset_ns(run)`,
+    *run* also supplies the audio-side DAQ-offset cross-check (`run_utc_offset_ns(run)`,
     passed to `load_scada_window_means` as `audio_run_offset_ns` -- never used to
     derive the SCADA-side shift itself).
     """
@@ -811,11 +805,11 @@ def _load_run_scada(prepared: PreparedRun, run: Run, index: RecordingIndex) -> p
 def _detected_labels_and_detector(
     prepared: PreparedRun, cfg: Config, k: int | None = None
 ) -> tuple[np.ndarray, FittedDetector]:
-    """`_detected_labels` + the `FittedDetector` behind it (package-2 spec D2:
-    `cross-day-per-state` needs day A's detector, not just its labels, to TRANSFER it
+    """`_detected_labels` + the `FittedDetector` behind it (`cross-day-per-state`
+    needs day A's detector, not just its labels, to TRANSFER it
     to day B -- `_apply_detector_labels` below).
 
-    `k` (package-3 Task 6, `--states`): overrides `cfg.detect.n_states`'s cluster
+    `k` (`--states`): overrides `cfg.detect.n_states`'s cluster
     count for THIS fit only, passed straight through to `FittedDetector.fit`'s own `k`
     parameter. `None` (every caller except a within-day run given `--states`) is a
     pure pass-through -- `FittedDetector.fit` already defaults `k=None` to
@@ -848,7 +842,7 @@ def _detected_labels(prepared: PreparedRun, cfg: Config) -> np.ndarray:
 
 def _apply_detector_labels(prepared: PreparedRun, detector: FittedDetector) -> np.ndarray:
     """Day-B per-window labels in day-A's id space via `FittedDetector.apply` (fit-day
-    standardization + fit-day HMM decode, no refit -- package-2 spec D1),
+    standardization + fit-day HMM decode, no refit),
     `_INVALID_LABEL` on invalid windows (same scatter-back as `_detected_labels`)."""
     valid_mask = prepared.valid_mask
     features_valid = prepared.features[valid_mask]
@@ -1030,7 +1024,7 @@ def _cross_day_valid_mask(
 
 
 # ---------------------------------------------------------------------------
-# Cross-day-per-state sweep (package-2 Task 3, spec D2 -- see module docstring)
+# Cross-day-per-state sweep (see module docstring)
 # ---------------------------------------------------------------------------
 
 
@@ -1044,10 +1038,10 @@ def _cross_day_per_state_sweep(
     alpha: float,
     top_k: int,
 ) -> tuple[SweepResult, np.ndarray]:
-    """Per-state cross-day sweep under DETECTOR TRANSFER (package-2 spec D2): fit day
+    """Per-state cross-day sweep under DETECTOR TRANSFER: fit day
     A's detector, per-state references (from A's own fit-part), and per-state
     conformal thresholds (from A's own conformal-part) -- exactly `run_sweep`'s own
-    per-state machinery, reused here via the now-public row builders (Task 3 Step 1)
+    per-state machinery, reused here via the now-public row builders
     -- then score day B's windows grouped by their PREDICTED (transferred) state
     (`_apply_detector_labels`). Runtime-honest: no GT anywhere in this function; the
     conditioning key is day A's cluster id (module docstring). Returns the
@@ -1138,7 +1132,7 @@ def _cross_day_per_state_sweep(
 
     # Same calling convention `run_sweep` itself uses (sweep.py's `far_row_aggregate`
     # docstring): `far_rows` here still holds ONLY this sweep's own per-label rows,
-    # never a previously-appended aggregate (orchestrator resolution 3).
+    # never a previously-appended aggregate.
     far_rows.append(far_row_aggregate(far_rows, sweep_cfg))
 
     far_table = pd.DataFrame([asdict(r) for r in far_rows], columns=_FAR_TABLE_COLUMNS)
@@ -1152,7 +1146,7 @@ def _cross_day_per_state_sweep(
 def _far_by_true_state(scores_df: pd.DataFrame, gt_states: np.ndarray) -> pd.DataFrame:
     """Alarm rate of `_cross_day_per_state_sweep`'s scored day-B windows, grouped by
     their TRUE (SCADA) state instead of the PREDICTED one -- the GT-diagnostic view
-    (module docstring, spec D2): never part of the runtime path (no GT anywhere in
+    (module docstring): never part of the runtime path (no GT anywhere in
     `_cross_day_per_state_sweep` itself), a side-by-side comparison only.
 
     Args:
@@ -1195,11 +1189,11 @@ def _within_day_out_dir(
     conditioning: str, scorer: str, *, states: int | None = None,
 ) -> Path:
     """`results/step2/within-day/<run>/<variant>-<labels>[-k<states>]/<conditioning>-
-    <scorer>/` -- `states` (package-3 Task 6, `--states`) appends a `-k<states>`
+    <scorer>/` -- `states` (`--states`) appends a `-k<states>`
     suffix to the variant-labels segment ONLY when given (`fusion-detected-k8`), so a
     non-default conditioning-granularity run never collides with -- or overwrites --
     the default-K layout. `None` (every call without `--states`) reproduces the
-    pre-Task-6 path byte-for-byte.
+    original (unsuffixed) path byte-for-byte.
     """
     k_suffix = f"-k{states}" if states is not None else ""
     return (
@@ -1242,7 +1236,7 @@ _SCADA_SOURCE_CHANNELS: dict[str, str] = {
     "P": "power", "rpm": "speed", "KS": "ks_valve", "Q": "reactive",
 }
 """Candidate-table context columns -> `rowii.scada.labels.load_scada_window_means`'s own
-column names (design spec §2: "SCADA context columns [P, rpm, KS, Q]")."""
+column names."""
 
 
 def _scada_context_row(scada: pd.DataFrame | None, window: int) -> dict[str, str]:
@@ -1276,8 +1270,7 @@ def _candidates_markdown(
     candidates: pd.DataFrame, grid: WindowGrid, scada: pd.DataFrame | None, top_k: int
 ) -> str:
     """`candidates.md` body: top-`top_k` rows PER LABEL with UTC time, score, p-value,
-    SCADA context, and a blank `assessment` column for the human review pass (design
-    spec §2).
+    SCADA context, and a blank `assessment` column for the human review pass.
     """
     lines = [f"# Anomaly candidates (top-{top_k} per label)", ""]
     if candidates.empty:
@@ -1311,7 +1304,7 @@ def _write_sweep_outputs(
 ) -> None:
     """Write `far_table.csv`, `scores.parquet`, `candidates.md` for one combo.
 
-    Convention (S6 review finding): labels are strings in ALL THREE persisted
+    Convention: labels are strings in ALL THREE persisted
     artifacts, coerced right here before anything hits disk. `conditioning="per-
     state"` sweeps carry `run_sweep`'s own aggregate `label="pooled"` row (`rowii.
     anomaly.sweep` module docstring point 4) alongside int cluster-id rows, which makes
@@ -1367,8 +1360,8 @@ verified independently against our own sweeps where possible.
 
 _REGISTER_HEADER_FIRST_LINE = _REGISTER_HEADER.splitlines()[0]
 """`_REGISTER_HEADER`'s first line -- `_append_candidate_register`'s repair guard reads
-just this one line back to confirm a previous header write actually completed (S6
-review finding), rather than trusting `path.exists()` alone, which stays `True` even
+just this one line back to confirm a previous header write actually completed,
+rather than trusting `path.exists()` alone, which stays `True` even
 for a file truncated mid-write of the header itself."""
 
 
@@ -1409,10 +1402,10 @@ def _register_section_markdown(
     per-label content as that combo's own `candidates.md` (module docstring), with
     `source`/`assessment` provenance columns appended.
 
-    `states` (package-3 Task 6 follow-up): the section header's `<variant>-<labels>`
+    `states`: the section header's `<variant>-<labels>`
     part carries the SAME `-k<states>` suffix `_within_day_out_dir` puts on the combo
     directory, and only under the same condition (`--states` given) -- without it, a
-    conditioning-granularity sweep (K=4/8/12 on one run/variant, package-3 T7) would
+    conditioning-granularity sweep (K=4/8/12 on one run/variant) would
     append several sections with IDENTICAL headers to this append-only, human-facing
     review artifact, distinguishable only by position. `None` reproduces the prior
     header byte-for-byte.
@@ -1469,7 +1462,7 @@ def _write_register_header(path: Path) -> None:
     """Atomic-ish header write: build the full header in a `.tmp` sibling, then
     `os.replace` it into place, so a crash mid-write never leaves a PARTIAL header
     under the real path (same tmp-then-replace pattern `_append_summary_row` uses for
-    `summary.csv`, S6 review finding)."""
+    `summary.csv`)."""
     tmp_path = path.with_name(path.name + ".tmp")
     tmp_path.write_text(_REGISTER_HEADER, encoding="utf-8")
     os.replace(tmp_path, path)
@@ -1574,7 +1567,7 @@ def _summary_row(
     run_name: str, variant: str, labels_mode: str, conditioning: str, scorer: str,
     alpha: float, far_table: pd.DataFrame, *, states: int | None = None,
 ) -> _SummaryRow:
-    """`states` (package-3 Task 6, `--states`): mirrors `_within_day_out_dir`'s own
+    """`states` (`--states`): mirrors `_within_day_out_dir`'s own
     `-k<states>` suffix convention, applied to the `variant` column ONLY when given
     (`variant="fusion-k8"`) -- the same "no --states -> byte-compatible" guarantee, so
     a summary row stays traceable to (without literally re-deriving) its combo's own
@@ -1618,7 +1611,7 @@ def _cross_day_per_state_summary_row(
     pooled row, `_cross_day_per_state_sweep`'s `far_table` has the SAME shape a
     within-day `conditioning="per-state"` sweep produces -- one row per predicted
     state plus a `run_sweep`-style aggregate `"pooled"` row (from the now-public
-    `far_row_aggregate`, Task 3 Step 1) -- so this reuses `_summary_far_metrics`
+    `far_row_aggregate`) -- so this reuses `_summary_far_metrics`
     directly rather than `_cross_day_summary_row`'s single-row shortcut.
     `labels`/`conditioning` are both constants for this protocol (`"detected"`/
     `"per-state"` -- `--labels gt` is rejected outright, module docstring).
@@ -1650,8 +1643,8 @@ def _infer_legacy_protocol(run_field: str) -> str:
 
 def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     """`pd.read_csv(summary_path)`, or `None` if the file does not exist, fails to
-    parse, or parses to neither a recognised column schema (S6 review finding:
-    `summary.csv` is a shared, append-only artifact a killed prior invocation can leave
+    parse, or parses to neither a recognised column schema (`summary.csv` is a
+    shared, append-only artifact a killed prior invocation can leave
     mid-write). A corrupt file is quarantined via `_quarantine_corrupt_file` (never
     deleted, never silently overwritten); the caller then treats this exactly like
     "does not exist yet".
@@ -1665,12 +1658,12 @@ def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     itself instead changes which columns get parsed at all, again with no exception.
     Neither is caught by the exceptions above, so the parsed result's columns are also
     checked explicitly against TWO known schemas: `_SUMMARY_COLUMNS` (current) is
-    returned as-is; `_SUMMARY_COLUMNS_LEGACY` (pre-package-2, missing `protocol`) is
+    returned as-is; `_SUMMARY_COLUMNS_LEGACY` (the older schema, missing `protocol`) is
     BACKFILLED -- `protocol` is inserted as the 2nd column, one value per row inferred
     from that row's own `run` field (`_infer_legacy_protocol`) -- and returned, never
     quarantined, so appending a fresh row (which always carries an explicit `protocol`)
     to an old-schema file never produces a ragged CSV. Any OTHER column set is treated
-    as corrupt, same as before package 2.
+    as corrupt, same as before this schema change.
     """
     if not summary_path.exists():
         return None
@@ -1695,7 +1688,7 @@ def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
     (`_read_summary_csv_or_none`) and writing crash-safely itself: the combined frame
     goes to a `summary.csv.tmp` sibling first, then `os.replace`s the real path, so a
     crash mid-write of THIS call can never leave a partially-written `summary.csv`
-    behind either (S6 review finding)."""
+    behind either."""
     summary_path = results_root / "step2" / "summary.csv"
     row_df = pd.DataFrame([vars(row)], columns=_SUMMARY_COLUMNS)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1707,7 +1700,7 @@ def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Score-level fusion view (Task 5, spec D5) -- Fisher/Tippett p-value combination of
+# Score-level fusion view -- Fisher/Tippett p-value combination of
 # the fusion variant's audio and vibration branches, re-calibrated via split conformal
 # (rowii.anomaly.fusion's own module docstring carries the full statistical argument).
 # ---------------------------------------------------------------------------
@@ -1715,8 +1708,8 @@ def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
 _SCORE_FUSION_SEED = 7
 """Top-level split seed for `_run_score_fusion_view` -- matches `SweepConfig.seed`'s
 own default (7); the nested fit/conformal split below uses `_SCORE_FUSION_SEED + 1`
-(=8), mirroring `run_sweep`'s own `cfg.seed + 1` convention exactly (orchestrator
-resolution 4) so a `--score-fusion` run and a same-run `run_sweep` call partition one
+(=8), mirroring `run_sweep`'s own `cfg.seed + 1` convention exactly so a
+`--score-fusion` run and a same-run `run_sweep` call partition one
 `PreparedRun`'s windows identically."""
 
 _SCORE_FUSION_MIN_REF = 20
@@ -1731,7 +1724,7 @@ _SCORE_FUSION_COLUMNS: tuple[str, ...] = (
 )
 
 _SCORE_FUSION_RULES: tuple[str, ...] = ("fisher", "tippett", "audio-only", "vib-only")
-"""The four `far_table_scorefusion.csv` rules (orchestrator resolution 4): the two
+"""The four `far_table_scorefusion.csv` rules: the two
 COMBINED rules plus the two single-branch baselines, all evaluated through the exact
 same p-value-then-recalibrate pipeline (`_score_fusion_statistic`) for a fair,
 apples-to-apples comparison."""
@@ -1743,8 +1736,8 @@ class _ScoreFusionRow:
     (label, rule) pair, mirroring `rowii.anomaly.sweep.FarRow`'s own "converted to a
     plain dict via `dataclasses.asdict` at the very end" pattern. Deliberately
     narrower than `FarRow`: this view carries no `threshold`/`nominal_alpha`/
-    `achievable_alpha_floor`/`excluded` columns (orchestrator resolution 4's literal
-    column list) -- each rule's own threshold lives on a different, incomparable
+    `achievable_alpha_floor`/`excluded` columns -- each rule's own threshold lives
+    on a different, incomparable
     scale (a Fisher chi-square-shaped statistic vs. a Tippett `[0, 1)` statistic), so
     comparing rules only ever needs the REALIZED outcome, not the threshold value
     that produced it."""
@@ -1763,8 +1756,8 @@ def _score_fusion_statistic(rule: str, p_a: np.ndarray, p_v: np.ndarray) -> np.n
     from a label's own branch p-value arrays (*p_a*/*p_v*, aligned, same windows).
 
     `"audio-only"`/`"vib-only"` route through this SAME p-value machinery as
-    `"fisher"`/`"tippett"` rather than the branch's raw score directly (orchestrator
-    resolution 4's "through the same conformal path") -- `1.0 - p` is `rowii.anomaly.
+    `"fisher"`/`"tippett"` rather than the branch's raw score directly -- `1.0 - p`
+    is `rowii.anomaly.
     fusion.tippett_statistic` degenerated to a single branch (`tippett_statistic(p, p)
     == 1.0 - p`), so all four rules are, structurally, "some deterministic reduction
     of `(p_a, p_v)` to one number", differing only in how much of the OTHER branch's
@@ -1902,8 +1895,8 @@ def _run_score_fusion_view(
 ) -> pd.DataFrame:
     """Score-level fusion FAR table for one (run, labels_mode) -- Fisher/Tippett
     p-value combination of the `fusion` variant's audio and vibration branches,
-    RE-CALIBRATED with split conformal (`rowii.anomaly.fusion` module docstring;
-    design spec D5). Mirrors `rowii.anomaly.sweep.run_sweep`'s own three-way split
+    RE-CALIBRATED with split conformal (`rowii.anomaly.fusion` module docstring).
+    Mirrors `rowii.anomaly.sweep.run_sweep`'s own three-way split
     exactly (`_SCORE_FUSION_SEED`=7 top-level, `_SCORE_FUSION_SEED + 1`=8 nested) so a
     `--score-fusion` run and a same-run `run_sweep` call partition *prepared*'s
     windows identically.
@@ -2048,7 +2041,7 @@ def _write_score_fusion_outputs(out_dir: Path, far_table: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Majority-ensemble evaluation view (Task 4, design chapter's committed ensemble: a
+# Majority-ensemble evaluation view (design chapter's committed ensemble: a
 # majority-voting ensemble of OC-SVM + Isolation Forest + LSTM-AE, "requiring
 # agreement before an alarm suppresses false alarms"). Voting is DECISION-level (each
 # member keeps its own scorer/reference/threshold; only the ALARM booleans are
@@ -2608,7 +2601,7 @@ def _run_and_write_ensemble_view(
 
 
 # ---------------------------------------------------------------------------
-# --xattn-fusion view (package-5 Task 6, spec D8: the third fusion level)
+# --xattn-fusion view (the third fusion level)
 # ---------------------------------------------------------------------------
 
 _XATTN_SEED = 7
@@ -2628,7 +2621,7 @@ _XATTN_NOTES = """# Cross-attention fusion view -- notes
   applies the identical `rowii.pipeline.stream_columns` slice at scoring time.
   The head therefore never saw a
   scoring-side segment, but it IS fitted on the same calibration data the
-  conformal thresholds use; stated openly (package-5 spec D8).
+  conformal thresholds use; stated openly.
 - Scoring is kNN (k=1, cosine) on the joint embedding with per-state
   split-conformal thresholds, the same machinery as every other view.
 - Grid alignment between the fusion variant and the audio-beats cache follows
@@ -2660,7 +2653,7 @@ def _run_xattn_view(
     device: torch.device,
     run_name: str,
 ) -> tuple[pd.DataFrame, int]:
-    """FAR table for the cross-attention joint embedding, per state (spec D8).
+    """FAR table for the cross-attention joint embedding, per state.
 
     Mirrors `run_sweep`'s three-way split exactly (top seed 7, nested seed 8) on
     the SWEEP variant's segment ids, restricted to windows valid in BOTH prepared
@@ -2850,10 +2843,9 @@ def _run_within_day_for_run(
     invalid, `rowii.pipeline.compute_validity_mask`), the WHOLE run is logged and
     skipped (0 combos written) -- the same "not fatal to the whole invocation"
     principle the module docstring already documents for a `run_sweep` `ValueError`,
-    extended to this earlier failure mode (Task S7 real-data finding,
-    `010726-tu1-afternoon`).
+    extended to this earlier failure mode (`010726-tu1-afternoon`).
 
-    `score_fusion` (`--score-fusion`, Task 5, spec D5; caller-guaranteed `variant ==
+    `score_fusion` (`--score-fusion`; caller-guaranteed `variant ==
     "fusion"` via `main`'s own `parser.error` guard): after each combo's normal sweep
     outputs are written, ALSO run `_run_score_fusion_view` over the SAME `(sweep_
     prepared, labels)` and write `far_table_scorefusion.csv` + `scorefusion_notes.md`
@@ -2868,7 +2860,7 @@ def _run_within_day_for_run(
     or `n_written` count -- this view is a strict addition, never a gate on the base
     sweep.
 
-    `states` (`--states`, package-3 Task 6, `None` by default): the conditioning
+    `states` (`--states`, `None` by default): the conditioning
     granularity override for THIS run's own detector, forwarded to `_detected_labels_
     and_detector`'s `k` parameter -- only meaningful for `labels_mode == "detected"`,
     and `main`'s own parser.error guard rejects `--states` + `--labels gt` before
@@ -2879,10 +2871,10 @@ def _run_within_day_for_run(
     register section stay disambiguated from -- and never overwrite or collide with
     -- the default-K layout (see those functions' own docstrings).
 
-    `ensemble` (`--ensemble`, Task 4, design chapter's committed majority-voting
+    `ensemble` (`--ensemble`, design chapter's committed majority-voting
     ensemble; caller-guaranteed `protocol == "within-day"`, `labels_mode ==
-    "detected"`, and a mic-primary *variant* (`_ENSEMBLE_VARIANTS`, review follow-up
-    M1) via `main`'s own `parser.error` guards, mirroring `--states`'):
+    "detected"`, and a mic-primary *variant* (`_ENSEMBLE_VARIANTS`) via
+    `main`'s own `parser.error` guards, mirroring `--states`'):
     AFTER this run's own per-combo loop finishes (this view is conditioning/scorer-
     independent, unlike `score_fusion` which re-runs once per combo), load the
     `logmel` `PreparedRun` for THIS run ONCE, compute `_run_ensemble_view`, and write
@@ -3009,10 +3001,10 @@ def _run_cross_day(
     """Every ordered pair of SCADA-covered runs from DIFFERENT day trees (`Run.
     day_root`), same variant (trivially true -- one variant per invocation), skipping
     pairs whose feature dims are incompatible (module docstring). *run_names* (an
-    explicit `--run` list; `None` = `--run all`, the pre-package-2 behavior unchanged)
+    explicit `--run` list; `None` = `--run all`, the original behavior unchanged)
     restricts the day set BEFORE anything is prepared: only pairs where BOTH day A and
     day B are named take part, so unlisted days never even reach `prepare_run` -- the
-    point of the filter (Task 3 follow-up): scoping a sweep to specific pairs without
+    point of the filter: scoping a sweep to specific pairs without
     triggering hours of cache-miss feature extraction for every other discovered day.
     Returns the number of (pair, scorer) combos actually written.
 
@@ -3020,7 +3012,7 @@ def _run_cross_day(
     variant, e.g. a real "two stray files" run) is logged and excluded from
     `prepared_by_run` entirely -- every pair touching it is then skipped by the
     `prepared_by_run` membership check below, but pairs between the OTHER, healthy
-    days are unaffected (Task S7 real-data finding: `010726-tu1-afternoon` crashed
+    days are unaffected (`010726-tu1-afternoon` crashed
     this function's `prepared_by_run` prewarm loop, which had no `try/except` at all,
     before this fix -- losing every OTHER day's matrix cell too, not just that one
     day's).
@@ -3109,7 +3101,7 @@ def _run_cross_day(
 
 
 # ---------------------------------------------------------------------------
-# cross-day-per-state orchestration (package-2 Task 3, spec D2)
+# cross-day-per-state orchestration
 # ---------------------------------------------------------------------------
 
 
@@ -3229,30 +3221,29 @@ def _run_cross_day_per_state(
 
 
 # ---------------------------------------------------------------------------
-# cross-day-pooled orchestration (package-7 Task 3, spec D2 + A3.1/A3.7/A3.8 --
-# see the module docstring's dedicated section)
+# cross-day-pooled orchestration (see the module docstring's dedicated section)
 # ---------------------------------------------------------------------------
 
 _POOLED_DEFAULT_K = 5
-"""`--k`'s default pooled cluster count (plan Task 3). Spec A3.4 picks the REPORTED
-k by a GT-state-ARI sweep over {4, 5, 6} at execution time -- this default only
+"""`--k`'s default pooled cluster count. A GT-state-ARI sweep over {4, 5, 6} at
+execution time picks the REPORTED k -- this default only
 covers an invocation that does not say."""
 
 _DEFAULT_NORM_MINUTES = 20.0
-"""`--norm-minutes`' default (spec D3: "first `--norm-minutes` (default 20)");
-the A2.2 sweep varies it over {5, 20, 60}. Duplicated in `scripts/monitor.py`
-(same value, sibling scripts never import each other's internals)."""
+"""`--norm-minutes`' default; a sweep varies it over {5, 20, 60}. Duplicated in
+`scripts/monitor.py` (same value, sibling scripts never import each other's
+internals)."""
 
 _BURST_NAME_DATE_RE = re.compile(r"_(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}_\d{6}\.dat$")
 """The date portion of the burst filename pattern `<stream>_YYYY-MM-DD_HH-MM-SS_
 ffffff.dat` -- a deliberately NARROWED duplicate of `rowii.io.dataset._BURST_RE`
 (private; scripts do not import module internals, the same rule as
 `_unknown_run_names`' script-sibling duplication) that keeps exactly the date group
-the A3.8 day-group guard needs."""
+the day-group guard needs."""
 
 
 def _run_day_groups(run: Run) -> set[str]:
-    """The A3.8 day groups of *run*: the SET of calendar days (`"YYYY-MM-DD"`)
+    """The day groups of *run*: the SET of calendar days (`"YYYY-MM-DD"`)
     parsed from EVERY burst file's NAME across all streams. The filename's LOCAL
     date is used as-is (not the UTC-converted hint): the spec's day groups are
     the recording days as the plant filesystem names them, and every guard
@@ -3308,8 +3299,8 @@ def _cross_day_pooled_out_dir(
     literal layout (module docstring's "Output layout" section has the full
     rationale: keyed by the HELD-OUT run, no scorer segment). A `--session-norm`
     run (*norm_minutes* not None) appends `-snorm<N>` (the `--states`/`-k<K>`
-    suffix precedent) so the A2.2 N-sweep and the raw baseline never overwrite
-    each other. A `--level-recal` run (*level_recal* True, package-8 Task 6)
+    suffix precedent) so an N-sweep and the raw baseline never overwrite
+    each other. A `--level-recal` run (*level_recal* True)
     appends `-lrecal` -- mutually exclusive with *norm_minutes* by construction
     (the CLI guard, `main`), but this function itself stays a plain string
     composition, agnostic to which caller enforces that."""
@@ -3337,7 +3328,7 @@ def _pool_row_gt_labels(pool: PoolResult, gt_by_run: dict[str, np.ndarray]) -> n
     """Per stacked pool row, the GT mode-name STRING of its source window -- the
     object-dtype sibling of `_pool_row_labels` (duplicated from
     `scripts/run_modebank.py::_pool_gt_labels`, script-sibling rule). Feeds
-    `derive_state_names` at snapshot save (D2)."""
+    `derive_state_names` at snapshot save."""
     out = np.empty(pool.features.shape[0], dtype=object)
     for member_idx, member in enumerate(pool.members):
         mask = pool.run_index == member_idx
@@ -3348,9 +3339,9 @@ def _pool_row_gt_labels(pool: PoolResult, gt_by_run: dict[str, np.ndarray]) -> n
 def _session_norm_pool(
     pool: PoolResult, stats_by_run: dict[str, SessionStats]
 ) -> np.ndarray:
-    """The pool's stacked feature rows in the session-normalized scoring space
-    (D3/A3.5): each member's block transformed with ITS OWN run's first-N stats
-    (per-run stats for pool members, Task 4 BINDING -- pool-global stats here would
+    """The pool's stacked feature rows in the session-normalized scoring space:
+    each member's block transformed with ITS OWN run's first-N stats
+    (per-run stats for pool members, BINDING -- pool-global stats here would
     let one run's session shift leak into every other run's normalized rows).
     Returns a fresh matrix; `pool.features` stays raw for the detector."""
     out = pool.features.copy()
@@ -3365,8 +3356,8 @@ def _session_norm_pool(
 
 def _first_n_minutes_rows(prepared: PreparedRun, norm_minutes: float) -> np.ndarray:
     """*prepared*'s own first *norm_minutes* of VALID windows, float64 -- the
-    `--level-recal` run-side anchor source (package-8 Task 6, spec A1.4/A1.11:
-    "the TEST run's own first-N-minutes windows", label-free).
+    `--level-recal` run-side anchor source (the TEST run's own first-N-minutes
+    windows, label-free).
 
     Mirrors `rowii.anomaly.normalize.fit_session_stats`'s identical window-
     membership rule (window START offset < `norm_minutes * 60s` AND
@@ -3432,7 +3423,7 @@ def _cross_day_pooled_tables(
     dict[int, ConformalThreshold],
 ]:
     """Both threshold modes' FAR tables from ONE pooled-reference pass, plus the
-    pooled snapshot parts. Space-agnostic (Task 4): the caller passes the feature
+    pooled snapshot parts. Space-agnostic: the caller passes the feature
     matrices in the SCORING space -- raw ones normally, session-normalized ones
     under `--session-norm` (pool rows per-run-normalized via `_session_norm_pool`,
     *test_features* with the test run's own stats) -- and every reference/score/
@@ -3445,7 +3436,7 @@ def _cross_day_pooled_tables(
     - **reference**: the label's pooled nested-FIT-side rows; below
       `sweep_cfg.min_ref` -> `far_row_excluded` in BOTH tables (the same floor
       `build_references` applies for `run_sweep`).
-    - **frozen threshold (A3.7)**: `calibrate` on the label's pooled
+    - **frozen threshold**: `calibrate` on the label's pooled
       nested-CONFORMAL-side scores -- never the top split.
     - **recalibrate threshold**: `calibrate` on the label's TEST-run
       calibration-side scores (`scripts/monitor.py`'s recalibrate recipe --
@@ -3458,7 +3449,7 @@ def _cross_day_pooled_tables(
     The returned `references`/`calibration_scores`/`thresholds` dicts are the
     `fit_snapshot_from_parts` inputs: a label enters ALL THREE iff it has a
     reference AND pooled conformal data (`fit_snapshot`'s own drop rule -- the
-    snapshot's thresholds are the FROZEN pool-conformal ones, spec A3.7), so their
+    snapshot's thresholds are the FROZEN pool-conformal ones), so their
     key sets are equal by construction.
 
     Both far tables end with the `run_sweep`-style aggregate `"pooled"` row
@@ -3523,7 +3514,7 @@ def _cross_day_pooled_tables(
 
 
 def _gt_composite_labels(scada: pd.DataFrame, cfg: Config) -> np.ndarray:
-    """Per-window GT `"state|load_bin"` composite labels (spec A4.2 -- load-level
+    """Per-window GT `"state|load_bin"` composite labels (load-level
     coverage WITHIN states without new labels), e.g. `"turbine|2"`; off-state
     windows carry the `gt_labels` sentinel bin (`"standstill|-1"`)."""
     gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
@@ -3550,10 +3541,10 @@ def _cross_day_pooled_notes(
     the `--session-norm` section when active (*session_norm_lines*, built by
     `_run_cross_day_pooled` -- keyword-only with a `None` default so raw-baseline
     callers and the existing seam test stay untouched), the `--level-recal`
-    section when active (*level_recal_lines*, package-8 Task 6, same `None`-
-    default keyword-only convention), coverage warnings (A4.1/A4.2 -- `"(none)"`
-    sentinel when empty), the A4.5 estimator-vs-final framing, and the honesty
-    notes every pooled output must carry (spec §4). Pure string assembly -- the
+    section when active (*level_recal_lines*, same `None`-
+    default keyword-only convention), coverage warnings (`"(none)"`
+    sentinel when empty), the estimator-vs-final framing, and the honesty
+    notes every pooled output must carry. Pure string assembly -- the
     warning-plumbing seam the tests exercise directly, since detected-label
     warnings cannot fire on a pool whose own detector defines the label space."""
     lines = [
@@ -3646,8 +3637,8 @@ def _run_cross_day_pooled(
     """The full cross-day-pooled pipeline for ONE (pool, test run) rotation --
     module docstring's dedicated section (incl. the `--session-norm` bullet:
     detector RAW, scoring space per-run session-normalized, `-snorm<N>` out-dir
-    leaf, pooled-snapshot pool-global stats; and the `--level-recal` bullet,
-    package-8 Task 6: detector RAW, only the TEST run's scoring features shape-
+    leaf, pooled-snapshot pool-global stats; and the `--level-recal` bullet:
+    detector RAW, only the TEST run's scoring features shape-
     preservingly recentred onto the pooled FIT side's own median, `-lrecal`
     out-dir leaf). Returns a process exit code: 0 on success, 2 for any
     pool-level failure (loud-failure rationale there: exactly one combo,
@@ -3690,9 +3681,9 @@ def _run_cross_day_pooled(
         )
         return 2
 
-    # --session-norm (D3/A3.5): one label-free first-N stats fit PER RUN -- fit
+    # --session-norm: one label-free first-N stats fit PER RUN -- fit
     # runs and test run alike, each on its OWN prefix (per-run stats for pool
-    # members, Task 4 binding). Fitted BEFORE any pooling so an unusable prefix
+    # members, binding). Fitted BEFORE any pooling so an unusable prefix
     # fails fast, loudly naming the run.
     stats_by_run: dict[str, SessionStats] | None = None
     if session_norm:
@@ -3731,7 +3722,7 @@ def _run_cross_day_pooled(
     except (RuntimeError, ValueError) as exc:
         # fit_pooled's RuntimeError (unassigned cluster ids) and sklearn's
         # n_samples < n_clusters ValueError are both "k too large for this pool"
-        # from the CLI's point of view (T2 interface note).
+        # from the CLI's point of view.
         print(
             f"run_step2: k too large for this pool: fit_pooled(k={k}) on "
             f"{pool_fit.features.shape[0]} pooled fit window(s) failed ({exc}) -- "
@@ -3762,11 +3753,11 @@ def _run_cross_day_pooled(
         return 2
     cal_windows, scoring_windows = top.calibration_windows, top.scoring_windows
 
-    # Scoring-space matrices (A3.5 boundary): the DETECTOR above consumed raw
+    # Scoring-space matrices: the DETECTOR above consumed raw
     # features; under --session-norm everything the SCORING path touches is
     # per-run session-normalized, and under --level-recal only the TEST run's
     # own scoring features are shape-preservingly recentred onto the pooled
-    # FIT side's anchor (spec A1.4/A1.11) -- the two are mutually exclusive
+    # FIT side's anchor -- the two are mutually exclusive
     # (parser-guarded in `main`), so at most one branch below ever applies.
     pool_fit_labels = _pool_row_labels(pool_fit, labels_per_run)
     pool_conformal_labels = _pool_row_labels(pool_conformal, labels_per_run)
@@ -3779,11 +3770,11 @@ def _run_cross_day_pooled(
             prepared_test.features, stats_by_run[test_run.name]
         )
     elif level_recal:
-        # A1.4 anchor = the per-column median over the POOLED FIT side's own
+        # The anchor = the per-column median over the POOLED FIT side's own
         # RAW features; the run-side statistic is the TEST run's own label-free
         # first-N-minutes prefix (_first_n_minutes_rows). The pooled FIT/
         # CONFORMAL rows stay RAW below -- only the TEST run shifts (mirrors
-        # monitor.py, package-8 Task 7).
+        # monitor.py).
         feature_names = list(next(iter(prepared_fit.values())).feature_names)
         try:
             anchor = column_medians(pool_fit.features, feature_names)
@@ -3797,7 +3788,7 @@ def _run_cross_day_pooled(
                 file=sys.stderr,
             )
             return 2
-        # T7 (package-8): the SAME anchor is stored as the pooled snapshot's
+        # The SAME anchor is stored as the pooled snapshot's
         # optional level_recal_medians member when --save-snapshot is also
         # given (below) -- the monitor aligns a new run's own first-N median
         # onto exactly this anchor, mirroring how far_table_{frozen,recalibrate}
@@ -3842,7 +3833,7 @@ def _run_cross_day_pooled(
         coerced["label"] = coerced["label"].astype(str)  # _write_sweep_outputs convention
         coerced.to_csv(out_dir / filename, index=False)
 
-    # Coverage tables (A4.1/A4.2): train = the pool's whole calibration side (fit u
+    # Coverage tables: train = the pool's whole calibration side (fit u
     # conformal -- everything the pooled artifact consumed), eval = the test run's
     # scored windows; detected-state labels first, GT composite overlay when SCADA
     # exists.
@@ -3987,8 +3978,8 @@ def _run_cross_day_pooled(
         snapshot_thresholds = thresholds
         snapshot_session_stats: SessionStats | None = None
         if stats_by_run is not None:
-            # Pooled-snapshot session-norm semantics (Task 4 design decision,
-            # documented in fit_snapshot_from_parts' docstring): references stay
+            # Pooled-snapshot session-norm semantics (documented in
+            # fit_snapshot_from_parts' docstring): references stay
             # RAW (the MonitorSnapshot field contract), session_stats are
             # POOL-GLOBAL (center/scale of the raw pooled fit matrix,
             # norm_minutes=0.0 sentinel -- a pooled artifact has no single fit
@@ -3998,7 +3989,7 @@ def _run_cross_day_pooled(
             # reconstruction (stored stats transform the stored references into
             # exactly the space the scores were calibrated in). They deliberately
             # differ from far_table_frozen.csv's per-run-normalized thresholds --
-            # FAR-level-only comparability (A3.5).
+            # FAR-level-only comparability.
             snapshot_session_stats = fit_pool_stats(pool_fit.features)
             snapshot_references = {}
             snapshot_cal_scores = {}
@@ -4016,7 +4007,7 @@ def _run_cross_day_pooled(
                 snapshot_cal_scores[label] = scores
                 snapshot_thresholds[label] = calibrate(scores, alpha)
 
-        # D2/A1.8: the commissioning-time cluster-id -> operating-mode-name map,
+        # The commissioning-time cluster-id -> operating-mode-name map,
         # derived from the POOLED FIT side's own detected labels + GT state
         # strings (the same pooled fit side the detector/references were fit
         # on). `None` when any fit run lacks Betriebsdaten (the GT-skip seam
@@ -4280,7 +4271,7 @@ def main(argv: list[str] | None = None) -> int:
         runs_by_name = {run.name: run for run in index.runs}
         fit_runs = [runs_by_name[name] for name in fit_run_names]
         test_run_obj = runs_by_name[args.test_run]
-        # A3.8 day-group disjointness: day groups = the SET of calendar days each
+        # Day-group disjointness: day groups = the SET of calendar days each
         # run's burst-file names touch (_run_day_groups -- catches both the
         # sibling-runs-of-one-day case, e.g. 010726-tu1 vs 010726-tu2, AND a
         # midnight-crossing run whose tail shares a date with another run's day).

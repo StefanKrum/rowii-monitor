@@ -229,6 +229,17 @@ def _transient(start: datetime, min_p: float, session: str = "s") -> ck.Candidat
     )
 
 
+def _impulse(start: datetime, min_p: float, session: str = "s") -> ck.Candidate:
+    from rowii.anomaly import impulse as impulse_mod
+
+    return ck.Candidate(
+        session=session, klass="impulse", start_utc=start,
+        end_utc=start + timedelta(seconds=impulse_mod.FRAME_S),
+        duration_s=impulse_mod.FRAME_S, min_p=min_p, state_name="n/a", near_transition=False,
+        n_windows=1, modality="impulse", regime="n/a", alarms_path="",
+    )
+
+
 def test_dedupe_by_radius_drops_the_less_extreme_neighbour_within_radius() -> None:
     t0 = _utc(2026, 7, 8, 12, 0, 0)
     a = _transient(t0, min_p=0.0009)
@@ -735,6 +746,18 @@ def test_criterion_sentence_unknown_class_raises() -> None:
         ck.criterion_sentence(cand)
 
 
+def test_criterion_sentence_impulse_cites_band_search_and_zscore() -> None:
+    cand = _impulse(_utc(2026, 6, 29, 2, 0, 15), min_p=1e-15)
+
+    text = ck.criterion_sentence(cand)
+
+    assert "5-20 kHz" in text
+    assert "both microphones" in text
+    assert "0.15 s" in text
+    # z is recovered from min_p via the inverse of the norm.sf transform build_impulse_pairs uses.
+    assert "z" in text.lower()
+
+
 # ---------------------------------------------------------------------------
 # 12. load_prior_candidate_ids / pin_stable_ids -- cross-run id stability
 # ---------------------------------------------------------------------------
@@ -1005,3 +1028,281 @@ def test_state_color_known_scada_and_detected_states_have_fixed_distinct_colors(
 def test_state_color_falls_back_to_the_shared_other_color_for_an_unnamed_cluster() -> None:
     assert ck.state_color("cluster-3") == ck.state_color("cluster-7") == ck._STATE_OTHER_COLOR
     assert ck._STATE_OTHER_COLOR not in {ck.state_color("turbine"), ck.state_color("unknown")}
+
+
+# ---------------------------------------------------------------------------
+# 14. impulse register path (criterion #3): session chunking, cross-mic
+# coincidence matching, pair -> Candidate construction, cross-dedup against the
+# transient path, raw-peak-log annotation, curated context notes.
+# ---------------------------------------------------------------------------
+
+
+def test_iter_session_chunks_splits_into_exact_multiples() -> None:
+    t0 = _utc(2026, 6, 29, 1, 0, 0)
+    chunks = list(ck.iter_session_chunks(t0, t0 + timedelta(seconds=10), chunk_s=5.0))
+
+    assert chunks == [
+        (t0, t0 + timedelta(seconds=5)),
+        (t0 + timedelta(seconds=5), t0 + timedelta(seconds=10)),
+    ]
+
+
+def test_iter_session_chunks_clips_the_last_chunk_short() -> None:
+    t0 = _utc(2026, 6, 29, 1, 0, 0)
+    chunks = list(ck.iter_session_chunks(t0, t0 + timedelta(seconds=7), chunk_s=5.0))
+
+    assert chunks == [
+        (t0, t0 + timedelta(seconds=5)),
+        (t0 + timedelta(seconds=5), t0 + timedelta(seconds=7)),
+    ]
+
+
+def test_iter_session_chunks_empty_span_yields_nothing() -> None:
+    t0 = _utc(2026, 6, 29, 1, 0, 0)
+    assert list(ck.iter_session_chunks(t0, t0, chunk_s=5.0)) == []
+
+
+def test_iter_session_chunks_rejects_non_positive_chunk_s() -> None:
+    t0 = _utc(2026, 6, 29, 1, 0, 0)
+    with pytest.raises(ValueError, match="chunk_s"):
+        list(ck.iter_session_chunks(t0, t0 + timedelta(seconds=10), chunk_s=0.0))
+
+
+def test_iter_session_chunks_rejects_end_before_start() -> None:
+    t0 = _utc(2026, 6, 29, 1, 0, 0)
+    with pytest.raises(ValueError, match="t_end_utc"):
+        list(ck.iter_session_chunks(t0, t0 - timedelta(seconds=1), chunk_s=5.0))
+
+
+# --- match_coincident_peaks -------------------------------------------------
+
+
+def test_match_coincident_peaks_matches_within_tolerance() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 8.8)]
+    tur = [(t0 + timedelta(seconds=0.1), 8.2)]
+
+    pairs = ck.match_coincident_peaks(gen, tur, tolerance_s=0.15)
+
+    assert pairs == [(0, 0)]
+
+
+def test_match_coincident_peaks_outside_tolerance_is_not_matched() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 8.8)]
+    tur = [(t0 + timedelta(seconds=0.2), 8.2)]
+
+    assert ck.match_coincident_peaks(gen, tur, tolerance_s=0.15) == []
+
+
+def test_match_coincident_peaks_boundary_exactly_at_tolerance_matches() -> None:
+    # Deliberately inclusive (unlike the codebase-wide half-open SPAN convention):
+    # "within 0.15s" reads as inclusive for a point-to-point tolerance.
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 8.8)]
+    tur = [(t0 + timedelta(seconds=0.15), 8.2)]
+
+    assert ck.match_coincident_peaks(gen, tur, tolerance_s=0.15) == [(0, 0)]
+
+
+def test_match_coincident_peaks_greedy_closest_pairing_avoids_cross_wiring() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    # gen has two peaks; tur has one, closer to gen[1] than gen[0].
+    gen = [(t0, 9.0), (t0 + timedelta(seconds=0.1), 7.0)]
+    tur = [(t0 + timedelta(seconds=0.09), 8.0)]
+
+    pairs = ck.match_coincident_peaks(gen, tur, tolerance_s=0.15)
+
+    assert pairs == [(1, 0)]  # gen[1] (0.01s gap) wins over gen[0] (0.09s gap)
+
+
+def test_match_coincident_peaks_each_peak_used_at_most_once() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 9.0)]
+    tur = [(t0 + timedelta(seconds=0.05), 8.0), (t0 + timedelta(seconds=0.06), 7.0)]
+
+    pairs = ck.match_coincident_peaks(gen, tur, tolerance_s=0.15)
+
+    assert len(pairs) == 1
+    assert pairs[0][0] == 0  # the single gen peak is claimed by exactly one tur peak
+
+
+def test_match_coincident_peaks_empty_inputs_yield_no_pairs() -> None:
+    assert ck.match_coincident_peaks([], [], tolerance_s=0.15) == []
+
+
+# --- build_impulse_pairs ----------------------------------------------------
+
+
+def test_build_impulse_pairs_coincident_pair_becomes_one_impulse_candidate() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 8.8)]
+    tur = [(t0 + timedelta(seconds=0.1), 8.2)]
+
+    candidates, records = ck.build_impulse_pairs(
+        "290626-tu", gen, tur, tolerance_s=0.15, regime="recalibrate"
+    )
+
+    assert len(candidates) == 1
+    cand = candidates[0]
+    assert cand.klass == "impulse"
+    assert cand.session == "290626-tu"
+    assert cand.modality == "impulse"
+    assert cand.start_utc == t0 + timedelta(seconds=0.05)  # midpoint of the two peak times
+    assert 0.0 < cand.min_p < 1.0
+    assert len(records) == 2  # one row per raw peak, both streams
+    assert all(r.coincident for r in records)
+
+
+def test_build_impulse_pairs_more_extreme_pair_gets_smaller_min_p() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    weak, _ = ck.build_impulse_pairs(
+        "s", [(t0, 6.5)], [(t0, 6.2)], tolerance_s=0.15, regime="recalibrate"
+    )
+    strong, _ = ck.build_impulse_pairs(
+        "s", [(t0, 15.0)], [(t0, 14.0)], tolerance_s=0.15, regime="recalibrate"
+    )
+
+    assert strong[0].min_p < weak[0].min_p  # min_p = norm.sf(min(gz, tz)) -- decreasing in z
+
+
+def test_build_impulse_pairs_non_coincident_peaks_produce_no_candidate() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen = [(t0, 8.8)]
+    tur = [(t0 + timedelta(seconds=1.0), 8.2)]  # far outside tolerance
+
+    candidates, records = ck.build_impulse_pairs(
+        "s", gen, tur, tolerance_s=0.15, regime="recalibrate"
+    )
+
+    assert candidates == []
+    assert len(records) == 2
+    assert all(not r.coincident for r in records)
+    assert all(r.paired_t_utc is None for r in records)
+
+
+def test_build_impulse_pairs_peak_record_streams_are_tagged_correctly() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    _candidates, records = ck.build_impulse_pairs(
+        "s", [(t0, 8.8)], [(t0 + timedelta(seconds=0.05), 8.2)],
+        tolerance_s=0.15, regime="recalibrate",
+    )
+
+    streams = {r.stream for r in records}
+    assert streams == {"gen", "tur"}
+
+
+# --- dedupe_impulse_against_transient ---------------------------------------
+
+
+def test_dedupe_impulse_against_transient_drops_within_radius_and_records_cross_ref() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    transient = _transient(t0, min_p=0.0005)
+    imp = _impulse(t0 + timedelta(seconds=1.5), min_p=1e-15)  # 1.5s away, within 2.0s radius
+
+    kept, cross_ref = ck.dedupe_impulse_against_transient([imp], [transient], radius_s=2.0)
+
+    assert kept == []
+    assert cross_ref == {imp.start_utc.isoformat(): transient.start_utc.isoformat()}
+
+
+def test_dedupe_impulse_against_transient_keeps_outside_radius() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    transient = _transient(t0, min_p=0.0005)
+    imp = _impulse(t0 + timedelta(seconds=2.5), min_p=1e-15)  # outside 2.0s radius
+
+    kept, cross_ref = ck.dedupe_impulse_against_transient([imp], [transient], radius_s=2.0)
+
+    assert kept == [imp]
+    assert cross_ref == {}
+
+
+def test_dedupe_impulse_against_transient_boundary_exactly_at_radius_drops() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    transient = _transient(t0, min_p=0.0005)
+    imp = _impulse(t0 + timedelta(seconds=2.0), min_p=1e-15)  # exactly at the radius
+
+    kept, _cross_ref = ck.dedupe_impulse_against_transient([imp], [transient], radius_s=2.0)
+
+    assert kept == []
+
+
+def test_dedupe_impulse_against_transient_no_transients_keeps_everything() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    imp = _impulse(t0, min_p=1e-15)
+
+    kept, cross_ref = ck.dedupe_impulse_against_transient([imp], [], radius_s=2.0)
+
+    assert kept == [imp]
+    assert cross_ref == {}
+
+
+# --- annotate_impulse_peak_records ------------------------------------------
+
+
+def test_annotate_impulse_peak_records_fills_in_dropped_pairs() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen_t, tur_t = t0, t0 + timedelta(seconds=0.1)
+    pair_start_iso = ck._pair_midpoint_utc(gen_t, tur_t).isoformat()
+    records = [
+        ck.ImpulsePeakRecord(session="s", stream="gen", t_utc=gen_t, z=8.8,
+                              coincident=True, paired_t_utc=tur_t),
+        ck.ImpulsePeakRecord(session="s", stream="tur", t_utc=tur_t, z=8.2,
+                              coincident=True, paired_t_utc=gen_t),
+    ]
+    cross_ref = {pair_start_iso: "2026-06-29T02:00:14+00:00"}
+
+    out = ck.annotate_impulse_peak_records(records, cross_ref)
+
+    assert all(r.dedup_transient_start_utc == "2026-06-29T02:00:14+00:00" for r in out)
+
+
+def test_annotate_impulse_peak_records_kept_pair_resolves_to_empty_string() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    gen_t, tur_t = t0, t0 + timedelta(seconds=0.1)
+    records = [
+        ck.ImpulsePeakRecord(session="s", stream="gen", t_utc=gen_t, z=8.8,
+                              coincident=True, paired_t_utc=tur_t),
+    ]
+
+    out = ck.annotate_impulse_peak_records(records, {})
+
+    assert out[0].dedup_transient_start_utc == ""
+
+
+def test_annotate_impulse_peak_records_non_coincident_row_untouched() -> None:
+    t0 = _utc(2026, 6, 29, 2, 0, 15)
+    records = [
+        ck.ImpulsePeakRecord(session="s", stream="gen", t_utc=t0, z=6.5,
+                              coincident=False, paired_t_utc=None),
+    ]
+
+    out = ck.annotate_impulse_peak_records(records, {})
+
+    assert out[0].dedup_transient_start_utc == ""
+
+
+# --- apply_context_notes -----------------------------------------------------
+
+
+def test_apply_context_notes_sets_note_for_matching_id() -> None:
+    base = _transient(_utc(2026, 6, 29, 2, 0, 15), min_p=0.0001)
+    cand = dataclasses.replace(base, candidate_id="290626-tu-10")
+
+    out = ck.apply_context_notes([cand], {"290626-tu-10": "load-swing window"})
+
+    assert out[0].context_note == "load-swing window"
+
+
+def test_apply_context_notes_no_match_resolves_to_empty_string() -> None:
+    base = _transient(_utc(2026, 6, 29, 2, 0, 15), min_p=0.0001)
+    cand = dataclasses.replace(base, candidate_id="290626-tu-01")
+
+    out = ck.apply_context_notes([cand], {"290626-tu-10": "load-swing window"})
+
+    assert out[0].context_note == ""
+
+
+def test_candidate_context_note_defaults_to_empty_string() -> None:
+    cand = _transient(_utc(2026, 6, 29, 2, 0, 15), min_p=0.0001)
+    assert cand.context_note == ""

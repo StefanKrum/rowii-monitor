@@ -20,7 +20,72 @@ Three subcommands:
                are merged and extremity-overlap-resolved (the more extreme of two
                overlapping candidates wins; `suppress_overlaps`/`dedupe_by_radius`
                share one greedy primitive, `_greedy_suppress`), then capped at the
-               top 25 most extreme (lowest min p-value) per session. Three of the 11
+               top 25 most extreme (lowest min p-value) per session.
+
+               A THIRD class, IMPULSE (register criterion #3, Stefan's decision
+               2026-08-16), is folded into the SAME merge/cap pipeline, operationalizing
+               a documented complementarity finding (`research/notes/analysis_2026-08-
+               15_perstrike_latency.md` Sec.4): the two PU landmark strikes that neither
+               embedding path (nor the human annotator, by ear) can locate under pump
+               noise ARE recoverable by a raw band-energy search at sub-window
+               resolution on the ST landmarks where all three methods CAN be compared
+               (z=7-17 there). `rowii.anomaly.impulse.detect_impulses` (5-20 kHz band
+               energy, 10 ms frames/5 ms hop, 1 s rolling-median detrend, MAD z-score --
+               see that module's own docstring for the full method + threshold-
+               validation rationale, `Z_REGISTER_THRESHOLD`=6.0) runs independently over
+               BOTH mic streams' full session span, in memory-bounded ~5-minute blocks
+               (`iter_session_chunks`, `IMPULSE_CHUNK_S`) padded by `IMPULSE_CHUNK_PAD_S`
+               on each side so a peak straddling a block boundary keeps full rolling-
+               median/min-separation context (`_detect_stream_impulses`). A peak on ONE
+               stream only ever becomes a register candidate if a peak on the OTHER
+               stream falls within +/-0.15s of it (`IMPULSE_COINCIDENCE_TOLERANCE_S`,
+               `match_coincident_peaks`/`build_impulse_pairs`) -- both-mic coincidence is
+               what separates a plant-wide mechanical impulse from a single-channel
+               sensor artifact, exactly the pattern the confirmed, human-annotated
+               strikes exhibit (both mics, 0.1-0.3s of each other). EVERY raw
+               single-stream peak (coincident or not) is logged to `results/
+               candidate-kit/impulse_peaks.csv` (`write_impulse_peaks_csv`) -- the
+               complete, honest search trace, independent of what the register
+               ultimately selects; a peak with no cross-mic match is flagged
+               `coincident=False` there and never becomes a candidate. A coincident
+               pair's representative timestamp is the two streams' own midpoint
+               (`_pair_midpoint_utc`) and its extremity is `norm.sf(min(gen_z, tur_z))`
+               -- a normal-tail p-value derived from the MORE conservative of the two
+               mics' own z-scores (both individually already cleared the register
+               threshold, by construction), reusing the SAME `1.4826`-scaled
+               MAD-to-sigma convention `rowii.anomaly.sentinels`/`rowii.anomaly.
+               mad_baseline` already use -- so an impulse candidate's `min_p` composes
+               directly with `suppress_overlaps`/`dedupe_by_radius`/`cap_top_n`'s
+               existing extremity ordering without any new ranking machinery (`state_
+               name="n/a"`/`regime="n/a"`/`alarms_path=""` mark the fields that have no
+               analogue for this path -- no alarms.parquet, no once-calibrated
+               threshold arm -- rather than borrowing a misleading value from a
+               different class; `scada_state`/`scada_transition` ARE populated, via the
+               SAME `_attach_scada` every class goes through). An impulse candidate
+               within +/-2s of an existing (post-exclusion, post-self-dedup) TRANSIENT
+               candidate is dropped before the cross-class merge step, never registered
+               a SECOND time under a different class (`IMPULSE_TRANSIENT_DEDUP_RADIUS_S`,
+               `dedupe_impulse_against_transient`) -- the two paths are different
+               signal-processing VIEWS of the same physical event, not independent
+               detections, so a close-in-time pair counts as one already-registered
+               event; the dropped impulse's own raw-peak-log rows instead carry a
+               cross-reference to the matched transient's own `start_utc`
+               (`annotate_impulse_peak_records`) -- a timestamp, not a `candidate_id`:
+               this runs BEFORE `assign_ids`, and stays valid even if that transient is
+               itself later dropped by `suppress_overlaps`/`cap_top_n` -- rather than
+               silently vanishing. The 080726 strike-exclusion mask and the +/-5s
+               self-dedup radius both apply to the impulse class exactly like the other
+               two (the SAME `overlaps_any`/`dedupe_by_radius` functions and the SAME
+               `TRANSIENT_DEDUP_RADIUS_S` constant, reused rather than re-derived).
+               Optionally, a small curated mapping (`CONTEXT_NOTES`, keyed by the
+               STABLE `candidate_id`) attaches a `context_note` to any candidate of any
+               class -- e.g. `290626-tu-10`/`290626-tu-11`, which fall inside the
+               load-swing window the partner team's own (timebase-corrected)
+               independent analysis reported click impulses in (`apply_context_notes`,
+               applied after `pin_stable_ids` so the mapping's keys stay meaningful
+               across re-`select` runs); rendered on the candidate card (`build`).
+
+               Three of the 11
                sessions (`270626-pu_ph_pu_ph_pu_ph-1`, `010726-tu1-morning`,
                `010726-tu2` -- `_MONITOR_EXT_SESSIONS`, coverage extension, Stefan's
                decision 2026-08-16) read their `alarms.parquet` from
@@ -115,12 +180,19 @@ Three subcommands:
 Pure logic (episode grouping, transient extraction, dedup/overlap suppression,
 strike-exclusion interval loading + overlap check, asset-window sizing, top-N
 capping/id assignment, SCADA-majority-vote lookup, SCADA/detector mismatch,
-criterion-sentence rendering, stable-id pinning, compile validation) is unit-tested
-with synthetic fixtures in `tests/test_candidate_kit.py`. Real parquet reads against
-`results/step2/once-calibrated/`, real Betriebsdaten reads (`load_session_scada`),
-real WAV writes, spectrogram rendering, and `index.html` assembly are exercised by
-actually running the CLI against real data instead, not by a test here (same "pure
-vs IO-touching" split `annotation_kit.py`'s own module docstring documents).
+criterion-sentence rendering, stable-id pinning, compile validation, session-chunk
+scheduling, cross-mic coincidence matching, impulse-pair -> Candidate construction,
+impulse/transient cross-dedup, raw-peak-log annotation, context-note application) is
+unit-tested with synthetic fixtures in `tests/test_candidate_kit.py`. Real parquet
+reads against `results/step2/once-calibrated/`, real Betriebsdaten reads
+(`load_session_scada`), real WAV writes, spectrogram rendering, and `index.html`
+assembly are exercised by actually running the CLI against real data instead, not by
+a test here (same "pure vs IO-touching" split `annotation_kit.py`'s own module
+docstring documents) -- EXCEPT the impulse path's z-threshold, which real data alone
+can validate: `tests/test_candidate_kit.py`'s own `@pytest.mark.data` test re-derives
+the ST-landmark recovery claim (`rowii.anomaly.impulse`'s own module docstring)
+directly from `docs/groundtruth/080726_strikes_seconds_st.csv` on every real-data
+test run, rather than trusting a one-off exploratory number.
 """
 from __future__ import annotations
 
@@ -132,7 +204,7 @@ import logging
 import math
 import sys
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -140,6 +212,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _SRC_DIR = _SCRIPTS_DIR.parent / "src"
@@ -151,8 +224,9 @@ import annotation_kit as ak  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import run_step1 as rs1  # noqa: E402
 
+from rowii.anomaly import impulse  # noqa: E402
 from rowii.config import Config, load_config  # noqa: E402
-from rowii.io.dataset import RecordingIndex, discover, run_utc_offset_ns  # noqa: E402
+from rowii.io.dataset import BurstFile, RecordingIndex, discover, run_utc_offset_ns  # noqa: E402
 from rowii.pipeline import build_run_grid  # noqa: E402
 from rowii.scada.labels import gt_labels, load_scada_window_means  # noqa: E402
 
@@ -247,6 +321,38 @@ TRANSIENT_DEDUP_RADIUS_S = 5.0
 STRIKE_EXCLUSION_PAD_S = 30.0
 CANDIDATE_CAP_PER_SESSION = 25
 
+IMPULSE_COINCIDENCE_TOLERANCE_S = 0.15
+"""Maximum time gap, INCLUSIVE, between a peak on one mic stream and a peak on
+the other for the pair to count as coincident (`match_coincident_peaks`,
+module docstring register criterion #3) -- deliberately WIDER than the
+validated ST-landmark offset range (0.1-0.3s between the two mics' own peaks
+for the SAME confirmed strike, `rowii.anomaly.impulse`'s own docstring), so
+0.15s sits inside that observed range rather than at its edge."""
+IMPULSE_TRANSIENT_DEDUP_RADIUS_S = 2.0
+"""Maximum `abs(start_utc difference)`, INCLUSIVE, between an impulse
+candidate and a transient candidate for the impulse one to be treated as an
+already-registered duplicate of that transient event and dropped
+(`dedupe_impulse_against_transient`) -- deliberately WIDER than both
+`IMPULSE_COINCIDENCE_TOLERANCE_S` and a transient candidate's own 1.0s window
+width: the BEATs path's alarm timestamp is a SCORED WINDOW's start, not the
+impulse's own true onset, so the two paths' timestamps for the same physical
+strike can differ by up to about a window width even when they agree on the
+event."""
+IMPULSE_CHUNK_S = 300.0
+"""Memory-bounded read-block size for the impulse search's per-session audio
+scan (module docstring: "~5-minute chunks") -- `iter_session_chunks`; caps how
+much raw audio (per mic stream) is ever held in memory at once, independent of
+a session's own total length (up to ~500 min on real data)."""
+IMPULSE_CHUNK_PAD_S = 1.5
+"""Seconds of extra audio requested on EACH side of a `IMPULSE_CHUNK_S` core
+block (`_detect_stream_impulses`) -- comfortably larger than both the rolling-
+median detrend's own half-window (`rowii.anomaly.impulse.MED_WIN_S`/2 = 0.5s)
+and the peak min-separation (`rowii.anomaly.impulse.MIN_SEP_S` = 0.25s), so a
+genuine peak sitting near a block boundary still gets full local context;
+peaks found in the pad itself are discarded (kept only if they fall back
+inside the block's own unpadded core), never double-counted across two
+adjacent blocks."""
+
 ASSET_PAD_S = 10.0
 ASSET_MIN_DURATION_S = 20.0
 ASSET_MAX_DURATION_S = 60.0
@@ -273,7 +379,7 @@ class Candidate:
 
     session: str
     klass: str
-    """`"sustained"` or `"transient"`."""
+    """`"sustained"`, `"transient"`, or `"impulse"` (register criterion #3)."""
     start_utc: datetime
     end_utc: datetime
     duration_s: float
@@ -313,6 +419,14 @@ class Candidate:
     `scada_state`/`scada_transition`, `False` for every session that is genuinely
     held-out. A reviewer-relevant caveat distinct from `scada_state`: a candidate can
     be in-sample regardless of its SCADA coverage (or lack of it)."""
+    context_note: str = ""
+    """Optional free-text note surfaced on the candidate card (`build`), resolved
+    from the small curated `CONTEXT_NOTES` mapping (keyed by `candidate_id`) via
+    `apply_context_notes` -- e.g. `290626-tu-10`/`290626-tu-11`'s own note about
+    falling inside the partner team's (timebase-corrected) load-swing search window.
+    `""` for every candidate with no curated entry (the overwhelming majority) --
+    this is deliberately NOT a class-specific field (any of the three classes can
+    carry one), unlike `state_name="n/a"`/`regime="n/a"` above."""
 
 
 def _utc_from_ns(t_utc_ns: int) -> datetime:
@@ -442,9 +556,10 @@ def _greedy_suppress(
 def suppress_overlaps(candidates: Sequence[Candidate]) -> list[Candidate]:
     """Drop every candidate whose `[start_utc, end_utc)` span overlaps a MORE
     extreme (lower `min_p`) already-kept candidate's span -- "merge, drop
-    candidates overlapping each other, keep the more extreme" applied across BOTH
-    classes at once (a transient inside a sustained episode's span, or vice versa,
-    is exactly the case this resolves). Returns the kept candidates in their
+    candidates overlapping each other, keep the more extreme" applied across ALL
+    classes at once (a transient inside a sustained episode's span, an impulse
+    inside either, or vice versa, are exactly the cases this resolves). Returns
+    the kept candidates in their
     original relative input order (callers needing extremity order re-sort; several
     do, e.g. `cap_top_n`/`assign_ids`)."""
     spans = [(c.start_utc, c.end_utc) for c in candidates]
@@ -632,6 +747,309 @@ def pin_stable_ids(
 
 
 # ---------------------------------------------------------------------------
+# Impulse register path (criterion #3): session-chunk scheduling, cross-mic
+# coincidence matching, pair -> Candidate construction, cross-dedup against the
+# transient path, raw-peak-log annotation, curated context notes. All pure --
+# the IO-touching driver (`build_impulse_candidates_for_session`) lives after
+# `load_session_scada` below, since it consumes that function's own output for
+# a session's audio-grid bounds.
+# ---------------------------------------------------------------------------
+
+
+def iter_session_chunks(
+    t0_utc: datetime, t_end_utc: datetime, chunk_s: float
+) -> Iterator[tuple[datetime, datetime]]:
+    """`[t0_utc, t0_utc+chunk_s), [t0_utc+chunk_s, t0_utc+2*chunk_s), ...` up to
+    *t_end_utc* (the LAST block clipped short, never overshooting) -- the
+    memory-bounded read-block schedule `_detect_stream_impulses` drives
+    `annotation_kit.extract_stream_clip` with (module docstring: "~5-minute
+    chunks", `IMPULSE_CHUNK_S`), so at most one block's worth of raw audio is
+    ever held in memory at a time for a single stream, regardless of a
+    session's own total length (measured up to ~500 min on real data). Pure
+    (`datetime`/`timedelta` arithmetic only).
+
+    Raises:
+        ValueError: *chunk_s* is not positive, or *t_end_utc* is before
+            *t0_utc*.
+    """
+    if chunk_s <= 0:
+        raise ValueError(f"iter_session_chunks: chunk_s must be positive, got {chunk_s!r}")
+    if t_end_utc < t0_utc:
+        raise ValueError(
+            f"iter_session_chunks: t_end_utc ({t_end_utc}) is before t0_utc ({t0_utc})"
+        )
+    step = timedelta(seconds=chunk_s)
+    cur = t0_utc
+    while cur < t_end_utc:
+        nxt = min(cur + step, t_end_utc)
+        yield cur, nxt
+        cur = nxt
+
+
+def _pair_midpoint_utc(t_a: datetime, t_b: datetime) -> datetime:
+    """The representative timestamp of one coincident gen/tur impulse peak
+    pair -- the midpoint of *t_a*/*t_b*, computed via `(a.timestamp() +
+    b.timestamp()) / 2` (float addition, exactly commutative) rather than
+    `a + (b - a) / 2` so the result is BIT-IDENTICAL regardless of argument
+    order. This matters: `build_impulse_pairs` calls it once as
+    `_pair_midpoint_utc(gen_t, tur_t)` (to set `Candidate.start_utc`) and
+    `annotate_impulse_peak_records` effectively recomputes the SAME pair's
+    midpoint from EACH side (`_pair_midpoint_utc(t_utc, paired_t_utc)`, once
+    from the gen row, once from the tur row) to look it up in `dedupe_impulse_
+    against_transient`'s cross-reference mapping -- an order-dependent
+    midpoint formula would silently produce two different ISO strings for the
+    SAME pair and every cross-reference lookup would miss.
+    """
+    return datetime.fromtimestamp((t_a.timestamp() + t_b.timestamp()) / 2.0, tz=UTC)
+
+
+def match_coincident_peaks(
+    gen_peaks: Sequence[tuple[datetime, float]],
+    tur_peaks: Sequence[tuple[datetime, float]],
+    tolerance_s: float,
+) -> list[tuple[int, int]]:
+    """Every `(gen_index, tur_index)` pair whose peak times are within
+    *tolerance_s* of each other (INCLUSIVE: `abs(dt) <= tolerance_s` --
+    deliberately different from this codebase's usual half-open SPAN
+    convention, `_spans_overlap`'s own "touching boundary is not an overlap":
+    a plain-language "within X seconds" tolerance between two POINTS reads as
+    inclusive, and the two constructs are not the same kind of comparison),
+    matched GREEDILY by ascending time gap first (the closest cross-stream
+    pair anywhere matches first; each peak claimed by at most one pair) --
+    mirrors `_greedy_suppress` in spirit (greedy-by-priority, one claim per
+    item), except the priority key here is "closest in time" rather than
+    "most extreme p-value": a coincidence check has no natural extremity order
+    between two peaks on two different microphones, so the closest pairing is
+    the only unambiguous rule that cannot cross-wire two unrelated nearby
+    peaks when a stream has several within tolerance of each other.
+
+    Args:
+        gen_peaks: `(t_utc, z)` pairs, any order.
+        tur_peaks: `(t_utc, z)` pairs, any order.
+        tolerance_s: Maximum absolute time gap, seconds, for a pair to count
+            as coincident (module docstring: 0.15s,
+            `IMPULSE_COINCIDENCE_TOLERANCE_S`).
+
+    Returns:
+        `(gen_index, tur_index)` pairs into the ORIGINAL *gen_peaks*/
+        *tur_peaks* sequences (not sorted copies) -- 0 or more, each index
+        appearing in at most one returned pair. Order is unspecified.
+    """
+    scored: list[tuple[float, int, int]] = []
+    for gi, (gt, _gz) in enumerate(gen_peaks):
+        for ti, (tt, _tz) in enumerate(tur_peaks):
+            gap = abs((gt - tt).total_seconds())
+            if gap <= tolerance_s:
+                scored.append((gap, gi, ti))
+    scored.sort(key=lambda s: s[0])
+
+    used_gen: set[int] = set()
+    used_tur: set[int] = set()
+    pairs: list[tuple[int, int]] = []
+    for _gap, gi, ti in scored:
+        if gi in used_gen or ti in used_tur:
+            continue
+        used_gen.add(gi)
+        used_tur.add(ti)
+        pairs.append((gi, ti))
+    return pairs
+
+
+@dataclass(frozen=True)
+class ImpulsePeakRecord:
+    """One raw single-stream peak from the band-energy impulse search --
+    `write_impulse_peaks_csv`'s own row shape (module docstring: the complete,
+    honest search trace, independent of what the register selects). Built by
+    `build_impulse_pairs` for EVERY peak `rowii.anomaly.impulse.detect_impulses`
+    found on either stream; `dedup_transient_start_utc` is filled in
+    afterward, by `annotate_impulse_peak_records`, once `select_session` knows
+    which coincident pairs `dedupe_impulse_against_transient` dropped."""
+
+    session: str
+    stream: str
+    """`"gen"` or `"tur"` (`annotation_kit._STREAM_NAME_BY_KEY`'s own keys)."""
+    t_utc: datetime
+    z: float
+    coincident: bool = False
+    """Whether a peak on the OTHER stream fell within `IMPULSE_COINCIDENCE_
+    TOLERANCE_S` of this one (`match_coincident_peaks`) -- only a coincident
+    peak's pair can ever become a register candidate."""
+    paired_t_utc: datetime | None = None
+    """The matched other-stream peak's own time, if `coincident`; `None`
+    otherwise."""
+    dedup_transient_start_utc: str = ""
+    """The matched transient candidate's OWN `start_utc` (ISO8601), if this
+    row's coincident pair was dropped by `dedupe_impulse_against_transient`;
+    `""` for a non-coincident row, or a coincident row whose pair was KEPT as
+    its own register candidate."""
+
+
+def build_impulse_pairs(
+    session: str,
+    gen_peaks: Sequence[tuple[datetime, float]],
+    tur_peaks: Sequence[tuple[datetime, float]],
+    *,
+    tolerance_s: float,
+    regime: str,
+) -> tuple[list[Candidate], list[ImpulsePeakRecord]]:
+    """`match_coincident_peaks` over *gen_peaks*/*tur_peaks*, then one
+    `Candidate(klass="impulse")` per matched pair PLUS one `ImpulsePeakRecord`
+    per INPUT peak on either stream (matched or not) -- mirrors `build_
+    sustained_episodes`/`build_transient_candidates`'s own "raw candidates, the
+    caller (`select_session`) applies strike-exclusion/dedup/cap/id-assignment
+    the SAME way for every class" contract. A candidate's `start_utc` is the
+    pair's own midpoint (`_pair_midpoint_utc`); `end_utc` is `start_utc +
+    rowii.anomaly.impulse.FRAME_S` (the 10ms analysis frame -- a near-
+    instantaneous point event, same treatment `asset_window`'s own pad/min/max
+    already gives every candidate regardless of its raw duration); `min_p` is
+    `norm.sf(min(gen_z, tur_z))` (module docstring: the more conservative of
+    the two mics' own z-scores, since a pair's credibility is bounded by its
+    weaker corroborating channel). `state_name="n/a"`, `near_transition=False`,
+    `n_windows=1`, `modality="impulse"`, `regime=regime` (informational only --
+    no once-calibrated threshold arm actually governs this path, but the
+    session's own regime is still a meaningful provenance tag, unlike
+    `state_name`/`alarms_path` which have no analogue at all for this class),
+    `alarms_path=""` (no alarms.parquet backs this class).
+    """
+    pairs = match_coincident_peaks(gen_peaks, tur_peaks, tolerance_s)
+    coincident_gen = dict(pairs)
+    coincident_tur = {ti: gi for gi, ti in pairs}
+
+    candidates: list[Candidate] = []
+    for gi, ti in pairs:
+        gt, gz = gen_peaks[gi]
+        tt, tz = tur_peaks[ti]
+        mid = _pair_midpoint_utc(gt, tt)
+        z_pair = min(gz, tz)
+        candidates.append(
+            Candidate(
+                session=session, klass="impulse", start_utc=mid,
+                end_utc=mid + timedelta(seconds=impulse.FRAME_S),
+                duration_s=impulse.FRAME_S, min_p=float(norm.sf(z_pair)),
+                state_name="n/a", near_transition=False, n_windows=1,
+                modality="impulse", regime=regime, alarms_path="",
+            )
+        )
+
+    peak_records: list[ImpulsePeakRecord] = []
+    for gi, (t, z) in enumerate(gen_peaks):
+        ti = coincident_gen.get(gi)
+        paired_t = tur_peaks[ti][0] if ti is not None else None
+        peak_records.append(
+            ImpulsePeakRecord(
+                session=session, stream="gen", t_utc=t, z=z,
+                coincident=ti is not None, paired_t_utc=paired_t,
+            )
+        )
+    for ti, (t, z) in enumerate(tur_peaks):
+        gi = coincident_tur.get(ti)
+        paired_t = gen_peaks[gi][0] if gi is not None else None
+        peak_records.append(
+            ImpulsePeakRecord(
+                session=session, stream="tur", t_utc=t, z=z,
+                coincident=gi is not None, paired_t_utc=paired_t,
+            )
+        )
+    return candidates, peak_records
+
+
+def dedupe_impulse_against_transient(
+    impulse_candidates: Sequence[Candidate],
+    transient_candidates: Sequence[Candidate],
+    radius_s: float,
+) -> tuple[list[Candidate], dict[str, str]]:
+    """Drop every impulse candidate whose `start_utc` falls within *radius_s*
+    seconds (INCLUSIVE, either direction -- same point-tolerance convention as
+    `match_coincident_peaks`) of an existing transient candidate's own
+    `start_utc` -- UNCONDITIONALLY, no extremity comparison (unlike `dedupe_
+    by_radius`/`suppress_overlaps`'s own "most extreme wins" rule): the two
+    paths are not competing detections of independent events, they are two
+    DIFFERENT signal-processing views (learned embedding vs. raw band-energy)
+    of the SAME physical impulse, so a close-in-time pair is treated as one
+    already-registered event, never a second register entry (module
+    docstring's third-path integration).
+
+    Args:
+        impulse_candidates: Impulse-class candidates for ONE session, any
+            order (already strike-excluded and self-deduped, `dedupe_by_
+            radius` -- i.e. the list about to be merged in).
+        transient_candidates: Transient-class candidates for the SAME
+            session, same preparation (strike-excluded, self-deduped) -- NOT
+            yet id-assigned (`assign_ids` runs later, after the cross-class
+            merge), which is exactly why the cross-reference below is a
+            timestamp, not a `candidate_id`.
+        radius_s: Maximum `abs(start_utc difference)`, seconds, inclusive
+            (module docstring: 2.0s, `IMPULSE_TRANSIENT_DEDUP_RADIUS_S`).
+
+    Returns:
+        `(kept, cross_ref)`: *kept* is *impulse_candidates* minus every
+        dropped one (relative order preserved); *cross_ref* maps a DROPPED
+        candidate's own `start_utc.isoformat()` to the matched transient
+        candidate's own `start_utc.isoformat()` -- consumed by `annotate_
+        impulse_peak_records`'s own `dedup_transient_start_utc` column. A
+        transient candidate is never "used up": several impulse candidates
+        may all cross-reference the SAME transient if several nearby impulse
+        peaks happen to fall within *radius_s* of it -- transient candidates
+        are not a scarce resource being allocated one-to-one here.
+    """
+    kept: list[Candidate] = []
+    cross_ref: dict[str, str] = {}
+    for c in impulse_candidates:
+        match = next(
+            (
+                t for t in transient_candidates
+                if abs((c.start_utc - t.start_utc).total_seconds()) <= radius_s
+            ),
+            None,
+        )
+        if match is None:
+            kept.append(c)
+        else:
+            cross_ref[c.start_utc.isoformat()] = match.start_utc.isoformat()
+    return kept, cross_ref
+
+
+def annotate_impulse_peak_records(
+    peak_records: Sequence[ImpulsePeakRecord], cross_ref_by_pair_start_iso: Mapping[str, str]
+) -> list[ImpulsePeakRecord]:
+    """*peak_records* with `dedup_transient_start_utc` filled in on every row
+    belonging to a coincident pair that `dedupe_impulse_against_transient`
+    dropped (module docstring's cross-reference column). A row's own pair
+    midpoint is recomputed from `(t_utc, paired_t_utc)` (`_pair_midpoint_utc`
+    -- symmetric by construction, so the gen-side and tur-side row of the SAME
+    pair resolve to the identical lookup key) and looked up in
+    *cross_ref_by_pair_start_iso*. A non-coincident row (`coincident=False`,
+    `paired_t_utc=None`) never has a pair to look up and always resolves to
+    `""`; a coincident row whose pair was NOT cross-deduped (kept as its own
+    register candidate) also resolves to `""` (absent from
+    *cross_ref_by_pair_start_iso*, which only ever contains DROPPED pairs).
+    """
+    out: list[ImpulsePeakRecord] = []
+    for pr in peak_records:
+        ref = ""
+        if pr.coincident and pr.paired_t_utc is not None:
+            pair_start_iso = _pair_midpoint_utc(pr.t_utc, pr.paired_t_utc).isoformat()
+            ref = cross_ref_by_pair_start_iso.get(pair_start_iso, "")
+        out.append(dataclasses.replace(pr, dedup_transient_start_utc=ref))
+    return out
+
+
+def apply_context_notes(
+    candidates: Sequence[Candidate], notes: Mapping[str, str]
+) -> list[Candidate]:
+    """*candidates* with `context_note` set to `notes.get(candidate_id, "")`
+    (module docstring's curated per-candidate mechanism, `CONTEXT_NOTES`) --
+    always fully resolved from *notes*, never preserving whatever
+    `context_note` a candidate already carried, so re-running `select` with an
+    updated mapping always reflects the CURRENT curated text. Meant to be
+    called AFTER `pin_stable_ids` (so `candidate_id` is the STABLE, published
+    one the mapping's keys are meant to match), on every class alike -- this
+    mechanism is not class-specific (`Candidate.context_note`'s own
+    docstring)."""
+    return [dataclasses.replace(c, context_note=notes.get(c.candidate_id, "")) for c in candidates]
+
+
+# ---------------------------------------------------------------------------
 # SCADA operating-mode lookup (majority vote over a candidate's own span)
 # ---------------------------------------------------------------------------
 
@@ -727,8 +1145,8 @@ def criterion_sentence(candidate: Candidate) -> str:
     never drift out of sync with the actual selection rule.
 
     Raises:
-        ValueError: if `candidate.klass` is neither `"sustained"` nor
-            `"transient"` (the only two classes `select` ever produces).
+        ValueError: if `candidate.klass` is none of `"sustained"`, `"transient"`,
+            or `"impulse"` (the only three classes `select` ever produces).
     """
     if candidate.klass == "sustained":
         return (
@@ -744,6 +1162,15 @@ def criterion_sentence(candidate: Candidate) -> str:
             f"Triggered by a single short impulse (BEATs path): one "
             f"window with p < {AUDIOBEATS_TRANSIENT_ALPHA:g} against the normal "
             f"model (p = {candidate.min_p:.3e})."
+        )
+    if candidate.klass == "impulse":
+        z_pair = float(norm.isf(candidate.min_p))
+        return (
+            f"Triggered by a band-energy impulse (5-20 kHz search, band-energy "
+            f"path): a peak with z = {z_pair:.1f} (register threshold "
+            f"z >= {impulse.Z_REGISTER_THRESHOLD:g}) on both microphones, coincident "
+            f"within {IMPULSE_COINCIDENCE_TOLERANCE_S:g} s -- p (normal-tail "
+            f"equivalent of the weaker mic's own z) = {candidate.min_p:.3e}."
         )
     raise ValueError(f"unknown candidate class {candidate.klass!r}")
 
@@ -800,6 +1227,122 @@ def load_session_scada(index: RecordingIndex, session: str, cfg: Config) -> Sess
 
 
 # ---------------------------------------------------------------------------
+# Impulse register path (criterion #3), IO-touching driver: reads real audio in
+# memory-bounded blocks via `annotation_kit.extract_stream_clip`. Uses
+# `SessionScada`'s own audio-grid bounds for a session's `[t0_utc, t_end_utc)`
+# span (`load_session_scada` above), so this never re-derives the same grid a
+# second time.
+# ---------------------------------------------------------------------------
+
+
+def _detect_stream_impulses(
+    files: Sequence[BurstFile],
+    offset_ns: int,
+    channel_index: int,
+    t0_utc: datetime,
+    t_end_utc: datetime,
+    *,
+    chunk_s: float,
+    pad_s: float,
+    z_min: float,
+) -> list[tuple[datetime, float]]:
+    """`rowii.anomaly.impulse.detect_impulses` over ONE mic stream's full
+    session span, read in `chunk_s`-wide CORE blocks padded by *pad_s* on each
+    side (`iter_session_chunks`) so the rolling-median detrend and peak
+    min-separation both have full local context even for a peak right at a
+    core-block boundary. Only peaks whose own absolute time falls back inside
+    the block's UNPADDED core (`core_start <= t < core_end`) are kept, so a
+    peak sitting exactly on a boundary is attributed to EXACTLY ONE block,
+    never duplicated (both sides see it in their own pad) or lost.
+
+    Absolute peak times are computed from `StreamClip.covered_start_utc` (the
+    clip's OWN actual coverage start), never the REQUESTED block start: the
+    first/last block of a session is deliberately padded past the session's
+    own `[t0_utc, t_end_utc)` bounds, and `extract_stream_clip` CLAMPS rather
+    than raising there (its own documented contract) -- requested and actual
+    start legitimately differ by up to *pad_s* at either end. A block with NO
+    overlap at all against the recording (a genuine multi-minute gap between
+    burst files, `extract_stream_clip`'s other documented case) is skipped
+    with a warning, not a hard failure -- the same clamp-not-crash philosophy
+    `annotation_kit.py`'s own module docstring states for this exact class of
+    real-data gap.
+    """
+    out: list[tuple[datetime, float]] = []
+    pad = timedelta(seconds=pad_s)
+    for core_start, core_end in iter_session_chunks(t0_utc, t_end_utc, chunk_s):
+        try:
+            clip = ak.extract_stream_clip(
+                files, offset_ns, channel_index, core_start - pad, core_end + pad
+            )
+        except ValueError as exc:
+            logger.warning(
+                "candidate_kit: impulse search skipped a block with no audio "
+                "coverage at all (%s - %s): %s", core_start, core_end, exc,
+            )
+            continue
+        peaks = impulse.detect_impulses(clip.samples, clip.rate_hz, z_min=z_min)
+        for p in peaks:
+            t_abs = clip.covered_start_utc + timedelta(seconds=p.time_offset_s)
+            if core_start <= t_abs < core_end:
+                out.append((t_abs, p.z))
+    return out
+
+
+def build_impulse_candidates_for_session(
+    index: RecordingIndex,
+    session: str,
+    session_scada: SessionScada,
+    regime: str,
+    *,
+    chunk_s: float = IMPULSE_CHUNK_S,
+    pad_s: float = IMPULSE_CHUNK_PAD_S,
+    z_min: float = impulse.Z_REGISTER_THRESHOLD,
+    coincidence_tolerance_s: float = IMPULSE_COINCIDENCE_TOLERANCE_S,
+) -> tuple[list[Candidate], list[ImpulsePeakRecord]]:
+    """IO-touching driver for register criterion #3 (module docstring): run
+    the band-energy impulse search over BOTH mic streams of *session*'s own
+    full run span, pair cross-mic coincidence, and return `(candidates,
+    peak_records)` -- mirrors `build_sustained_episodes`/`build_transient_
+    candidates`'s own "raw candidates, caller applies strike-exclusion/dedup/
+    cap" contract for *candidates*; *peak_records* is the complete raw search
+    trace (`build_impulse_pairs`'s own docstring) that `select_session`
+    further annotates with the transient cross-dedup outcome
+    (`annotate_impulse_peak_records`) before `write_impulse_peaks_csv`.
+
+    *session_scada*'s own `window_start_utc`/`window_s` (`load_session_scada`,
+    already loaded once per session by `select_all` regardless of this path)
+    supplies `[t0_utc, t_end_utc)` -- the SAME audio-grid bounds every other
+    candidate this kit selects is guaranteed to fall inside (`load_session_
+    scada`'s own docstring), reused rather than re-derived a second time via
+    another `build_run_grid` call.
+    """
+    run = mda._get_run(index, session)
+    offset_ns = run_utc_offset_ns(run)
+    t0_utc = session_scada.window_start_utc[0]
+    t_end_utc = session_scada.window_start_utc[-1] + timedelta(seconds=session_scada.window_s)
+
+    peaks_by_stream: dict[str, list[tuple[datetime, float]]] = {}
+    for stream_key, stream_name in ak._STREAM_NAME_BY_KEY.items():
+        files = run.files.get(stream_name, [])
+        if not files:
+            raise ValueError(f"run {run.name!r} has no {stream_name!r} files")
+        peaks = _detect_stream_impulses(
+            files, offset_ns, mda.MONO_CHANNEL_INDEX, t0_utc, t_end_utc,
+            chunk_s=chunk_s, pad_s=pad_s, z_min=z_min,
+        )
+        peaks_by_stream[stream_key] = peaks
+        logger.info(
+            "candidate_kit: impulse search %-20s [%s] found %d peak(s) (z >= %.1f)",
+            session, stream_key, len(peaks), z_min,
+        )
+
+    return build_impulse_pairs(
+        session, peaks_by_stream["gen"], peaks_by_stream["tur"],
+        tolerance_s=coincidence_tolerance_s, regime=regime,
+    )
+
+
+# ---------------------------------------------------------------------------
 # SCADA context panel (build, Stefan's decision 2026-08-16): fixed state colors,
 # window-series slicing, 1 Hz downsampling for the strip/ribbon/live-readout.
 # ---------------------------------------------------------------------------
@@ -816,8 +1359,8 @@ _STATE_COLORS: dict[str, str] = {
 (standstill/turbine/pump/phase-shifter/transition) plus `scada_majority_state`'s
 own `"unknown"` fallback (module docstring: "unknown = grey"). A colorblind-safe
 qualitative palette (Okabe & Ito, 2008), deliberately DISTINCT from `_CANDIDATE_CSS`'s
-own `--sustained`/`--transient` class-badge colors (amber/purple) so the ribbon's
-state colors are never confused with the class badge above it. ONE shared mapping
+own `--sustained`/`--transient`/`--impulse` class-badge colors (amber/purple/teal) so
+the ribbon's state colors are never confused with the class badge above it. ONE shared mapping
 for BOTH ribbon rows (SCADA state and detected state) -- a detector `state_name`
 that carries a named mapping (`rowii.eval.metrics.derive_state_names`) uses the
 SAME vocabulary and therefore the SAME color as the SCADA row."""
@@ -967,8 +1510,40 @@ def build_readout_series(
 CANDIDATES_CSV_COLUMNS = (
     "session", "candidate_id", "rank", "class", "start_utc", "end_utc", "duration_s",
     "min_p", "state_name", "near_transition", "scada_state", "scada_transition",
-    "n_windows", "modality", "regime", "alarms_path", "in_sample",
+    "n_windows", "modality", "regime", "alarms_path", "in_sample", "context_note",
 )
+
+IMPULSE_PEAKS_CSV_COLUMNS = (
+    "session", "stream", "t_utc", "z", "coincident", "paired_t_utc", "dedup_transient_start_utc",
+)
+DEFAULT_IMPULSE_PEAKS_CSV = DEFAULT_KIT_DIR / "impulse_peaks.csv"
+
+CONTEXT_NOTES: dict[str, str] = {
+    "290626-tu-10": (
+        "Falls within the load-swing window in which the partner team's independent "
+        "analysis reported click impulses (timebase-corrected); window-level "
+        "coincidence, not a confirmed per-event match."
+    ),
+    "290626-tu-11": (
+        "Falls within the load-swing window in which the partner team's independent "
+        "analysis reported click impulses (timebase-corrected); window-level "
+        "coincidence, not a confirmed per-event match."
+    ),
+}
+"""Small curated `candidate_id -> context_note` mapping (module docstring's
+`select` section; `Candidate.context_note`'s own docstring), applied by
+`apply_context_notes` AFTER `pin_stable_ids` so its keys are the STABLE,
+published ids. `290626-tu-10`/`290626-tu-11` (Stefan's decision 2026-08-16):
+`research/notes/analysis_2026-08-15_knack_crossmatch.md` Sec.3.1/5 -- under
+the partner's own corrected (-2h) search window, these two BEATs-transient
+candidates land 16-23s from his own dip-minute centre, and an independent
+band-energy re-search of that SAME window (this module's own `rowii.anomaly.
+impulse`) finds a coincident both-mic impulse just 0.4-0.8s from `290626-
+tu-11`. Explicitly a WINDOW-level coincidence, never asserted as a confirmed
+per-event match (no partner per-event timestamp was ever committed, only a
+5-minute search window and a dip-minute centre) -- attributed to the
+partner's own external analysis, not adopted as this thesis's own result
+(the same firewall `feedback_bruno_content_firewall` states project-wide)."""
 
 
 @dataclass(frozen=True)
@@ -977,9 +1552,20 @@ class SelectResult:
     regime: str
     n_sustained_raw: int
     n_transient_raw: int
+    n_impulse_raw: int
+    """Coincident impulse pairs found (`build_impulse_candidates_for_session`)
+    BEFORE strike-exclusion/self-dedup/transient-cross-dedup."""
     n_excluded_strike: int
     n_after_merge: int
+    n_impulse_deduped_to_transient: int
+    """Impulse candidates dropped by `dedupe_impulse_against_transient`
+    (already within *n_excluded_strike*'s complement, i.e. counted separately
+    from strike-exclusion) -- the "dedup cross-reference" count."""
     kept: list[Candidate]
+    impulse_peak_records: list[ImpulsePeakRecord]
+    """Every raw single-stream peak this session's impulse search found,
+    fully annotated (`coincident`/`dedup_transient_start_utc`) -- `select_all`
+    pools these across sessions into ONE `impulse_peaks.csv`."""
 
 
 def _relpath(path: Path, root: Path) -> str:
@@ -1041,17 +1627,26 @@ def select_session(
     window_s: float,
     cap: int,
     session_scada: SessionScada,
+    index: RecordingIndex,
     strike_intervals: Sequence[tuple[datetime, datetime]] | None = None,
     prior_ids: Mapping[tuple[str, str], str] | None = None,
     in_sample: bool = False,
 ) -> SelectResult:
     """Build one session's final candidate list: raw sustained (fusion) + raw
-    transient (audio-beats) -> [strike-exclusion, 080726 only] -> transient dedup ->
-    merge + overlap suppression -> cap -> id assignment -> stable-id pinning
-    (`pin_stable_ids`) -> SCADA operating-mode lookup (`_attach_scada`) -> in-sample
-    tagging (`in_sample`, `IN_SAMPLE_SESSIONS`). See the module docstring's `select`
-    section for the full rationale of this exact order (exclusion BEFORE
-    dedup/merge/cap, so an excluded window never consumes a top-25 slot)."""
+    transient (audio-beats) + raw impulse (band-energy, both-mic coincident
+    pairs, `build_impulse_candidates_for_session`) -> [strike-exclusion, 080726
+    only, all three classes] -> transient self-dedup + impulse self-dedup (SAME
+    `dedupe_by_radius`/`TRANSIENT_DEDUP_RADIUS_S`) -> impulse-vs-transient
+    cross-dedup (`dedupe_impulse_against_transient`) -> merge + overlap
+    suppression (all three classes) -> cap -> id assignment -> stable-id
+    pinning (`pin_stable_ids`) -> SCADA operating-mode lookup (`_attach_scada`)
+    -> in-sample tagging (`in_sample`, `IN_SAMPLE_SESSIONS`) -> context-note
+    tagging (`apply_context_notes`, `CONTEXT_NOTES`). See the module
+    docstring's `select` section for the full rationale of this exact order
+    (exclusion BEFORE dedup/merge/cap, so an excluded window never consumes a
+    top-25 slot; impulse-vs-transient cross-dedup BEFORE the cross-class merge,
+    so a duplicate impulse never even reaches `suppress_overlaps`/`cap_top_n`).
+    """
     fusion_path = _alarms_path_for(results_root, "fusion", session, regime)
     beats_path = _alarms_path_for(results_root, "audio-beats", session, regime)
 
@@ -1067,33 +1662,51 @@ def select_session(
         beats_df, window_s=window_s, alpha=AUDIOBEATS_TRANSIENT_ALPHA, session=session,
         modality="audio-beats", regime=regime, alarms_path=_relpath(beats_path, results_root),
     )
+    impulse_raw, impulse_peak_records = build_impulse_candidates_for_session(
+        index, session, session_scada, regime,
+    )
     n_sustained_raw = len(sustained)
     n_transient_raw = len(transient)
+    n_impulse_raw = len(impulse_raw)
 
     n_excluded = 0
     if strike_intervals:
-        n_raw_total = len(sustained) + len(transient)
+        n_raw_total = len(sustained) + len(transient) + len(impulse_raw)
         sustained = [
             c for c in sustained if not overlaps_any(c.start_utc, c.end_utc, strike_intervals)
         ]
         transient = [
             c for c in transient if not overlaps_any(c.start_utc, c.end_utc, strike_intervals)
         ]
-        n_excluded = n_raw_total - (len(sustained) + len(transient))
+        impulse_raw = [
+            c for c in impulse_raw if not overlaps_any(c.start_utc, c.end_utc, strike_intervals)
+        ]
+        n_excluded = n_raw_total - (len(sustained) + len(transient) + len(impulse_raw))
 
     transient = dedupe_by_radius(transient, TRANSIENT_DEDUP_RADIUS_S)
-    merged = suppress_overlaps([*sustained, *transient])
+    impulse_self_deduped = dedupe_by_radius(impulse_raw, TRANSIENT_DEDUP_RADIUS_S)
+    impulse_final, impulse_cross_ref = dedupe_impulse_against_transient(
+        impulse_self_deduped, transient, IMPULSE_TRANSIENT_DEDUP_RADIUS_S
+    )
+    n_impulse_deduped_to_transient = len(impulse_self_deduped) - len(impulse_final)
+
+    merged = suppress_overlaps([*sustained, *transient, *impulse_final])
     n_after_merge = len(merged)
 
     kept = pin_stable_ids(assign_ids(cap_top_n(merged, cap)), prior_ids or {})
     kept = [
         dataclasses.replace(_attach_scada(c, session_scada), in_sample=in_sample) for c in kept
     ]
+    kept = apply_context_notes(kept, CONTEXT_NOTES)
+
+    impulse_peak_records = annotate_impulse_peak_records(impulse_peak_records, impulse_cross_ref)
 
     return SelectResult(
         session=session, regime=regime, n_sustained_raw=n_sustained_raw,
-        n_transient_raw=n_transient_raw, n_excluded_strike=n_excluded,
-        n_after_merge=n_after_merge, kept=kept,
+        n_transient_raw=n_transient_raw, n_impulse_raw=n_impulse_raw,
+        n_excluded_strike=n_excluded, n_after_merge=n_after_merge,
+        n_impulse_deduped_to_transient=n_impulse_deduped_to_transient,
+        kept=kept, impulse_peak_records=impulse_peak_records,
     )
 
 
@@ -1105,7 +1718,31 @@ def _candidate_to_row(c: Candidate) -> dict[str, object]:
         "near_transition": c.near_transition, "scada_state": c.scada_state,
         "scada_transition": c.scada_transition, "n_windows": c.n_windows, "modality": c.modality,
         "regime": c.regime, "alarms_path": c.alarms_path, "in_sample": c.in_sample,
+        "context_note": c.context_note,
     }
+
+
+def _impulse_peak_to_row(pr: ImpulsePeakRecord) -> dict[str, object]:
+    return {
+        "session": pr.session, "stream": pr.stream, "t_utc": pr.t_utc.isoformat(),
+        "z": round(pr.z, 3), "coincident": pr.coincident,
+        "paired_t_utc": pr.paired_t_utc.isoformat() if pr.paired_t_utc is not None else "",
+        "dedup_transient_start_utc": pr.dedup_transient_start_utc,
+    }
+
+
+def write_impulse_peaks_csv(peak_records: Sequence[ImpulsePeakRecord], out_csv: Path) -> Path:
+    """`results/candidate-kit/impulse_peaks.csv` -- every raw single-stream
+    peak the impulse search found across every session (module docstring's
+    `select` section: the complete, honest search trace), written once by
+    `select_all` after processing all sessions (mirrors `candidates.csv`'s own
+    single end-of-loop write)."""
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame(
+        [_impulse_peak_to_row(pr) for pr in peak_records], columns=list(IMPULSE_PEAKS_CSV_COLUMNS)
+    )
+    frame.to_csv(out_csv, index=False)
+    return out_csv
 
 
 def select_all(
@@ -1127,6 +1764,7 @@ def select_all(
     prior_ids = load_prior_candidate_ids(out_csv)
     results: list[SelectResult] = []
     rows: list[dict[str, object]] = []
+    impulse_peak_rows: list[ImpulsePeakRecord] = []
 
     for session in SESSIONS:
         regime = REGIME_BY_SESSION[session]
@@ -1140,22 +1778,33 @@ def select_all(
         session_scada = load_session_scada(index, session, cfg)
         result = select_session(
             cfg.results_root, session, regime, window_s=window_s, cap=cap,
-            session_scada=session_scada, strike_intervals=strike_intervals, prior_ids=prior_ids,
-            in_sample=session in IN_SAMPLE_SESSIONS,
+            session_scada=session_scada, index=index, strike_intervals=strike_intervals,
+            prior_ids=prior_ids, in_sample=session in IN_SAMPLE_SESSIONS,
         )
         results.append(result)
         rows.extend(_candidate_to_row(c) for c in result.kept)
+        impulse_peak_rows.extend(result.impulse_peak_records)
+        n_impulse_kept = sum(1 for c in result.kept if c.klass == "impulse")
         logger.info(
             "candidate_kit: select %-20s regime=%-11s sustained_raw=%3d transient_raw=%3d "
-            "excluded_strike=%3d after_merge=%3d kept=%3d",
+            "impulse_raw=%3d excluded_strike=%3d after_merge=%3d kept=%3d "
+            "(impulse_kept=%3d, impulse_deduped_to_transient=%3d)",
             session, regime, result.n_sustained_raw, result.n_transient_raw,
-            result.n_excluded_strike, result.n_after_merge, len(result.kept),
+            result.n_impulse_raw, result.n_excluded_strike, result.n_after_merge, len(result.kept),
+            n_impulse_kept, result.n_impulse_deduped_to_transient,
         )
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(rows, columns=list(CANDIDATES_CSV_COLUMNS))
     frame.to_csv(out_csv, index=False)
+    impulse_peaks_csv = write_impulse_peaks_csv(
+        impulse_peak_rows, out_csv.parent / "impulse_peaks.csv"
+    )
     logger.info("candidate_kit: wrote %d candidate(s) -> %s", len(rows), out_csv)
+    logger.info(
+        "candidate_kit: wrote %d impulse peak record(s) -> %s",
+        len(impulse_peak_rows), impulse_peaks_csv,
+    )
     return results
 
 
@@ -1185,6 +1834,10 @@ def _candidate_from_row(row: Mapping[str, str]) -> Candidate:
             # written before this column existed must still load -- in_sample
             # defaults to False exactly like Candidate's own field default.
             in_sample=row.get("in_sample", "False") == "True",
+            # Same .get(...)-with-default treatment for context_note (added
+            # alongside the impulse register path): a pre-existing candidates.csv
+            # loads fine with every candidate's note defaulting to "".
+            context_note=row.get("context_note", ""),
         )
     except (KeyError, ValueError) as exc:
         cid = row.get("candidate_id", "?")
@@ -1622,6 +2275,7 @@ def _asset_result_to_meta(r: CandidateAssetResult) -> dict[str, object]:
         "state_name": c.state_name, "near_transition": c.near_transition,
         "scada_state": c.scada_state, "scada_transition": c.scada_transition,
         "in_sample": c.in_sample,
+        "context_note": c.context_note,
         "mode_mismatch": scada_detector_mismatch(c.scada_state, c.state_name),
         "criterion_text": criterion_sentence(c),
         "asset_start_utc": r.asset_start_utc.isoformat(), "asset_duration_s": r.asset_duration_s,
@@ -1700,11 +2354,20 @@ def build_all(cfg: Config, candidates_csv: Path, out_dir: Path) -> list[Candidat
             session_scada_by_session[c.session] = load_session_scada(index, c.session, cfg)
         session_scada = session_scada_by_session[c.session]
 
-        if c.alarms_path not in detected_state_by_alarms_path:
+        # Impulse candidates carry alarms_path="" (module docstring: no alarms.parquet
+        # backs this class) -- never resolved against cfg.results_root (that would
+        # resolve to the results ROOT DIRECTORY itself, not a file, module docstring
+        # of `_load_detected_state_series`). `.get(..., ([], []))` gives such a
+        # candidate an empty detected-state series, which `resample_states_to_seconds`'
+        # own no-overlap fallback already renders as a uniform "unknown" ribbon row --
+        # the SAME graceful degradation `has_scada=False` already gets for the SCADA row.
+        if c.alarms_path and c.alarms_path not in detected_state_by_alarms_path:
             detected_state_by_alarms_path[c.alarms_path] = _load_detected_state_series(
                 cfg.results_root / c.alarms_path
             )
-        detected_starts, detected_states = detected_state_by_alarms_path[c.alarms_path]
+        detected_starts, detected_states = detected_state_by_alarms_path.get(
+            c.alarms_path, ([], [])
+        )
 
         n_seconds = max(1, math.ceil(audio.asset_duration_s))
         scada_png_rel = f"{c.session}/{c.candidate_id}_scada.png"
@@ -1768,6 +2431,9 @@ _CANDIDATE_CSS = """
   --err: #dc2626;
   --sustained: #f59e0b;
   --transient: #a855f7;
+  --impulse: #0891b2;
+  --note-bg: #0891b21a;
+  --note-border: #0891b266;
 }
 * { box-sizing: border-box; }
 body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -1798,6 +2464,7 @@ code { background: var(--bg-soft-2); padding: 0.1em 0.3em; border-radius: 3px; f
 .class-badge { border-radius: 10px; padding: 0.05rem 0.55rem; font-size: 0.78rem; color: white; }
 .class-badge.sustained { background: var(--sustained); }
 .class-badge.transient { background: var(--transient); }
+.class-badge.impulse { background: var(--impulse); }
 .near-transition-badge { border: 1px solid var(--err); color: var(--err); border-radius: 10px;
                           padding: 0.05rem 0.55rem; font-size: 0.78rem; }
 .meta-line { color: var(--muted); font-size: 0.85rem; margin: 0.3em 0; }
@@ -1815,6 +2482,10 @@ code { background: var(--bg-soft-2); padding: 0.1em 0.3em; border-radius: 3px; f
                     padding: 0.05rem 0.55rem; font-size: 0.78rem; }
 .criterion-line { color: var(--muted); font-size: 0.85rem; margin: 0.2em 0 0.6em;
                    font-style: italic; }
+.context-note { background: var(--note-bg); border: 1px solid var(--note-border);
+                  border-radius: 6px; padding: 0.4rem 0.7rem; font-size: 0.83rem;
+                  margin: 0.2em 0 0.6em; }
+.context-note b { color: var(--impulse); }
 
 .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.6rem 0; }
 @media (max-width: 800px) { .lanes { grid-template-columns: 1fr; } }
@@ -1872,8 +2543,20 @@ of this kind: a changed timbre, rubbing, flow noise.</p>
 <p><span class="class-term">transient</span> (BEATs path): a single short impulse,
 extremely unlikely under the learned normal behavior &ndash; a single
 window with p&nbsp;&lt;&nbsp;0.001. Typical: a click, a strike, a switching noise.</p>
+<p><span class="class-term">impulse</span> (band-energy path): a short impulse found
+directly in the 5&ndash;20&nbsp;kHz band of the raw audio (10&nbsp;ms resolution,
+well below the 1&nbsp;s window the other two paths are limited to), heard on
+<strong>both</strong> microphones within 0.15&nbsp;s of each other &ndash; both-mic
+coincidence is what separates a real plant-wide impulse from a single-sensor
+artifact. This path exists because per-strike evaluation found the embedding paths
+above structurally cannot resolve two impulses closer together than about a window
+width; a candidate already caught by the transient path within 2&nbsp;s is not
+listed a second time here.</p>
 <p>Each card also states the <strong>exact trigger reason</strong>
-(class, window count/duration, minimum p-value) as a sentence below the mode line.</p>
+(class, window count/duration, minimum p-value) as a sentence below the mode line.
+Some candidates additionally carry a highlighted <strong>context note</strong>
+&ndash; a short curated remark (e.g. a cross-reference to the partner team's own,
+independently reported search window) &ndash; shown just below that sentence.</p>
 <p><strong>Mode (SCADA)</strong> is the operating mode derived rule-based from the
 operating data (speed, power, flow) for the candidate's time window &ndash;
 the more reliable figure. <strong>Mode (Detector)</strong> is the mode
@@ -2353,6 +3036,13 @@ function buildCard(meta) {
   var criterionLine = el("div", { class: "criterion-line" });
   criterionLine.textContent = meta.criterion_text;
   card.el.appendChild(criterionLine);
+
+  if (meta.context_note) {
+    var contextNote = el("div", { class: "context-note" });
+    contextNote.innerHTML = "<b>Context:</b> ";
+    contextNote.appendChild(document.createTextNode(meta.context_note));
+    card.el.appendChild(contextNote);
+  }
 
   var lanes = el("div", { class: "lanes" });
   var genLane = buildLane(card, "gen", meta.gen_wav, meta.gen_flat_png, "Generator microphone");
