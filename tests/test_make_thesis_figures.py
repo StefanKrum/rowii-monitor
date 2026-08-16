@@ -321,11 +321,84 @@ def test_latency_group_counts_handles_zero_detections(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end smoke test: all four PDFs get written and are non-trivially sized
+# F5 loaders: cross-day rotation far_table.csv + within-day pooled aggregation
+# ---------------------------------------------------------------------------
+
+_CROSS_DAY_COLS = "label,n_calibration,n_scored,n_alarms,realized_far,nominal_alpha\n"
+
+
+def _write_transfer_tree(results_dir: Path) -> Path:
+    """A synthetic cross-day + within-day tree over the three real day ids, with
+    made-up rates: the loaders are what is under test, never the plotted values."""
+    runs = [s.run for s in m.TRANSFER_DAYS]
+    for i, src in enumerate(runs):
+        for j, dst in enumerate(runs):
+            if i == j:
+                continue
+            d = (
+                results_dir / "step2" / "cross-day" / "fusion-detected"
+                / f"{src}__to__{dst}" / "knn-pooled"
+            )
+            d.mkdir(parents=True)
+            far = 0.1 * (i + 1) + 0.01 * (j + 1)
+            (d / "far_table.csv").write_text(
+                _CROSS_DAY_COLS + f"pooled,100,200,{round(far * 200)},{far},0.05\n"
+            )
+    for k, run in enumerate(runs):
+        d = results_dir / "step2" / "within-day" / run / "fusion-detected" / "pooled-knn"
+        d.mkdir(parents=True)
+        # Two per-state rows plus a stray non-numeric label: the aggregate must be
+        # sum(alarms)/sum(scored) over the per-state rows only.
+        (d / "far_table.csv").write_text(
+            _CROSS_DAY_COLS
+            + f"0,50,100,{10 + k},{(10 + k) / 100},0.05\n"
+            + f"1,50,300,{20 + k},{(20 + k) / 300},0.05\n"
+        )
+    return results_dir
+
+
+def test_load_transfer_cell_reads_the_pooled_row(tmp_path: Path) -> None:
+    results_dir = _write_transfer_tree(tmp_path / "results")
+    far, n_scored = m.load_transfer_cell(results_dir, "250526-tu", "290626-tu")
+    assert far == pytest.approx(0.12)
+    assert n_scored == 200
+
+
+def test_load_own_day_cell_aggregates_alarms_over_scored(tmp_path: Path) -> None:
+    results_dir = _write_transfer_tree(tmp_path / "results")
+    far, n_scored = m.load_own_day_cell(results_dir, "250526-tu")
+    assert n_scored == 400
+    assert far == pytest.approx((10 + 20) / 400)
+
+
+def test_transfer_matrix_puts_own_day_values_on_the_diagonal(tmp_path: Path) -> None:
+    results_dir = _write_transfer_tree(tmp_path / "results")
+    far, scored = m.transfer_matrix(results_dir)
+    assert far.shape == (3, 3)
+    for k in range(3):
+        assert far[k, k] == pytest.approx((10 + k + 20 + k) / 400)
+        assert scored[k, k] == 400
+    assert far[0, 1] == pytest.approx(0.12)
+    assert scored[0, 1] == 200
+
+
+def test_load_transfer_cell_rejects_a_foreign_nominal_alpha(tmp_path: Path) -> None:
+    results_dir = _write_transfer_tree(tmp_path / "results")
+    path = (
+        results_dir / "step2" / "cross-day" / "fusion-detected"
+        / "250526-tu__to__290626-tu" / "knn-pooled" / "far_table.csv"
+    )
+    path.write_text(_CROSS_DAY_COLS + "pooled,100,200,24,0.12,0.10\n")
+    with pytest.raises(AssertionError):
+        m.load_transfer_cell(results_dir, "250526-tu", "290626-tu")
+
+
+# ---------------------------------------------------------------------------
+# End-to-end smoke test: all five PDFs get written and are non-trivially sized
 # ---------------------------------------------------------------------------
 
 
-def test_make_all_writes_four_nonempty_pdfs(tmp_path: Path) -> None:
+def test_make_all_writes_five_nonempty_pdfs(tmp_path: Path) -> None:
     results_dir = tmp_path / "results"
     results_dir.mkdir()
     _write_fusion_tree(results_dir)
@@ -333,11 +406,12 @@ def test_make_all_writes_four_nonempty_pdfs(tmp_path: Path) -> None:
     (scarcity_src / "scarcity-detection").rename(results_dir / "scarcity-detection")
     latency_src = _write_latency_csv(tmp_path / "latency_src")
     (latency_src / "pillar3-perstrike").rename(results_dir / "pillar3-perstrike")
+    _write_transfer_tree(results_dir)
 
     out_dir = tmp_path / "out"
     paths = m.make_all(results_dir, out_dir)
 
-    assert len(paths) == 4
+    assert len(paths) == 5
     for p in paths:
         assert p.is_file()
         assert p.suffix == ".pdf"

@@ -1,7 +1,8 @@
-"""Thesis result figures (Chapter 3, Evaluation): four publication-style PDFs built
+"""Thesis result figures (Chapter 3, Evaluation): five publication-style PDFs built
 directly from the committed `results/` artifacts -- never a re-derived, invented or
-partner number (the firewall). Every number plotted here already appears in
-`thesis/hsg-thesis/content/evaluation.tex`'s tables or prose; this script only adds the
+partner number (the firewall). Every number plotted here is either printed in
+`thesis/hsg-thesis/content/evaluation.tex`'s tables or prose, or read verbatim from a
+committed artifact and named in the figure's own caption; this script only adds the
 visual companion the chapter was missing.
 
 One shared style helper (`_apply_style`) is used by all four figures: sans-serif,
@@ -29,6 +30,16 @@ F4 `f4_latency.pdf`   -- Per-strike first-alarm latency distribution (physical-s
                          level, alpha=0.05), standstill (ST) and pump (PU) sessions side
                          by side, detected/total counts annotated.
                          Source: results/pillar3-perstrike/latency.csv (row_type=detail).
+F5 `f5_transfer.pdf`  -- E3 day-by-day transfer matrix: calibrated-on x evaluated-on
+                         realized FAR (percent) for the three single-day turbine
+                         rotations, era boundary drawn, own-day diagonal starred.
+                         Sources: results/step2/cross-day/fusion-detected/
+                         <src>__to__<dst>/knn-pooled/far_table.csv (pooled row) for the
+                         six off-diagonal cells; results/step2/within-day/<run>/
+                         fusion-detected/pooled-knn/far_table.csv (per-state rows
+                         aggregated as sum(n_alarms)/sum(n_scored), the same aggregation
+                         the sibling per-state tables carry as their own `pooled` row)
+                         for the three own-day cells.
 
 Usage
 -----
@@ -615,6 +626,173 @@ def make_f4_latency(results_dir: Path, out_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# F5: day-by-day transfer matrix (calibrated-on x evaluated-on realized FAR)
+# ---------------------------------------------------------------------------
+
+# The three single-day turbine rotations of the cross-day grid, in chronological
+# order and with the SAME era tags the E3 table uses. The grid is defined over
+# ordered pairs, so only the six off-diagonal cells are transfer measurements; the
+# diagonal is the day's own within-day split and is starred, never read as transfer.
+TRANSFER_DAYS: tuple[SessionMeta, ...] = (
+    SessionMeta("250526-tu", "A", "25 Jun\nTU"),
+    SessionMeta("290626-tu", "B", "29 Jun\nTU"),
+    SessionMeta("010726-tu_ph_tu", "B", "1 Jul\nTU+PS"),
+)
+_TRANSFER_ALPHA = 0.05
+"""Nominal budget of every cell; asserted against each artifact's own
+`nominal_alpha` column rather than assumed."""
+
+
+def load_transfer_cell(results_dir: Path, src: str, dst: str) -> tuple[float, int]:
+    """Off-diagonal cell `(realized_far, n_scored)`: day `src`'s fitted detector
+    applied unchanged to day `dst`. Source: the rotation's `far_table.csv` pooled row."""
+    path = (
+        results_dir
+        / "step2"
+        / "cross-day"
+        / "fusion-detected"
+        / f"{src}__to__{dst}"
+        / "knn-pooled"
+        / "far_table.csv"
+    )
+    df = pd.read_csv(path)
+    row = df[df["label"].astype(str) == "pooled"]
+    assert len(row) == 1, f"{path}: expected exactly one pooled row, found {len(row)}"
+    rec = row.iloc[0]
+    assert float(rec["nominal_alpha"]) == _TRANSFER_ALPHA, f"{path}: unexpected alpha"
+    return float(rec["realized_far"]), int(rec["n_scored"])
+
+
+def load_own_day_cell(results_dir: Path, run: str) -> tuple[float, int]:
+    """Diagonal cell `(realized_far, n_scored)` for `run`: the day's own within-day
+    pooled-kNN run, aggregated over its per-state rows as sum(alarms)/sum(scored).
+    This is the same aggregation the sibling per-state artifacts write out as their
+    own `pooled` row, so no new estimator is introduced -- only a sum of two committed
+    integer columns. The cell is calibrated on the same day it is scored on (disjoint
+    splits) and is therefore starred in the figure, never counted as a transfer."""
+    path = (
+        results_dir
+        / "step2"
+        / "within-day"
+        / run
+        / "fusion-detected"
+        / "pooled-knn"
+        / "far_table.csv"
+    )
+    df = pd.read_csv(path)
+    per_state = df[df["label"].astype(str) != "pooled"]
+    assert not per_state.empty, f"{path}: no per-state rows"
+    assert (per_state["nominal_alpha"].astype(float) == _TRANSFER_ALPHA).all(), (
+        f"{path}: unexpected alpha"
+    )
+    n_scored = int(per_state["n_scored"].sum())
+    return float(per_state["n_alarms"].sum()) / n_scored, n_scored
+
+
+def transfer_matrix(results_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """`(far, n_scored)` as (calibrated-on x evaluated-on) matrices over
+    `TRANSFER_DAYS`. Pure aside from the reads; unit-tested on a synthetic tree."""
+    n = len(TRANSFER_DAYS)
+    far = np.zeros((n, n), dtype=float)
+    scored = np.zeros((n, n), dtype=int)
+    for i, src in enumerate(TRANSFER_DAYS):
+        for j, dst in enumerate(TRANSFER_DAYS):
+            if i == j:
+                far[i, j], scored[i, j] = load_own_day_cell(results_dir, src.run)
+            else:
+                far[i, j], scored[i, j] = load_transfer_cell(results_dir, src.run, dst.run)
+    return far, scored
+
+
+def make_f5_transfer(results_dir: Path, out_dir: Path) -> Path:
+    far, _scored = transfer_matrix(results_dir)
+    n = len(TRANSFER_DAYS)
+
+    fig, ax = plt.subplots(figsize=(5.1, 3.5))
+    im = ax.imshow(far * 100.0, cmap="Greys", vmin=0.0, vmax=70.0, origin="upper")
+
+    for i in range(n):
+        for j in range(n):
+            value = far[i, j] * 100.0
+            own_day = i == j
+            if own_day:
+                # Hatch the diagonal so the "not a transfer measurement" reading
+                # survives a grayscale print, where the star alone could be missed.
+                ax.add_patch(
+                    Rectangle(
+                        (j - 0.5, i - 0.5), 1, 1,
+                        facecolor="none", edgecolor="#ffffff",
+                        hatch="////", linewidth=0.0, zorder=2,
+                    )
+                )
+            ax.text(
+                j, i,
+                f"{value:.1f}" + ("*" if own_day else ""),
+                ha="center", va="center", zorder=3,
+                fontsize=10.5, fontweight="bold",
+                color="white" if value > 38.0 else "#1a1a1a",
+            )
+
+    # Era boundary: day 0 is era A, days 1-2 are era B. A cell that crosses this
+    # line is a cross-era transfer; a cell inside a block is within-era.
+    boundary = [i for i in range(1, n) if TRANSFER_DAYS[i].era != TRANSFER_DAYS[i - 1].era]
+    for b in boundary:
+        ax.axhline(b - 0.5, color="#b3282d", linewidth=1.8, zorder=4)
+        ax.axvline(b - 0.5, color="#b3282d", linewidth=1.8, zorder=4)
+    if boundary:
+        ax.text(
+            boundary[0] - 0.5, -0.62, "instrumentation-era boundary",
+            ha="center", va="bottom", fontsize=6.5, color="#b3282d", clip_on=False,
+        )
+
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(
+        [f"{s.label}\n(era {s.era})" for s in TRANSFER_DAYS], fontsize=7.2
+    )
+    ax.set_yticklabels(
+        [f"{s.label} ({s.era})".replace("\n", " ") for s in TRANSFER_DAYS], fontsize=7.2
+    )
+    for tick_label, s in zip(ax.get_xticklabels(), TRANSFER_DAYS, strict=True):
+        tick_label.set_color(ERA_COLOR[s.era])
+    for tick_label, s in zip(ax.get_yticklabels(), TRANSFER_DAYS, strict=True):
+        tick_label.set_color(ERA_COLOR[s.era])
+    ax.set_xlabel("evaluated on")
+    ax.set_ylabel("calibrated on")
+    ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=1.4)
+    ax.tick_params(which="minor", length=0)
+    ax.tick_params(which="major", length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.text(
+        0.5, -0.30, "* own-day cell: calibrated and scored on the same day, not a transfer",
+        transform=ax.transAxes, ha="center", va="top",
+        fontsize=6.5, style="italic", color="#555555", clip_on=False,
+    )
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("realized false-alarm rate (% of scored windows)", fontsize=7.5)
+    alpha_pct = _TRANSFER_ALPHA * 100.0
+    # The nominal budget rides on the colorbar as its own labelled tick, so every
+    # cell can be read against it without a second annotation.
+    cbar.set_ticks([0.0, alpha_pct, 20.0, 40.0, 60.0])
+    cbar.set_ticklabels(["0", f"{alpha_pct:.0f} (α)", "20", "40", "60"])
+    cbar.ax.tick_params(labelsize=7.0)
+    cbar.ax.axhline(alpha_pct, color="#b3282d", linewidth=1.2)
+    cbar.ax.get_yticklabels()[1].set_color("#b3282d")
+    cbar.outline.set_visible(False)
+
+    fig.tight_layout()
+    out_path = out_dir / "f5_transfer.pdf"
+    fig.savefig(out_path, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -627,6 +805,7 @@ def make_all(results_dir: Path, out_dir: Path) -> list[Path]:
         make_f2_sentinel(results_dir, out_dir),
         make_f3_scarcity(results_dir, out_dir),
         make_f4_latency(results_dir, out_dir),
+        make_f5_transfer(results_dir, out_dir),
     ]
 
 
