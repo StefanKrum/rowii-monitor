@@ -61,11 +61,37 @@ main.live-page { max-width: 1320px; margin: 0 auto; padding: 20px 22px 40px; }
 .rings-row svg { width: 100%; height: auto; }
 .rings-row .ring-cell { flex: 1 1 0; text-align: center; }
 .sensor .mic-dot, .sensor .vib-dot { transition: opacity .25s ease, filter .25s ease; }
+.listen-marker { pointer-events: none; animation: listen-pulse 1.8s ease-in-out infinite; }
+@keyframes listen-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .scada-mini { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 12.5px; }
 .scada-mini-row { display: flex; justify-content: space-between; align-items: baseline; }
 .scada-mini-row .lbl { color: var(--dim); }
 .scada-mini-row .val { font-family: var(--font-mono); font-weight: 700; }
 .sensor-health { margin-top: 10px; font-size: 11.5px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+
+/* ---- listen control ---- */
+.listen-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hair-2); }
+.listen-block-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--dim); margin-bottom: 6px; }
+.listen-toggle { display: flex; flex-direction: column; border: 1px solid var(--hair); border-radius: 7px;
+  overflow: hidden; }
+.listen-toggle button {
+  font: 12px/1.3 var(--font-ui); font-weight: 700; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--hair);
+  cursor: pointer; background: var(--panel); color: var(--dim); text-align: left;
+  display: flex; align-items: center; gap: 7px;
+}
+.listen-toggle button:last-child { border-bottom: 0; }
+.listen-toggle button.active { background: var(--ink); color: var(--panel); }
+.listen-toggle button:not(.active):hover { background: var(--panel-2); color: var(--ink); }
+.listen-toggle button:disabled { opacity: .45; cursor: not-allowed; }
+.listen-toggle .listen-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .55;
+  flex: none; }
+.listen-toggle button.active .listen-dot { opacity: 1; }
+.listen-volume-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.listen-volume-row label { font-size: 10.5px; color: var(--dim); white-space: nowrap; }
+.listen-volume-row input[type="range"] { flex: 1; accent-color: var(--ink); }
+.listen-hint { font-size: 10.5px; color: var(--dim); min-height: 13px; margin-top: 6px; }
+.listen-hint.warn { color: var(--warn); font-weight: 700; }
 
 /* ---- ribbon (also the scrubber) ---- */
 .ribbon-wrap { position: relative; height: 46px; border-radius: 7px; overflow: hidden;
@@ -215,6 +241,22 @@ canvas#featureCanvas { display: block; width: 100%; height: 120px; }
           <div class="scada-mini-row"><span class="lbl">n</span><span class="val" id="scadaSpeedMini">— rpm</span></div>
         </div>
         <div class="sensor-health" id="sensorHealth"><span class="led ok"></span>4/4 streams reporting</div>
+        <div class="listen-block">
+          <div class="listen-block-label">Listen</div>
+          <div class="listen-toggle" id="listenToggle" role="radiogroup" aria-label="Listen to a microphone stream">
+            <button type="button" class="active" data-listen="muted" role="radio" aria-checked="true">
+              <span class="listen-dot" aria-hidden="true"></span>Muted</button>
+            <button type="button" data-listen="gen" role="radio" aria-checked="false">
+              <span class="listen-dot" aria-hidden="true"></span>Generator mic</button>
+            <button type="button" data-listen="tur" role="radio" aria-checked="false">
+              <span class="listen-dot" aria-hidden="true"></span>Turbine mic</button>
+          </div>
+          <div class="listen-volume-row" id="listenVolumeRow" style="display:none">
+            <label for="listenVolume">Vol</label>
+            <input type="range" id="listenVolume" min="0" max="1" step="0.01" value="0.85">
+          </div>
+          <div class="listen-hint" id="listenHint"></div>
+        </div>
       </div>
     </div>
 
@@ -308,6 +350,13 @@ canvas#featureCanvas { display: block; width: 100%; height: 120px; }
   <span class="transport-readout" id="transportReadout">00:00:00 / 00:00:00</span>
   <span class="transport-readout" id="transportSizeNote" style="margin-left:auto"></span>
 </div>
+
+<!-- Selectable live audio (see the "Listen" control in the Sensor panel above):
+     no "controls"/"autoplay" -- assets/live.js drives play/pause/seek/rate to
+     mirror the replay transport, `src` is set lazily on first selection so an
+     operator who never clicks "Listen" never fetches either ~80 MB file. -->
+<audio id="audioGen" preload="none"></audio>
+<audio id="audioTur" preload="none"></audio>
 
 </main>
 <footer class="site-footer" style="max-width:1320px">Krummenacher, 2026, University of St. Gallen &mdash; see

@@ -61,6 +61,7 @@ for _extra_path in (str(_SCRIPTS_DIR), str(_SRC_DIR)):
         sys.path.insert(0, _extra_path)
 
 import annotation_kit as ak  # noqa: E402
+import build_live_audio as lva  # noqa: E402
 import candidate_kit as ck  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import run_step1 as rs1  # noqa: E402
@@ -97,6 +98,20 @@ SENTINEL_JSON = (
 )
 CANDIDATES_CSV = RESULTS_ROOT / "candidate-kit" / "candidates.csv"
 CANDIDATES_META = RESULTS_ROOT / "candidate-kit" / "candidates_meta.json"
+AUDIO_DIR = REPO_ROOT / "docs" / "site" / "assets" / "live"
+AUDIO_META_JSON = AUDIO_DIR / f"{RUN}_audio_meta.json"
+"""Written by `scripts/build_live_audio.py` (the one step in this page's build
+that DOES touch `ROWII_DATA_ROOT` -- run rarely/manually, its two `.m4a` outputs
+committed like any other `docs/site/assets/` file). Reading this small, already-
+committed sidecar keeps `build_live_replay.py` itself honest about its own module
+docstring's "NEVER touches ROWII_DATA_ROOT" -- it folds in already-extracted
+audio metadata, never raw sensor data."""
+AUDIO_COVERAGE_SLACK_S = 1.0
+"""Seconds of tolerance `_check_audio_covers_replay` allows the extracted audio to
+fall short of the replay's own `[t0_utc, t0_utc + duration_s]` span by, before
+failing the build loudly -- covers only float/ISO round-trip noise, not a genuine
+extraction gap (the real audio in practice overshoots this span on both ends, see
+that function's own docstring)."""
 
 FEATURE_SNAPSHOT_STRIDE_S = 4
 """Feature-snapshot heatmap cadence: one column every N seconds of replay time --
@@ -465,6 +480,70 @@ def load_alerts(t0_ns: int) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Live audio (both mic streams, scripts/build_live_audio.py's own output)
+# ---------------------------------------------------------------------------
+
+
+def load_audio() -> dict[str, Any]:
+    """The `{"gen": {...}, "tur": {...}}` sidecar `scripts/build_live_audio.py`
+    already wrote under `AUDIO_DIR`, unchanged except for dropping its own
+    `"stream"` key (`assets/live.js` never needs the raw stream name, only the
+    `"gen"`/`"tur"` key it's already nested under and the human-readable
+    `"label"`).
+
+    Raises:
+        FileNotFoundError: if `AUDIO_META_JSON` does not exist -- run `python
+            scripts/build_live_audio.py` once (requires `ROWII_DATA_ROOT`) before
+            building this page; its two `.m4a` outputs plus this sidecar are then
+            committed like any other `docs/site/assets/` file, so every
+            subsequent `build_live_replay.py` run (which never touches
+            `ROWII_DATA_ROOT` itself) picks them up for free.
+    """
+    if not AUDIO_META_JSON.exists():
+        raise FileNotFoundError(
+            f"{AUDIO_META_JSON} not found -- run `python scripts/build_live_audio.py` "
+            "first (see that script's own module docstring)"
+        )
+    payload = json.loads(AUDIO_META_JSON.read_text(encoding="utf-8"))
+    streams = payload["streams"]
+    return {key: {k: v for k, v in meta.items() if k != "stream"} for key, meta in streams.items()}
+
+
+def _check_audio_covers_replay(t0_utc: str, duration_s: float, audio: dict[str, Any]) -> None:
+    """Fail loudly (not silently ship a broken sync) if either stream's extracted
+    audio does not actually span the replay's own `[t0_utc, t0_utc + duration_s]`
+    timeline -- the exact mapping `assets/live.js` applies client-side
+    (`build_live_audio.audio_offset_s`, the pinned reference `tests/
+    test_build_live_audio.py` checks) would then request a `currentTime` before 0
+    or past the `<audio>` element's own duration at some point during playback.
+    `AUDIO_COVERAGE_SLACK_S` tolerates only float/ISO round-trip noise -- on the
+    real 290626-tu extraction the audio comfortably outlasts the replay on the
+    start side and ends within a few MILLISECONDS of it on the end side (both
+    are ultimately derived from the same recording session's own real burst-file
+    boundaries), which is exactly why `assets/live.js`'s own `END_EPSILON_S`
+    safety clamp exists on the client side too.
+
+    Raises:
+        ValueError: if a stream's audio starts too late or ends too early to
+            cover the full replay span.
+    """
+    for key, meta in audio.items():
+        start_off = lva.audio_offset_s(0.0, t0_utc, str(meta["start_utc"]))
+        end_off = lva.audio_offset_s(duration_s, t0_utc, str(meta["start_utc"]))
+        if start_off < -AUDIO_COVERAGE_SLACK_S:
+            raise ValueError(
+                f"audio[{key!r}] starts {-start_off:.3f}s after the replay's own t0_utc "
+                "-- the opening seconds of the replay would have no audio"
+            )
+        if end_off > float(meta["duration_s"]) + AUDIO_COVERAGE_SLACK_S:
+            raise ValueError(
+                f"audio[{key!r}] ends {end_off - float(meta['duration_s']):.3f}s before the "
+                "replay's own t0_utc + duration_s -- the closing seconds of the replay "
+                "would have no audio"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
 
@@ -475,6 +554,8 @@ def build_payload() -> dict[str, Any]:
 
     primary = load_primary_timeline()
     t0_ns = primary.pop("t0_ns")
+    audio = load_audio()
+    _check_audio_covers_replay(primary["t0_utc"], primary["duration_s"], audio)
 
     payload: dict[str, Any] = {
         "run": RUN,
@@ -488,6 +569,7 @@ def build_payload() -> dict[str, Any]:
         "logmel": load_logmel_strip(),
         "features": load_feature_snapshot(),
         "alerts": load_alerts(t0_ns),
+        "audio": audio,
         "rings": {
             "generator": sc.render_ring_svg(
                 "GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False

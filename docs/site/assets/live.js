@@ -380,6 +380,11 @@
       row.classList.toggle("future", startS > playheadS);
     }
     renderKpis(playheadS);
+
+    // -- selectable live audio: keep the selected stream locked to this same
+    // playheadS. render() is the single funnel both the rAF playback loop and a
+    // ribbon scrub call through, so one hook here covers both.
+    syncAudio(playheadS);
   }
 
   function setRingLevel(stream, level01) {
@@ -392,6 +397,166 @@
         var scale = 1 + 0.55 * Math.max(0, Math.min(1, level01 || 0));
         dot.setAttribute("r", (5.6 * scale).toFixed(1));
       }
+    });
+  }
+
+  // -------------------------------------------------------------- selectable live audio
+  // "Listen" control (Sensor panel, left column): Muted (default -- nothing ever
+  // autoplays) / Generator mic / Turbine mic. The selected stream's <audio> element
+  // is kept in lockstep with the replay's own playhead -- the REPLAY is always the
+  // master clock (requestAnimationFrame-driven state.playheadS), never the other
+  // way around. `audioOffsetS` below is the exact JS mirror of the pinned Python
+  // reference `scripts/build_live_audio.py`'s `audio_offset_s` (see that
+  // function's own docstring) -- `tests/test_build_live_audio.py` is this
+  // formula's authoritative test, since this repo has no JS test runner.
+  var AUDIO = DATA.audio || null;
+  var audioEls = { gen: $("audioGen"), tur: $("audioTur") };
+  var listenToggleEl = $("listenToggle");
+  var listenHintEl = $("listenHint");
+  var listenState = { mode: "muted" };
+
+  var SYNC_TOLERANCE_S = 0.35;
+  /* Re-seek only once native playback drifts past this -- keeps the <audio>
+     element's own clock running smoothly in between (a reseek every frame would
+     sound choppy) while still catching ribbon scrubs immediately (a scrub is a
+     multi-second jump, far past this tolerance, so the very next render() call
+     corrects it without needing a separate "was this a scrub" signal). */
+  var END_EPSILON_S = 0.05;
+  /* Stay this far clear of `audio.duration` -- on the real 290626-tu extraction
+     the audio's own coverage ends within a few ms of the replay's own final
+     playhead second (both derived from the same recording session), so a raw
+     `currentTime` request could land ON or fractionally past `duration`. */
+  var MUTE_AT_OR_ABOVE_SPEED = 16;
+  /* Mirrors build_live_audio.MUTE_AT_OR_ABOVE_SPEED -- HTMLMediaElement.
+     playbackRate is unreliable at 16x in evergreen browsers (task instruction:
+     "browsers do not do 16x audio"). */
+
+  function audioOffsetS(playheadS, streamKey) {
+    // Mirrors scripts/build_live_audio.py's audio_offset_s(playhead_s, t0_utc,
+    // audio_start_utc) EXACTLY: playhead_s + (t0_utc - audio_start_utc), seconds.
+    if (!AUDIO || !AUDIO[streamKey]) return null;
+    var t0Ms = new Date(DATA.t0_utc).getTime();
+    var audioStartMs = new Date(AUDIO[streamKey].start_utc).getTime();
+    return playheadS + (t0Ms - audioStartMs) / 1000;
+  }
+
+  function listenPlaybackFor(speed) {
+    // Mirrors scripts/build_live_audio.py's audio_playback_for_speed(speed).
+    if (speed >= MUTE_AT_OR_ABOVE_SPEED) return { rate: 1.0, muted: true };
+    return { rate: speed, muted: false };
+  }
+
+  function clearListenMarkers() {
+    Array.prototype.forEach.call(document.querySelectorAll(".listen-marker"), function (m) {
+      m.parentNode.removeChild(m);
+    });
+  }
+
+  function setListenMarker(streamKey) {
+    // A small dashed ring around every mic-dot of the selected stream's own
+    // ring group -- injected client-side (never baked into the build-time SVG,
+    // which is static): the selection itself is a runtime, not a build-time,
+    // fact. Uniform across every position on that stream's ring, matching
+    // setRingLevel's own "one level per stream, applied to every marker on that
+    // stream" convention (site_common.py's module docstring: the physical
+    // position <-> DAQ-channel mapping was never verified).
+    clearListenMarkers();
+    if (!streamKey) return;
+    var streamName = streamKey === "gen" ? "RAWGeneratorMic__0" : "RAWTurbineMic__1";
+    var svgNs = "http://www.w3.org/2000/svg";
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[data-stream="' + streamName + '"] .mic-dot'),
+      function (dot) {
+        var marker = document.createElementNS(svgNs, "circle");
+        marker.setAttribute("class", "listen-marker");
+        marker.setAttribute("cx", dot.getAttribute("cx"));
+        marker.setAttribute("cy", dot.getAttribute("cy"));
+        marker.setAttribute("r", "10");
+        marker.setAttribute("fill", "none");
+        marker.setAttribute("stroke", "var(--ink)");
+        marker.setAttribute("stroke-width", "1.6");
+        marker.setAttribute("stroke-dasharray", "2.2 2.2");
+        dot.parentNode.appendChild(marker);
+      }
+    );
+  }
+
+  function applyListenSpeed() {
+    var pf = listenPlaybackFor(state.speed);
+    if (listenState.mode !== "muted") {
+      var el = audioEls[listenState.mode];
+      el.playbackRate = pf.rate;
+      el.muted = pf.muted;
+    }
+    var showHint = listenState.mode !== "muted" && pf.muted;
+    listenHintEl.textContent = showHint ? "audio muted above 4× (playback rate unsupported)" : "";
+    listenHintEl.classList.toggle("warn", showHint);
+  }
+
+  function syncAudio(playheadS, opts) {
+    opts = opts || {};
+    if (listenState.mode === "muted" || !AUDIO) return;
+    var el = audioEls[listenState.mode];
+    var target = audioOffsetS(playheadS, listenState.mode);
+    if (target === null) return;
+    var dur = isFinite(el.duration) && el.duration > 0 ? el.duration : null;
+    if (target < 0 || (dur !== null && target > dur)) {
+      // outside this stream's own extracted coverage -- stay silent rather than
+      // guess; real coverage margins are wide on the start side and only a few
+      // ms on the end side (see END_EPSILON_S), so this should not trigger
+      // anywhere inside [0, duration] on the real payload.
+      if (!el.paused) el.pause();
+      return;
+    }
+    var clamped = dur !== null ? Math.min(target, dur - END_EPSILON_S) : target;
+    clamped = Math.max(0, clamped);
+    var drift = Math.abs(el.currentTime - clamped);
+    if (opts.forceSeek || drift > SYNC_TOLERANCE_S) {
+      el.currentTime = clamped;
+    }
+    if (state.playing && el.paused) {
+      el.play().catch(function () { /* autoplay policy -- fine, a user gesture already selected this stream */ });
+    } else if (!state.playing && !el.paused) {
+      el.pause();
+    }
+  }
+
+  function setListenMode(mode) {
+    if (mode === listenState.mode) return;
+    if (listenState.mode !== "muted") audioEls[listenState.mode].pause();
+    listenState.mode = mode;
+    Array.prototype.forEach.call(listenToggleEl.querySelectorAll("button"), function (b) {
+      var active = b.dataset.listen === mode;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-checked", active ? "true" : "false");
+    });
+    setListenMarker(mode === "muted" ? null : mode);
+    $("listenVolumeRow").style.display = mode === "muted" ? "none" : "flex";
+    if (mode !== "muted" && AUDIO && AUDIO[mode]) {
+      var el = audioEls[mode];
+      if (!el.getAttribute("src")) {
+        el.src = AUDIO[mode].file; // lazy -- never fetched until first selected
+        el.volume = parseFloat($("listenVolume").value);
+      }
+      applyListenSpeed();
+      syncAudio(state.playheadS, { forceSeek: true });
+    } else {
+      listenHintEl.textContent = "";
+      listenHintEl.classList.remove("warn");
+    }
+  }
+
+  if (!AUDIO) {
+    Array.prototype.forEach.call(listenToggleEl.querySelectorAll("button[data-listen]"), function (b) {
+      if (b.dataset.listen !== "muted") b.disabled = true;
+    });
+    listenHintEl.textContent = "audio unavailable for this build";
+  } else {
+    Array.prototype.forEach.call(listenToggleEl.querySelectorAll("button"), function (btn) {
+      btn.addEventListener("click", function () { setListenMode(btn.dataset.listen); });
+    });
+    $("listenVolume").addEventListener("input", function (e) {
+      if (listenState.mode !== "muted") audioEls[listenState.mode].volume = parseFloat(e.target.value);
     });
   }
 
@@ -442,6 +607,10 @@
   $("playBtn").addEventListener("click", function () {
     state.playing = !state.playing;
     updatePlayButton();
+    // render() only runs on rAF ticks while state.playing is true, so a Pause
+    // click would otherwise leave the <audio> element playing on its own --
+    // sync explicitly, right here, for both directions.
+    syncAudio(state.playheadS, { forceSeek: true });
   });
   Array.prototype.forEach.call(document.querySelectorAll(".transport-speeds button"), function (btn) {
     btn.addEventListener("click", function () {
@@ -449,6 +618,7 @@
       Array.prototype.forEach.call(document.querySelectorAll(".transport-speeds button"), function (b) {
         b.classList.toggle("active", b === btn);
       });
+      applyListenSpeed();
     });
   });
 
@@ -483,4 +653,24 @@
   resizeCanvas();
   render(0);
   updatePlayButton();
+
+  // -------------------------------------------------------------- verification hook
+  // Read-only introspection for browser-automation verification only (this repo
+  // has no JS test runner) -- never read by the app itself.
+  window.__liveDebug = {
+    getPlayheadS: function () { return state.playheadS; },
+    getPlaying: function () { return state.playing; },
+    getSpeed: function () { return state.speed; },
+    getListenMode: function () { return listenState.mode; },
+    getT0Utc: function () { return DATA.t0_utc; },
+    getDurationS: function () { return duration; },
+    getAudioMeta: function () { return AUDIO; },
+    audioOffsetS: audioOffsetS,
+    listenPlaybackFor: listenPlaybackFor,
+    // Drives the exact same render() -> syncAudio() path a ribbon scrub or the
+    // rAF playback loop would -- for environments (headless/backgrounded tabs)
+    // where requestAnimationFrame is throttled and playheadS cannot be advanced
+    // just by waiting; see this repo's own verification notes.
+    renderAt: function (playheadS) { render(playheadS); },
+  };
 })();
