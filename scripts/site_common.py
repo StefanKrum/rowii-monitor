@@ -31,16 +31,16 @@ from dataclasses import dataclass
 # Design tokens -- BY VALUE identical to docs/site/assets/design.css's :root.
 # ---------------------------------------------------------------------------
 
-PAPER = "#eceef0"
+PAPER = "#e9ecf0"
 PANEL = "#ffffff"
 PANEL_2 = "#f7f8f9"
-INK = "#1f2a37"
-DIM = "#5b6b7c"
-HAIR = "#c7cdd4"
+INK = "#18202a"
+DIM = "#5c6b7d"
+HAIR = "#d3d9e0"
 HAIR_2 = "#dde1e6"
 
-LIVE = "#0f766e"
-ALARM = "#b93815"
+LIVE = "#0e8f6f"
+ALARM = "#c73a1d"
 WARN = "#a16207"
 
 STATE_COLORS: dict[str, str] = {
@@ -64,7 +64,7 @@ STATE_DISPLAY_NAME: dict[str, str] = {
     "unknown": "Unknown",
 }
 
-FONT_UI = '"Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif'
+FONT_UI = '"Helvetica Neue",Helvetica,Arial,sans-serif'
 FONT_MONO = '"SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace'
 
 
@@ -73,31 +73,44 @@ def state_color(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shared page chrome (topbar nav + footer) -- one Python source, every generated
-# page (sensors.html, live.html) calls this so nav markup never drifts between
-# hand-written pages (index.html, snippets.html, review.html) and generated ones.
+# Shared page chrome (v7 app bar + group label + footer) -- one Python source,
+# every generated page (sensors.html, live.html) calls this so nav markup never
+# drifts between hand-written pages (index.html, snippets.html, review.html) and
+# generated ones.
 # ---------------------------------------------------------------------------
 
-NAV_ITEMS: tuple[tuple[str, str], ...] = (
+NAV_ITEMS: list[tuple[str, str]] = [
     ("index.html", "Overview"),
     ("sensors.html", "Sensors"),
-    ("live.html", "Live Replay"),
-    ("snippets.html", "Listening Library"),
-    ("review.html", "Candidate Review"),
-)
+    ("live.html", "Live replay"),
+    ("audio_review.html", "Audio &amp; review"),
+]
 
 
-def topbar_html(active_href: str) -> str:
-    links = "\n    ".join(
-        f'<a href="{href}"{" class=\"active\"" if href == active_href else ""}>{label}</a>'
+def app_bar_html(active_href: str, *, status_html: str = "") -> str:
+    """v7 app bar: brand + tab nav + optional right-side status block.
+
+    `active_href` marks the active tab. Any `live-*.html` page counts as
+    `live.html` so per-session replay pages highlight the Live tab."""
+    active = "live.html" if active_href.startswith("live") else active_href
+    links = "".join(
+        f'<a href="{href}"{" class=\"active\"" if href == active else ""}>{label}</a>'
         for href, label in NAV_ITEMS
     )
+    status = f'<div class="app-status">{status_html}</div>' if status_html else ""
     return (
-        '<header class="topbar">\n'
-        '  <div class="brand"><span class="brand-mark">ROWII</span>'
-        '<span class="brand-sub">Monitor</span></div>\n'
-        f'  <nav class="nav">\n    {links}\n  </nav>\n'
-        "</header>"
+        '<header class="app-bar">'
+        '<div class="app-brand"><b>ROWII</b><span>&thinsp;MONITOR</span></div>'
+        f'<nav class="app-tabs">{links}</nav>{status}</header>'
+    )
+
+
+def group_label_html(label: str, caption: str = "") -> str:
+    """v7 group label row: uppercase label + hairline + optional right caption."""
+    cap = f'<span class="cap">{caption}</span>' if caption else ""
+    return (
+        f'<div class="group-label"><span class="t">{label}</span>'
+        f'<span class="ln"></span>{cap}</div>'
     )
 
 

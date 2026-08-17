@@ -306,3 +306,28 @@ def test_design_css_v7_tokens_and_no_legacy_look() -> None:
     assert "Avenir Next" not in css
     assert "--paper: #eceef0" not in css
     assert ".topbar" not in css
+
+
+# ---------------------------------------------------------------------------
+# 6. site_common v7 chrome helpers -- app_bar_html / group_label_html
+# ---------------------------------------------------------------------------
+
+
+def test_app_bar_html_nav_and_active() -> None:
+    import site_common as sc
+    html = sc.app_bar_html("live.html", status_html='<span class="rep">● REPLAY</span>')
+    assert 'class="app-bar"' in html
+    assert html.count("<a ") == 4
+    for label in ["Overview", "Sensors", "Live replay", "Audio &amp; review"]:
+        assert label in html
+    assert 'href="live.html" class="active"' in html
+    assert "● REPLAY" in html
+    assert "snippets.html" not in html and 'href="review.html"' not in html
+
+
+def test_group_label_html() -> None:
+    import site_common as sc
+    html = sc.group_label_html("Session timeline", "full day · click or drag to seek")
+    assert 'class="group-label"' in html
+    assert "SESSION TIMELINE" in html.upper()
+    assert "full day · click or drag to seek" in html

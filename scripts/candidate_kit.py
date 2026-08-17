@@ -3577,12 +3577,15 @@ def _prefixed_metas(
 
 
 def _review_page_head(*, title: str, date_note: str) -> str:
-    """Shared page chrome for `index.html`/`index_static.html`: the site topbar
+    """Shared page chrome for `index.html`/`index_static.html`: the site app bar
     nav (SAME markup as every other `docs/site/*.html` page -- `site_common.
-    topbar_html`) plus the page title and a one-line date/session-count note.
-    `review.html`'s own nav link is marked active."""
+    app_bar_html`) plus the page title and a one-line date/session-count note.
+    `review.html` is not itself a v7 `NAV_ITEMS` entry (that slot is
+    `audio_review.html`, not yet built -- see `site_common.py`), so no tab
+    shows active here until this page is folded into the audio-review
+    composer task."""
     return (
-        f"{sc.topbar_html('review.html')}\n"
+        f"{sc.app_bar_html('review.html')}\n"
         '<main class="review-page">\n'
         f"<h1>{html.escape(title)}</h1>\n"
         f'<p class="date-header">{html.escape(date_note)}</p>\n'

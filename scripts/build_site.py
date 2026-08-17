@@ -567,7 +567,7 @@ def _page_shell(
 <link rel="stylesheet" href="assets/design.css">
 {style_tag}</head>
 <body>
-{sc.topbar_html(active_file)}
+{sc.app_bar_html(active_file)}
 <main class="{page_cls}">
 {body_html}
 </main>
