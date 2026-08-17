@@ -3,419 +3,197 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Live Replay — ROWII Monitor</title>
+<title>Live replay — ROWII Monitor</title>
 <link rel="stylesheet" href="assets/design.css">
 <style>
-main.live-page { max-width: 1320px; margin: 0 auto; padding: 20px 22px 40px; }
-.live-head { margin-bottom: 14px; }
-.live-head h1 { font-size: 22px; margin-bottom: 2px; }
-.live-head p { color: var(--dim); font-size: 13px; max-width: 90ch; margin: 0; }
-
-/* ---- status bar ---- */
-.status-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  flex-wrap: wrap; background: var(--panel); border: 1px solid var(--hair);
-  border-radius: var(--radius-lg); padding: 10px 16px; margin: 14px 0;
-}
-.status-left, .status-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.unit-name { font-weight: 800; font-size: 14px; letter-spacing: -.01em; }
-.led { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.led.ok { background: var(--live); box-shadow: 0 0 0 3px rgba(15,118,110,.15); }
-.led.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(161,98,7,.15); }
-.led.alarm { background: var(--alarm); box-shadow: 0 0 0 3px rgba(185,56,21,.15); }
-.sim-date { font-size: 12px; font-weight: 700; color: var(--dim); letter-spacing: .02em; }
-.sim-clock { font-size: 15px; font-weight: 700; letter-spacing: .02em; }
-
-/* ---- KPI strip ---- */
-.kpi-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
-@media (max-width: 980px) { .kpi-strip { grid-template-columns: repeat(2, 1fr); } }
-.kpi {
-  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
-  padding: 11px 14px;
-}
-.kpi .kpi-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--dim); margin-bottom: 4px; }
-.kpi .kpi-value { font-size: 19px; font-weight: 800; font-family: var(--font-mono); }
-.kpi .kpi-sub { font-size: 11px; color: var(--dim); margin-top: 3px;
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.state-kpi .kpi-value { display: inline-flex; align-items: center; gap: 7px; }
-.state-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
-.conf-chip { font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid; white-space: nowrap; }
-.conf-chip.ok { color: var(--live); border-color: var(--live); }
-.conf-chip.warn { color: var(--warn); border-color: var(--warn); }
-
-/* ---- layout grids ---- */
-.live-grid { display: grid; grid-template-columns: 280px 1fr; gap: 14px; align-items: start; }
-@media (max-width: 980px) { .live-grid { grid-template-columns: 1fr; } }
-.live-col-left { display: flex; flex-direction: column; gap: 12px; }
-.live-col-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.panel-block { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
-  padding: 13px 15px; }
-.panel-block h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim);
-  margin: 0 0 10px; }
-
-/* ---- band separator between the plant view and the diagnostics band ---- */
-.band-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-  margin: 22px 0 10px; padding-top: 14px; border-top: 1px solid var(--hair); }
-.band-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 0; }
-.band-head p { font-size: 11.5px; color: var(--dim); margin: 0; }
-
-/* ---- sensor panel ---- */
-.rings-row { display: flex; gap: 10px; justify-content: space-between; }
-.rings-row svg { width: 100%; max-width: 196px; height: auto; }
-.rings-row .ring-cell { flex: 1 1 0; text-align: center; }
-.sensor .mic-dot, .sensor .vib-dot { transition: opacity .25s ease, filter .25s ease; }
-.listen-marker { pointer-events: none; animation: listen-pulse 1.8s ease-in-out infinite; }
-@keyframes listen-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-.sensor-health { margin-top: 10px; font-size: 11.5px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
-
-/* ---- listen control ---- */
-.listen-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hair-2); }
-.listen-block-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--dim); margin-bottom: 6px; }
-.listen-toggle { display: flex; flex-direction: column; border: 1px solid var(--hair); border-radius: 7px;
-  overflow: hidden; }
-.listen-toggle button {
-  font: 12px/1.3 var(--font-ui); font-weight: 700; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--hair);
-  cursor: pointer; background: var(--panel); color: var(--dim); text-align: left;
-  display: flex; align-items: center; gap: 7px;
-}
-.listen-toggle button:last-child { border-bottom: 0; }
-.listen-toggle button.active { background: var(--ink); color: var(--panel); }
-.listen-toggle button:not(.active):hover { background: var(--panel-2); color: var(--ink); }
-.listen-toggle button:disabled { opacity: .45; cursor: not-allowed; }
-.listen-toggle .listen-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .55;
-  flex: none; }
-.listen-toggle button.active .listen-dot { opacity: 1; }
-.listen-volume-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.listen-volume-row label { font-size: 10.5px; color: var(--dim); white-space: nowrap; }
-.listen-volume-row input[type="range"] { flex: 1; accent-color: var(--ink); }
-.listen-hint { font-size: 10.5px; color: var(--dim); min-height: 13px; margin-top: 6px; }
-.listen-hint.warn { color: var(--warn); font-weight: 700; }
-
-/* ---- session timeline: two labelled ribbon rows, one shared playhead/scrubber ---- */
-.timeline-rows { display: grid; grid-template-columns: 108px 1fr; column-gap: 8px; }
-@media (max-width: 620px) { .timeline-rows { grid-template-columns: 1fr; } .timeline-labels { display: none; } }
-.timeline-labels { display: grid; grid-template-rows: 30px 26px; align-content: start; }
-.timeline-labels span { font-size: 10px; line-height: 1.2; color: var(--dim); align-self: center; }
-.timeline-labels b { display: block; color: var(--ink); font-size: 10.5px; }
-.ribbon-wrap { position: relative; border-radius: 7px; overflow: hidden;
-  border: 1px solid var(--hair); cursor: pointer; background: var(--panel-2); }
-.ribbon-track { position: relative; height: 30px; }
-.ribbon-track.scada-track { height: 26px; border-top: 1px solid var(--hair); }
-.ribbon-seg { position: absolute; top: 0; bottom: 0; overflow: hidden; }
-.ribbon-seg-label { display: block; font-size: 9.5px; font-weight: 700; color: #fff; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
-  padding: 0 0 0 5px; line-height: 26px; text-shadow: 0 1px 1px rgba(31,42,55,.45); pointer-events: none; }
-.ribbon-track .ribbon-seg-label { line-height: 30px; }
-.ribbon-track.scada-track .ribbon-seg-label { line-height: 26px; }
-.ribbon-tick { position: absolute; top: 0; width: 2px; height: 9px; background: var(--alarm); opacity: .85; z-index: 3; }
-.ribbon-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.6); pointer-events: none; z-index: 4; }
-.ribbon-empty { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 6px;
-  font-size: 10.5px; color: var(--dim); }
-.ribbon-caption { grid-column: 2; display: flex; justify-content: space-between; gap: 10px;
-  font-size: 10.5px; color: var(--dim); margin-top: 5px; font-family: var(--font-mono); }
-@media (max-width: 620px) { .ribbon-caption { grid-column: 1; } }
-
-/* ---- SCADA trend (same x-axis as the ribbons above it) ---- */
-.trend-row { display: grid; grid-template-columns: 108px 1fr; column-gap: 8px; margin-top: 10px; }
-@media (max-width: 620px) { .trend-row { grid-template-columns: 1fr; } .trend-label { display: none; } }
-.trend-label { font-size: 10px; line-height: 1.2; color: var(--dim); align-self: center; }
-.trend-label b { display: block; color: var(--ink); font-size: 10.5px; }
-.scada-trend { position: relative; height: 62px; border: 1px solid var(--hair); border-radius: 7px;
-  background: var(--panel-2); overflow: hidden; }
-.scada-trend svg { width: 100%; height: 100%; display: block; }
-.trend-caption { grid-column: 2; display: flex; justify-content: space-between; gap: 10px;
-  font-size: 10.5px; color: var(--dim); margin-top: 5px; font-family: var(--font-mono); }
-@media (max-width: 620px) { .trend-caption { grid-column: 1; } }
-
-/* ---- SCADA context readout (under the ribbons) ---- */
-.scada-readout { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 11px; padding-top: 10px;
-  border-top: 1px solid var(--hair-2); }
-.sr-item { display: flex; flex-direction: column; gap: 2px; }
-.sr-k { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
-.sr-v { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; }
-
-/* ---- logmel + pvalue ---- */
-.logmel-viewport { position: relative; height: 96px; overflow: hidden; border-radius: 7px;
-  border: 1px solid var(--hair); background: #1a1120; }
-.logmel-strip { position: absolute; top: 0; left: 0; height: 96px; image-rendering: pixelated; }
-.logmel-playhead { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: #fff;
-  box-shadow: 0 0 4px rgba(0,0,0,.5); }
-.pvalue-chart-wrap { position: relative; height: 150px; border-radius: 7px; border: 1px solid var(--hair);
-  background: var(--panel-2); overflow: hidden; }
-.pvalue-chart-wrap svg { width: 100%; height: 100%; display: block; }
-
-/* ---- alarm panel ---- */
-.feed-panel { margin-top: 12px; }
-.alarm-list { display: flex; flex-direction: column; gap: 0; max-height: 340px; overflow-y: auto; }
-.alarm-row { display: grid; grid-template-columns: 78px 74px 90px 1fr 20px; gap: 10px; align-items: center;
-  padding: 8px 4px; border-bottom: 1px solid var(--hair-2); font-size: 12px; cursor: pointer; }
-.alarm-row:last-child { border-bottom: none; }
-.alarm-row:hover { background: var(--panel-2); }
-.alarm-row.acked { opacity: .42; }
-.alarm-row.future { opacity: .35; }
-.alarm-time { font-family: var(--font-mono); color: var(--dim); }
-.path-badge { font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 999px; text-align: center;
-  border: 1px solid; white-space: nowrap; }
-.path-badge.sustained { color: var(--warn); border-color: var(--warn); }
-.path-badge.transient { color: var(--alarm); border-color: var(--alarm); }
-.path-badge.impulse { color: var(--ink); border-color: var(--hair); }
-.alarm-state { font-weight: 700; font-size: 11.5px; }
-.alarm-why { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.alarm-why .mismatch { color: var(--warn); font-weight: 700; }
-.alarm-empty { color: var(--dim); font-size: 12.5px; padding: 10px 4px; }
-.feed-legend { font-size: 11px; color: var(--dim); margin-top: 10px; padding-top: 9px;
-  border-top: 1px solid var(--hair-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.feed-legend .path-badge { display: inline-block; }
-
-/* ---- transport ---- */
-.transport { position: sticky; bottom: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
-  background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius-lg);
-  padding: 10px 14px; margin-top: 14px; box-shadow: 0 -4px 14px rgba(31,42,55,.06); }
-.transport-speeds { display: flex; gap: 3px; }
-.transport-speeds button { font: 11px/1 var(--font-mono); font-weight: 700; padding: 6px 9px; border-radius: 5px; }
-.transport-speeds button.active { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-.transport-readout { font-family: var(--font-mono); font-size: 12px; color: var(--dim); white-space: nowrap; }
-#playBtn { min-width: 64px; }
-
-/* ---- pipeline diagnostics band ---- */
-.diag-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 1080px) { .diag-grid { grid-template-columns: 1fr; } }
-.pipe-col { position: relative; }
-.pipe-col + .pipe-col::before { content: "\2192"; position: absolute; left: -14px; top: 12px;
-  font-size: 13px; line-height: 1; color: var(--dim); }
-@media (max-width: 1080px) { .pipe-col + .pipe-col::before { content: none; } }
-.stage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.stage-head .stage-no { font-size: 10px; font-weight: 800; color: var(--dim); text-transform: uppercase;
-  letter-spacing: .07em; white-space: nowrap; }
-.feature-boxes { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.feature-box { border: 1px solid var(--hair); border-radius: 7px; padding: 8px 10px; font-size: 11.5px; }
-.feature-box .fb-name { font-weight: 700; color: var(--ink); }
-.feature-box .fb-dim { font-family: var(--font-mono); color: var(--dim); float: right; }
-.heatmap-canvas-wrap { border: 1px solid var(--hair); border-radius: 7px; overflow: hidden;
-  background: var(--panel-2); }
-canvas#featureCanvas { display: block; width: 100%; height: 120px; }
-.gauge-wrap { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
-.gauge-bar { flex: 1; height: 10px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--hair);
-  position: relative; overflow: hidden; }
-.gauge-fill { position: absolute; inset: 0; width: 0%; background: var(--live); border-radius: 6px 0 0 6px; }
-.gauge-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); }
-.gauge-val { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
-.kv-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 4px 0;
-  border-bottom: 1px solid var(--hair-2); }
-.kv-row:last-child { border-bottom: none; }
-.kv-row .k { color: var(--dim); }
-.kv-row .v { font-family: var(--font-mono); font-weight: 700; text-align: right; }
-.agree-badge { font-size: 10.5px; font-weight: 800; padding: 2px 8px; border-radius: 999px; border: 1px solid; }
-.agree-badge.agree { color: var(--live); border-color: var(--live); }
-.agree-badge.disagree { color: var(--warn); border-color: var(--warn); }
-.panel-note { font-size: 11px; color: var(--dim); margin: 10px 0 0; }
+main.live-page { max-width: 1200px; margin: 0 auto; padding: 0 0 0; }
+.spec-panel { height: 118px; }
 </style>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div>
-  <nav class="nav">
+
+<header class="app-bar">
+  <div class="app-brand"><b>ROWII</b><span>&thinsp;MONITOR</span></div>
+  <nav class="app-tabs">
     <a href="index.html">Overview</a>
     <a href="sensors.html">Sensors</a>
-    <a href="live.html" class="active">Live Replay</a>
-    <a href="snippets.html">Listening Library</a>
-    <a href="review.html">Candidate Review</a>
+    <a href="live.html" class="active">Live replay</a>
+    <a href="audio_review.html">Audio &amp; review</a>
   </nav>
+  <div class="app-status">
+    <span class="rep">● REPLAY</span>
+    <span id="simDate">—</span>
+    <span class="clk mono" id="simClock">--:--:-- UTC</span>
+  </div>
 </header>
+
 <main class="live-page">
 
-<div class="live-head">
-  <h1>Live replay — <span id="headRunLabel">290626-tu</span></h1>
-  <p>A real replay of one recorded session, driven entirely by precomputed real
-  outputs (Step&nbsp;1 state detection, Step&nbsp;2 conformal scoring, the drift
-  sentinel, and the candidate register) &mdash; no data leaves this page and nothing
-  here is a live sensor feed. The plant view (status, sensor map, session timeline,
-  alarm feed) is what an operator watches; the <strong>pipeline diagnostics</strong>
-  band underneath shows, for the same instant under the playhead, what the detector
-  actually computed to get there.</p>
+<div class="group-label"><span class="t">Recording</span><span class="ln"></span>
+  <span class="cap">replay of recorded data — not a live feed · <span id="headRunLabel">—</span></span></div>
+<div class="session-cards" id="sessionCards"><!-- injected from payload.sessions_nav --></div>
+
+<div class="kpi-band">
+  <div class="kpi">
+    <div class="k">Operating state — step 1</div>
+    <div class="v"><span class="state-dot" id="stateDotKpi"></span><b id="stateNameKpi">—</b></div>
+    <div class="s"><span id="stateSinceKpi">since —</span> · <span id="stateConfKpi">—</span></div>
+  </div>
+  <div class="kpi">
+    <div class="k">Active power P</div>
+    <div class="v mono" id="powerKpi">— <span class="u">MW</span></div>
+    <div class="s">SCADA, 1 Hz mean</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Shaft speed n</div>
+    <div class="v mono" id="speedKpi">— <span class="u">rpm</span></div>
+    <div class="s">turbine +, pump −</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Alarm episodes today</div>
+    <div class="v mono" id="totalAlarmsKpi">— <span class="u">episodes</span></div>
+    <div class="s"><span class="text-alarm" id="activeAlarmsKpi">—</span> · rows in register</div>
+  </div>
+  <div class="kpi">
+    <div class="k">False-alarm rate</div>
+    <div class="v mono" id="farKpi">— <span class="u">% of windows</span></div>
+    <div class="s" id="farKpiSub">realized · budget α = 5 %</div>
+  </div>
 </div>
 
-<!-- ===================== PLANT STATUS ===================== -->
-<div class="status-bar">
-  <div class="status-left">
-    <span class="unit-name" id="unitName">ROWII Machine 1</span>
-    <span class="chip"><span class="dot text-live" style="color:var(--live)"></span>REPLAY</span>
-    <span class="chip" id="eraChip">Era — thresholds —</span>
-    <span class="chip" id="sentinelChip"><span class="led" id="sentinelLed"></span>Sentinel —</span>
+<div class="group-label"><span class="t">Session timeline</span><span class="ln"></span>
+  <span class="cap">full day · click or drag to seek · top: detector, bottom: SCADA rules</span></div>
+<div class="panel panel-pad" style="margin: 0 18px;">
+  <div class="ribbon-row">
+    <div class="ribbon-label"><b>Detector</b>step 1</div>
+    <div class="ribbon" id="ribbonWrapDetected"><div class="ribbon-track" id="ribbonTrackDetected"></div></div>
   </div>
-  <div class="status-right">
-    <span class="sim-date" id="simDate">—</span>
-    <span class="sim-clock mono" id="simClock">--:--:-- UTC</span>
+  <div class="ribbon-row">
+    <div class="ribbon-label"><b>SCADA</b>rule-based</div>
+    <div class="ribbon slim" id="ribbonWrapScada"><div class="ribbon-track" id="ribbonTrackScada"></div></div>
   </div>
-</div>
-
-<div class="kpi-strip">
-  <div class="kpi state-kpi">
-    <div class="kpi-label">Operating state</div>
-    <div class="kpi-value"><span class="state-dot" id="stateDotKpi"></span><span id="stateNameKpi">—</span></div>
-    <div class="kpi-sub"><span id="stateSinceKpi">since —</span><span class="conf-chip" id="stateConfKpi">—</span></div>
+  <div class="legend">
+    <span><span class="sw bg-turbine"></span>Turbine</span>
+    <span><span class="sw bg-pump"></span>Pump</span>
+    <span><span class="sw bg-phase-shifter"></span>Phase-shifter</span>
+    <span><span class="sw bg-standstill"></span>Standstill</span>
+    <span><span class="sw bg-transition"></span>Transition</span>
+    <span><span class="td"></span>Alarm episode → register</span>
+    <span class="agree" id="agreeLine">—</span>
   </div>
-  <div class="kpi"><div class="kpi-label">Active power P</div>
-    <div class="kpi-value" id="powerKpi">— MW</div><div class="kpi-sub">SCADA 1&nbsp;Hz mean</div></div>
-  <div class="kpi"><div class="kpi-label">Shaft speed n</div>
-    <div class="kpi-value" id="speedKpi">— rpm</div><div class="kpi-sub">turbine +, pump &minus;</div></div>
-  <div class="kpi"><div class="kpi-label">Active alarms</div>
-    <div class="kpi-value" id="activeAlarmsKpi">0</div><div class="kpi-sub" id="totalAlarmsKpi">of 0 today</div></div>
-  <div class="kpi"><div class="kpi-label">Realized FAR vs budget</div>
-    <div class="kpi-value" id="farKpi">—</div><div class="kpi-sub" id="farKpiSub">nominal &alpha;=0.05</div></div>
-</div>
-
-<!-- ===================== MACHINE + SESSION ===================== -->
-<div class="live-grid">
-  <div class="live-col-left">
-    <div class="panel-block">
-      <h3>Sensor map</h3>
-      <div class="rings-row" id="ringsRow"><!-- injected --></div>
-      <div class="sensor-health" id="sensorHealth"><span class="led ok"></span>4/4 streams reporting</div>
-      <div class="listen-block">
-        <div class="listen-block-label">Listen</div>
-        <div class="listen-toggle" id="listenToggle" role="radiogroup" aria-label="Listen to a microphone stream">
-          <button type="button" class="active" data-listen="muted" role="radio" aria-checked="true">
-            <span class="listen-dot" aria-hidden="true"></span>Muted</button>
-          <button type="button" data-listen="gen" role="radio" aria-checked="false">
-            <span class="listen-dot" aria-hidden="true"></span>Generator mic</button>
-          <button type="button" data-listen="tur" role="radio" aria-checked="false">
-            <span class="listen-dot" aria-hidden="true"></span>Turbine mic</button>
-        </div>
-        <div class="listen-volume-row" id="listenVolumeRow" style="display:none">
-          <label for="listenVolume">Vol</label>
-          <input type="range" id="listenVolume" min="0" max="1" step="0.01" value="0.85">
-        </div>
-        <div class="listen-hint" id="listenHint"></div>
-      </div>
+  <div class="trend-wrap" id="scadaTrendRows">
+    <div class="trend-row">
+      <div class="trend-label"><span class="n">P · active power</span>
+        <span class="lv mono" id="trendValP">— <span class="u">MW</span></span></div>
+      <div class="trend-chart" style="height:38px" data-channel="power"></div>
     </div>
-  </div>
-
-  <div class="live-col-main">
-    <div class="panel-block">
-      <h3>Session timeline &amp; SCADA context — full day (drag or click to seek)</h3>
-      <div class="timeline-rows">
-        <div class="timeline-labels">
-          <span><b>Detected</b>Step 1</span>
-          <span><b>SCADA</b>rule-based</span>
-        </div>
-        <div class="ribbon-wrap" id="ribbonWrap">
-          <div class="ribbon-track detected-track" id="ribbonTrackDetected"></div>
-          <div class="ribbon-track scada-track" id="ribbonTrackScada"></div>
-          <div class="ribbon-playhead" id="ribbonPlayhead"></div>
-        </div>
-        <div class="ribbon-caption"><span id="ribbonStart">00:00:00</span><span>colour = operating mode
-        &middot; red ticks = alarm episodes &middot; hover a narrow block for its name</span><span
-        id="ribbonEnd">00:00:00</span></div>
-      </div>
-      <div class="trend-row">
-        <div class="trend-label"><b>SCADA</b>P &middot; n</div>
-        <div class="scada-trend" id="scadaTrend"><!-- svg injected --></div>
-        <div class="trend-caption" id="scadaTrendCaption"></div>
-      </div>
-      <div class="scada-readout">
-        <div class="sr-item"><span class="sr-k">SCADA mode</span><span class="sr-v" id="s1ScadaState">—</span></div>
-        <div class="sr-item"><span class="sr-k">Load bin</span><span class="sr-v" id="s1LoadBin">—</span></div>
-        <div class="sr-item"><span class="sr-k">Detector agreement</span>
-          <span class="sr-v" id="s1Agree"><span class="agree-badge">—</span></span></div>
-      </div>
+    <div class="trend-row">
+      <div class="trend-label"><span class="n">n · shaft speed</span>
+        <span class="lv mono" id="trendValN">— <span class="u">rpm</span></span></div>
+      <div class="trend-chart" style="height:26px" data-channel="speed"></div>
     </div>
+    <div class="trend-row">
+      <div class="trend-label"><span class="n">Q · net flow</span>
+        <span class="lv mono" id="trendValQ">— <span class="u">m³/s</span></span></div>
+      <div class="trend-chart" style="height:26px" data-channel="flow"></div>
+    </div>
+    <div class="trend-row" style="margin-bottom:0">
+      <div class="trend-label"><span class="n">KS · spherical valve</span>
+        <span class="lv mono" id="trendValKS">— <span class="u">pos</span></span></div>
+      <div class="trend-chart" style="height:26px" data-channel="ks"></div>
+    </div>
+    <div class="trend-playhead" id="trendPlayhead"></div>
+  </div>
+  <div class="trend-cap">values left of each curve = <b>at the playhead</b> · curves = the whole session, same time axis as the ribbons · timeline row markers: <span class="mono" id="ribbonStart">00:00:00</span>–<span class="mono" id="ribbonEnd">00:00:00</span></div>
+  <div class="ribbon-playhead" id="ribbonPlayhead" style="display:none"></div>
+</div>
+
+<div class="group-label"><span class="t">Spectrogram</span><span class="ln"></span>
+  <span class="cap">what you hear, as an image — bright = loud · pick mic &amp; volume in the player bar</span></div>
+<div class="panel panel-pad" style="margin: 0 18px;">
+  <div class="panel-head">
+    <span class="t">Log-mel · ±30 s around playhead</span>
+    <span class="r mono">listening: <span class="ok" id="specListenLabel">muted</span> · 64 mel bands · 0–8 kHz</span>
+  </div>
+  <div class="spec-panel" id="logmelViewport">
+    <img id="logmelStrip" alt="Scrolling log-mel spectrogram">
+    <span class="spec-axis" style="top:5px;left:5px">8 kHz</span>
+    <span class="spec-axis" style="bottom:4px;left:5px">0 kHz</span>
+    <span class="spec-axis" style="bottom:4px;left:44%">−30 s</span>
+    <span class="spec-axis" style="bottom:4px;right:5px">+30 s</span>
+    <div class="spec-playhead"></div>
   </div>
 </div>
 
-<div class="panel-block feed-panel">
-  <h3>Alarm feed — today's candidate register for this session</h3>
-  <div class="alarm-list" id="alarmList"><!-- injected --></div>
-  <div class="feed-legend" id="feedLegend"><!-- injected --></div>
-</div>
-
-<!-- ===================== PIPELINE DIAGNOSTICS ===================== -->
-<div class="band-head">
-  <h2>Pipeline diagnostics</h2>
-  <p>The same instant under the playhead, as the detector sees it: features &rarr; Step&nbsp;1 &rarr; Step&nbsp;2.</p>
-</div>
-
-<div class="diag-grid">
-  <div class="panel-block pipe-col">
-    <div class="stage-head"><h3 style="margin:0">Features</h3><span class="stage-no">1 &middot; per window</span></div>
-    <div class="logmel-viewport" id="logmelViewport">
-      <img class="logmel-strip" id="logmelStrip" alt="Scrolling log-mel spectrogram">
-      <div class="logmel-playhead"></div>
-    </div>
-    <div class="heatmap-canvas-wrap" style="margin-top:10px"><canvas id="featureCanvas" width="600" height="120"></canvas></div>
-    <div class="feature-boxes">
-      <div class="feature-box"><span class="fb-name">Audio (handcrafted)</span><span class="fb-dim" id="audioDim">135-d</span></div>
-      <div class="feature-box"><span class="fb-name">Vibration (handcrafted)</span><span class="fb-dim" id="vibDim">96-d</span></div>
-      <div class="feature-box"><span class="fb-name">Fusion (concatenated, scored)</span><span class="fb-dim" id="fusionDim">231-d</span></div>
-      <div class="feature-box"><span class="fb-name">BEATs (mic embedding, shown as live L2 norm)</span><span class="fb-dim" id="beatsDim">1536-d</span>
-        <div class="gauge-wrap" style="margin-top:6px"><div class="gauge-bar"><div class="gauge-fill" id="beatsGaugeFill"></div></div>
-        <span class="gauge-val" id="beatsGaugeVal">—</span></div>
-      </div>
-    </div>
+<div class="group-label"><span class="t">Pipeline diagnostics</span><span class="ln"></span>
+  <span class="cap">the same second under the playhead, stage by stage</span></div>
+<div class="stage-grid">
+  <div class="panel stage">
+    <div class="panel-head"><span class="t">Stage 1 — input features</span><span class="r mono">231 features</span></div>
+    <div id="topFeatures"><!-- injected: .fp-row entries --></div>
+    <div class="fp-strip-wrap"><canvas id="fpStripCanvas" height="18"></canvas></div>
+    <div class="fp-note">most deviating of 231 features, in σ vs. this session's mean · full vector below — audio (135) | vibration (96), orange = deviating</div>
   </div>
-
-  <div class="panel-block pipe-col">
-    <div class="stage-head"><h3 style="margin:0">Step 1 — state detection</h3><span class="stage-no">2 &middot; per window</span></div>
+  <div class="panel stage">
+    <div class="panel-head"><span class="t">Stage 2 — state &amp; drift sentinel</span></div>
     <div class="kv-row"><span class="k">Detected state</span><span class="v" id="s1State">—</span></div>
-    <div class="kv-row"><span class="k">Cluster (mode bank)</span><span class="v" id="s1Cluster">—</span></div>
-    <div class="kv-row"><span class="k">Since</span><span class="v" id="s1Since">—</span></div>
+    <div class="kv-row"><span class="k">Mode bank</span><span class="v" id="s1Cluster">—</span></div>
+    <div class="kv-row"><span class="k">State since</span><span class="v mono" id="s1Since">—</span></div>
     <div class="kv-row"><span class="k">Confidence</span><span class="v" id="s1Confidence">—</span></div>
-    <div class="stage-head" style="margin-top:14px"><h3 style="margin:0">Drift sentinel (day-level, s1)</h3></div>
-    <div class="kv-row"><span class="k">Rejected windows (no_mode_fits)</span><span class="v" id="s1SentinelRate">—</span></div>
-    <div class="kv-row"><span class="k">Threshold (B1, 97.5th pct.)</span><span class="v" id="s1SentinelThreshold">—</span></div>
-    <div class="gauge-wrap"><div class="gauge-bar"><div class="gauge-fill" id="sentinelGaugeFill"></div>
-      <div class="gauge-mark" id="sentinelGaugeMark"></div></div><span class="gauge-val" id="sentinelGaugeVal">—</span></div>
-    <div class="kv-row"><span class="k">Decision</span><span class="v" id="s1Decision">—</span></div>
-    <p class="panel-note">The sentinel is a once-per-plant, label-free check: it compares this day's
-    share of windows that fit no calibrated mode against the reference era's own budget, and that
-    comparison alone decides whether Step&nbsp;2 keeps its frozen thresholds.</p>
+    <div class="kv-row"><span class="k">Windows fitting no mode</span><span class="v mono"><span id="s1SentinelRate">—</span> / budget <span id="s1SentinelThreshold">—</span></span></div>
+    <div class="gauge" id="sentinelGauge"><span class="fill" id="sentinelGaugeFill"></span><span class="mark" id="sentinelGaugeMark"></span></div>
+    <div class="kv-row"><span class="k">Share of day</span><span class="v mono" id="sentinelGaugeVal">—</span></div>
+    <div class="verdict" id="s1Decision">—</div>
   </div>
-
-  <div class="panel-block pipe-col">
-    <div class="stage-head"><h3 style="margin:0">Step 2 — conformal p-value</h3><span class="stage-no">3 &middot; per window</span></div>
-    <div class="pvalue-chart-wrap" id="pvalueChartWrap"><!-- svg injected --></div>
-    <div class="kv-row" style="margin-top:8px"><span class="k">Current p-value</span><span class="v" id="s2Pvalue">—</span></div>
-    <div class="kv-row"><span class="k">Current score</span><span class="v" id="s2Score">—</span></div>
-    <div class="kv-row"><span class="k">State threshold (&alpha;=0.05)</span><span class="v" id="s2Threshold">—</span></div>
-    <div class="kv-row"><span class="k">Near transition</span><span class="v" id="s2NearTransition">—</span></div>
-    <div class="kv-row"><span class="k">Alarm</span><span class="v" id="s2Alarm">—</span></div>
-    <p class="panel-note">Each window is scored against its OWN detected state's normal model, so the
-    alarm rule is the same p&nbsp;&lt;&nbsp;&alpha; everywhere while the underlying score threshold
-    differs per state. Alarmed windows become the register episodes in the alarm feed above.</p>
+  <div class="panel stage">
+    <div class="panel-head"><span class="t">Stage 3 — anomaly verdict</span><span class="r mono"><span id="s2Pvalue">p = —</span> · <span id="s2Alarm">—</span></span></div>
+    <div class="pvalue-chart-wrap" id="pvalueChartWrap" style="height:120px;border:1px solid var(--hair-2);background:var(--panel-2);border-radius:2px;overflow:hidden"><!-- svg injected --></div>
+    <div class="kv-row" style="margin-top:6px"><span class="k">Current score</span><span class="v mono" id="s2Score">—</span></div>
+    <div class="kv-row"><span class="k">Alarm rule</span><span class="v mono">p &lt; α = 0.05, per state</span></div>
+    <div class="kv-row"><span class="k">Per-state score threshold</span><span class="v mono" id="s2Threshold">—</span></div>
+    <div class="kv-row"><span class="k">Near a mode transition</span><span class="v" id="s2NearTransition">—</span></div>
+    <div class="verdict">Scored against <b>its own state's</b> normal model. A firing window becomes a register episode.</div>
   </div>
 </div>
 
-<div class="transport">
-  <button type="button" class="btn primary" id="playBtn">Play</button>
-  <div class="transport-speeds">
-    <button type="button" class="btn active" data-speed="1">1&times;</button>
-    <button type="button" class="btn" data-speed="4">4&times;</button>
-    <button type="button" class="btn" data-speed="16">16&times;</button>
-  </div>
-  <span class="transport-readout" id="transportReadout">00:00:00 / 00:00:00</span>
-  <span class="transport-readout" id="transportSizeNote" style="margin-left:auto"></span>
+<div class="group-label"><span class="t">Alarm register</span><span class="ln"></span>
+  <span class="cap">every episode with its trigger criterion — click LISTEN to jump there</span></div>
+<div class="panel" style="margin: 0 18px; padding: 4px 8px 2px;">
+  <table class="register-table">
+    <thead><tr><th>Time (UTC)</th><th>Path</th><th>State</th><th>Why flagged</th><th></th></tr></thead>
+    <tbody id="alarmList"><!-- injected --></tbody>
+  </table>
 </div>
-
-<!-- Selectable live audio (see the "Listen" control in the Sensor map panel above):
-     no "controls"/"autoplay" -- assets/live.js drives play/pause/seek/rate to
-     mirror the replay transport, `src` is set lazily on first selection so an
-     operator who never clicks "Listen" never fetches either ~80 MB file. -->
-<audio id="audioGen" preload="none"></audio>
-<audio id="audioTur" preload="none"></audio>
 
 </main>
-<footer class="site-footer" style="max-width:1320px">Krummenacher, 2026, University of St. Gallen &mdash; see
-README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant
-data and are not redistributed (DATA_ACCESS.md). This replay is a retrospective simulation
-over already-recorded data, not a live sensor connection (see the sentinel's own documented
-"once-per-instrumentation-era" framing in the thesis for the "REPLAY" badge's exact
-meaning).</footer>
+
+<div class="transport">
+  <button type="button" class="btn-play" id="playBtn">▶ Play</button>
+  <button type="button" class="btn-speed active" data-speed="1">1×</button>
+  <button type="button" class="btn-speed" data-speed="4">4×</button>
+  <button type="button" class="btn-speed" data-speed="16">16×</button>
+  <span class="sep"></span>
+  <span class="listen-lb">LISTEN</span>
+  <span id="listenMics">
+    <button type="button" class="mic active" data-listen="muted">muted</button>
+    <button type="button" class="mic" data-listen="gen">generator mic</button>
+    <button type="button" class="mic" data-listen="tur">turbine mic</button>
+  </span>
+  <span class="vol">vol <input type="range" id="listenVolume" min="0" max="1" step="0.01" value="0.85">
+    <span class="mono" id="volPct">85 %</span></span>
+  <span class="tm mono" id="transportReadout">t = 00:00:00 / 00:00:00 h</span>
+</div>
+
+<footer class="site-footer">Krummenacher, 2026, University of St. Gallen — see README.md and
+CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not
+redistributed (DATA_ACCESS.md). This replay is a retrospective simulation over already-recorded
+data, not a live sensor connection.</footer>
+
+<audio id="audioGen" preload="none"></audio>
+<audio id="audioTur" preload="none"></audio>
 
 <script id="live-data" type="application/json">__LIVE_DATA_JSON__</script>
 <script src="assets/live.js"></script>
 </body>
 </html>
+
