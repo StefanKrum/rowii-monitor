@@ -290,9 +290,21 @@
       total++;
       if (detectedStates[i] === scadaStates[i]) agreeCount++;
     }
-    $("agreeLine").textContent = total
-      ? "detector ↔ SCADA agreement: " + (100 * agreeCount / total).toFixed(1) + " % of windows"
-      : "detector ↔ SCADA agreement: n/a";
+    if (!total) {
+      $("agreeLine").textContent = "detector ↔ SCADA agreement: n/a";
+      return;
+    }
+    var agreePct = 100 * agreeCount / total;
+    var agreeText = "detector ↔ SCADA agreement: " + agreePct.toFixed(1) + " % of windows";
+    // A low agreement number reads as a detector bug unless the UI explains the
+    // real cause: the once-calibrated mode bank not covering every operating
+    // mode SCADA sees this day (renderCalibratedModes' own note, below, spells
+    // out the mechanism -- this is just the trigger, data-driven off the same
+    // computed percentage, never a per-day hardcoded flag).
+    if (agreePct < 50) {
+      agreeText += " · low agreement expected — this day contains modes outside the calibrated bank";
+    }
+    $("agreeLine").textContent = agreeText;
   })();
 
   // -------------------------------------------------------------- static: log-mel strip
@@ -858,6 +870,53 @@
     verdictEl.innerHTML = fullVerdict(sent.s1_fired);
     $("farKpi").innerHTML = fmtNum(sent.realized_far * 100, 1) + ' <span class="u">% of windows</span>';
     $("farKpiSub").textContent = "realized · budget α = " + (sent.nominal_alpha * 100).toFixed(0) + " %";
+  })();
+
+  // -------------------------------------------------------------- stage 2: calibrated-mode coverage (static)
+  // The calibrated mode BANK this session's once-calibrated snapshot actually
+  // carries (DATA.states' own deduped `name` values, e.g. hammer day's
+  // 0/1/2 -> "turbine · standstill") -- independent of DATA.sentinel's own
+  // availability shape, so this renders unconditionally (harmless on a session
+  // whose coverage is already complete) and always appends its explanatory
+  // sentence to whatever renderSentinel already wrote into the Stage-2 note,
+  // regardless of which of the three sentinel shapes produced it.
+  (function renderCalibratedModes() {
+    var seen = {}, names = [];
+    Object.keys(DATA.states).forEach(function (sid) {
+      var name = DATA.states[sid].name;
+      if (!seen[name]) { seen[name] = true; names.push(name); }
+    });
+    $("s1CalibratedModes").textContent = names.length ? names.join(" · ") : "—";
+    $("s1Decision").innerHTML += " Windows from modes outside this set map to their nearest " +
+      "calibrated neighbour — the sentinel's no-mode-fits rate measures exactly that.";
+  })();
+
+  // -------------------------------------------------------------- recalibration alert banner
+  // Full-width banner directly under the app bar (template's own #alertBanner,
+  // empty and display:none by default) -- shown only when this session's REAL
+  // recorded sentinel decision is "recalibrate". Both "full" and "trigger_only"
+  // carry a `decision` field; "none" carries neither `decision` nor `s1_rate`,
+  // so the strict equality below is naturally false for it without a separate
+  // availability check. Static per session (the decision is day-level): computed
+  // once here, never touched by render()'s per-frame playhead updates. The
+  // app-bar REPLAY dot's own .warn toggle below follows the SAME condition, so
+  // the two visual cues can never disagree.
+  (function renderRecalibrationAlert() {
+    var sent = DATA.sentinel;
+    var recalibrate = sent.decision === "recalibrate";
+    var repEl = document.querySelector(".app-status .rep");
+    if (repEl) repEl.classList.toggle("warn", recalibrate);
+    if (!recalibrate) return;
+    var rate = (sent.s1_rate * 100).toFixed(2), thr = (sent.s1_threshold * 100).toFixed(2);
+    var html = "<b>⚠ SENTINEL — RECALIBRATION REQUIRED:</b> " + rate +
+      " % of windows fit no calibrated mode (budget " + thr +
+      " %). This day contains operating modes outside the calibrated bank.";
+    if (sent.available === "trigger_only") {
+      html += " " + sent.note.charAt(0).toUpperCase() + sent.note.slice(1);
+    }
+    var bannerEl = $("alertBanner");
+    bannerEl.innerHTML = html;
+    bannerEl.style.display = "block";
   })();
 
   // -------------------------------------------------------------- playhead loop

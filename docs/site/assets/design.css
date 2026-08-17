@@ -64,7 +64,14 @@ main.page { max-width: 1200px; margin: 0 auto; padding: 0 0 40px; }
 .app-status { margin-left: auto; display: flex; align-items: center; gap: 12px;
   font-size: 11px; color: var(--dim); white-space: nowrap; }
 .app-status .rep { color: var(--live); font-weight: 700; letter-spacing: .08em; }
+.app-status .rep.warn { color: var(--warn-text); }
 .app-status .clk { font-size: 13px; color: var(--ink); font-weight: 600; }
+
+/* --------------------------------------------------------- alert banner */
+.alert-banner { display: none; margin: 0; padding: 10px 18px; background: #fdf1ee;
+  border-bottom: 1px solid var(--hair); border-left: 3px solid var(--alarm);
+  color: var(--ink); font-size: 12.5px; line-height: 1.5; }
+.alert-banner b { font-weight: 800; }
 
 /* --------------------------------------------------------- group label */
 .group-label { margin: 16px 18px 8px; display: flex; align-items: center; gap: 10px; }
