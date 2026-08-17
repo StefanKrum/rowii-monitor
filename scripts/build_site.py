@@ -547,9 +547,8 @@ _KIND_LABELS = {
 _NOTICE_HTML = (
     '<div class="notice"><strong>Research prototype, not a certified product.</strong> '
     "Data courtesy of the plant operator, used under a research data-sharing agreement "
-    "for an HSG master thesis. Audio publication is pending Illwerke's data-release "
-    "approval &mdash; this repository stays private and is not served from GitHub "
-    "Pages.</div>"
+    "for an HSG master thesis. Audio is published with the operator's data-release "
+    "approval.</div>"
 )
 
 
