@@ -1,0 +1,305 @@
+<h2>Audio &amp; Review — eine Seite statt zwei, im v7-System</h2>
+<p class="subtitle">Ersetzt «Listening Library» + «Candidate Review». Drei Tabs (Flagged candidates · Hammer strikes · Per-mode audio), Bewertungsformular nur bei Kandidaten. Die SCADA-Anzeige ist jetzt dasselbe responsive Kurven-Muster wie im Live Replay — kein starres PNG mehr. Gezeigt: der Kandidaten-Tab mit einer offenen Karte, darunter die einfacheren Clip-Karten der anderen Tabs.</p>
+
+<style>
+  .ar { background: #e9ecf0; color: #18202a; border: 1px solid #c6cdd6; border-radius: 6px;
+    font-family: "Helvetica Neue", Arial, sans-serif; max-width: 1080px; margin: 0 auto 22px;
+    text-align: left; overflow: hidden; padding-bottom: 18px; }
+  .ar .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  /* app bar */
+  .ar-bar { display: flex; align-items: center; gap: 18px; padding: 10px 18px;
+    background: #ffffff; border-bottom: 1px solid #d3d9e0; }
+  .ar-brand { font-size: 14px; letter-spacing: .04em; white-space: nowrap; }
+  .ar-brand b { font-weight: 800; }
+  .ar-brand span { font-weight: 300; color: #5c6b7d; }
+  .ar-tabs { display: flex; gap: 2px; margin-left: 6px; }
+  .ar-tabs a { font-size: 10.5px; font-weight: 600; color: #5c6b7d; padding: 6px 11px; border-radius: 4px;
+    text-decoration: none; white-space: nowrap; }
+  .ar-tabs a.on { color: #18202a; background: #eef1f5; box-shadow: inset 0 0 0 1px #d3d9e0; }
+  .ar-bar .right { margin-left: auto; font-size: 10px; color: #5c6b7d; white-space: nowrap; }
+
+  .ar-lbl { margin: 14px 18px 7px; display: flex; align-items: center; gap: 10px; }
+  .ar-lbl .t { font-size: 8.5px; letter-spacing: .16em; color: #7a8798; font-weight: 800; white-space: nowrap; }
+  .ar-lbl .ln { flex: 1; height: 1px; background: #d3d9e0; }
+  .ar-lbl .cap { font-size: 9px; color: #97a2b0; white-space: nowrap; }
+
+  /* section tabs + toolbar */
+  .ar-tool { display: flex; align-items: center; gap: 10px; margin: 0 18px 10px; flex-wrap: wrap; }
+  .ar-seg { display: flex; border: 1px solid #d3d9e0; border-radius: 5px; overflow: hidden; background: #fff; }
+  .ar-seg span { font-size: 10px; font-weight: 700; padding: 7px 12px; color: #5c6b7d; border-right: 1px solid #d3d9e0; }
+  .ar-seg span:last-child { border-right: 0; }
+  .ar-seg span.on { background: #18202a; color: #fff; }
+  .ar-seg span .n { font-weight: 500; opacity: .65; margin-left: 4px; }
+  .ar-filter { display: flex; gap: 4px; }
+  .ar-filter span { font-size: 9px; font-weight: 600; color: #5c6b7d; border: 1px solid #d3d9e0; background: #fff;
+    padding: 4px 9px; border-radius: 999px; }
+  .ar-filter span.on { color: #18202a; border-color: #7a8798; background: #eef1f5; font-weight: 700; }
+  .ar-tool .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .ar-prog { font-size: 9.5px; color: #5c6b7d; }
+  .ar-prog b { color: #0e8f6f; }
+  .ar-export { font-size: 9px; font-weight: 800; letter-spacing: .06em; color: #fff; background: #18202a;
+    padding: 6px 12px; border-radius: 3px; }
+
+  /* candidate card */
+  .ar-card { background: #ffffff; border: 1px solid #d3d9e0; border-radius: 4px; margin: 0 18px 10px;
+    box-shadow: 0 1px 2px rgba(24,32,42,.04); overflow: hidden; }
+  .ar-chead { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #eef1f5; flex-wrap: wrap; }
+  .ar-cid { font-size: 12px; font-weight: 800; }
+  .ar-ctime { font-size: 9.5px; color: #5c6b7d; }
+  .ar-badge { display: inline-block; font-size: 7.5px; font-weight: 800; letter-spacing: .05em; padding: 2px 6px;
+    border-radius: 2px; border: 1px solid; white-space: nowrap; }
+  .ar-badge.sus { color: #a16207; border-color: #c9a227; }
+  .ar-badge.state { color: #2563a8; border-color: #2563a8; }
+  .ar-badge.agree { color: #0e8f6f; border-color: #0e8f6f; }
+  .ar-badge.warn { color: #a16207; border-color: #c9a227; }
+  .ar-chead .st { margin-left: auto; font-size: 8.5px; color: #97a2b0; }
+  .ar-why { padding: 8px 14px; font-size: 10.5px; color: #33404d; background: #f7f9fb; border-bottom: 1px solid #eef1f5; }
+  .ar-why b { font-weight: 800; font-size: 8px; letter-spacing: .1em; color: #7a8798; margin-right: 6px; }
+
+  /* spectrogram lanes */
+  .ar-lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 14px 0; }
+  @media (max-width: 860px) { .ar-lanes { grid-template-columns: 1fr; } }
+  .ar-lane .lt { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: .1em; color: #7a8798;
+    font-weight: 800; margin-bottom: 5px; }
+  .ar-lane .lt .r { letter-spacing: 0; font-weight: 600; color: #97a2b0; }
+  .ar-slab { position: relative; height: 84px; border: 1px solid #c6cdd6; border-radius: 2px; overflow: hidden;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 5px),
+      linear-gradient(180deg, #120b1e 0%, #33104e 30%, #6d1d5c 56%, #b8422f 80%, #eda13e 96%); }
+  .ar-slab .ph { position: absolute; top: 0; bottom: 0; left: 36%; width: 2px; background: #fff; box-shadow: 0 0 5px rgba(255,255,255,.7); }
+  .ar-slab .mark { position: absolute; top: 0; bottom: 0; width: 1.5px; background: #ffd23f; opacity: .9; }
+  .ar-slab .ev { position: absolute; top: 0; bottom: 0; width: 5px;
+    background: linear-gradient(180deg, rgba(255,240,220,.8), rgba(255,240,220,.1) 70%, transparent); }
+  .ar-player { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .ar-play { width: 22px; height: 22px; border-radius: 50%; background: #18202a; color: #fff; display: flex;
+    align-items: center; justify-content: center; font-size: 9px; flex: none; }
+  .ar-track { flex: 1; height: 3px; background: #dfe4ea; border-radius: 2px; position: relative; }
+  .ar-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 36%; background: #18202a; border-radius: 2px; }
+  .ar-ptime { font-size: 8.5px; color: #5c6b7d; }
+
+  /* scada block — same pattern as live page */
+  .ar-scada { margin: 12px 14px 0; border: 1px solid #dfe4ea; border-radius: 3px; background: #fbfcfd; padding: 9px 11px 8px; }
+  .ar-scada .sh { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: .12em; color: #7a8798;
+    font-weight: 800; margin-bottom: 7px; }
+  .ar-scada .sh .r { letter-spacing: 0; font-weight: 600; color: #97a2b0; }
+  .ar-ribrow { display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: center; margin-bottom: 3px; }
+  .ar-riblab { font-size: 7px; letter-spacing: .05em; color: #7a8798; font-weight: 700; text-align: right; line-height: 1.3; }
+  .ar-riblab b { display: block; color: #18202a; font-size: 8px; }
+  .ar-ribbon { position: relative; display: flex; height: 16px; border: 1px solid #c6cdd6; border-radius: 2px; overflow: hidden; }
+  .ar-ribbon i { display: block; height: 100%; position: relative; }
+  .ar-ribbon i.lab::after { content: attr(data-l); position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+    font-size: 7.5px; font-weight: 700; color: rgba(255,255,255,.92); white-space: nowrap; }
+  .ar-trow { display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: stretch; margin-bottom: 2px; }
+  .ar-tlab { display: flex; flex-direction: column; justify-content: center; text-align: right; line-height: 1.15; }
+  .ar-tlab .n { font-size: 6.5px; letter-spacing: .05em; color: #7a8798; font-weight: 700; }
+  .ar-tlab .lv { font-size: 9.5px; color: #18202a; font-weight: 700; }
+  .ar-tlab .lv .u { font-size: 7px; color: #7a8798; font-weight: 500; }
+  .ar-tchart { border: 1px solid #dfe4ea; background: #ffffff; border-radius: 2px; position: relative; }
+  .ar-tchart svg { display: block; width: 100%; height: 100%; }
+  .ar-swrap { position: relative; }
+  .ar-scap { margin: 4px 0 0 82px; font-size: 7.5px; color: #97a2b0; }
+
+  /* review form */
+  .ar-review { margin: 12px 14px 12px; border-top: 1px solid #eef1f5; padding-top: 10px; }
+  .ar-review .rh { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; }
+  .ar-review .rh .t { font-size: 8px; letter-spacing: .12em; color: #7a8798; font-weight: 800; }
+  .ar-review .rh .r { font-size: 8.5px; color: #0e8f6f; font-weight: 700; }
+  .ar-marks { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .ar-marks .hint { font-size: 8.5px; color: #97a2b0; }
+  .ar-mark { font-size: 8.5px; font-weight: 700; color: #18202a; background: #eef1f5; border: 1px solid #d3d9e0;
+    padding: 2px 7px; border-radius: 999px; }
+  .ar-mark b { color: #97a2b0; margin-left: 4px; font-weight: 700; }
+  .ar-assess { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ar-assess span { font-size: 9px; font-weight: 700; color: #5c6b7d; border: 1px solid #d3d9e0; background: #fff;
+    padding: 5px 11px; border-radius: 999px; }
+  .ar-assess span.on { background: #18202a; border-color: #18202a; color: #fff; }
+  .ar-note { display: flex; gap: 8px; align-items: center; }
+  .ar-note .lbl2 { font-size: 8px; letter-spacing: .1em; color: #7a8798; font-weight: 800; }
+  .ar-note .inp { flex: 1; border: 1px solid #d3d9e0; border-radius: 3px; background: #fff; color: #97a2b0;
+    font-size: 9.5px; padding: 6px 9px; }
+
+  /* collapsed candidate row */
+  .ar-cardrow { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #d3d9e0;
+    border-radius: 4px; margin: 0 18px 10px; padding: 9px 14px; box-shadow: 0 1px 2px rgba(24,32,42,.04);
+    font-size: 10px; color: #33404d; flex-wrap: wrap; }
+  .ar-cardrow .id { font-weight: 800; color: #18202a; }
+  .ar-cardrow .exp { margin-left: auto; font-size: 8.5px; font-weight: 800; letter-spacing: .06em; color: #18202a;
+    border-bottom: 1px solid #18202a; white-space: nowrap; }
+  .ar-chip-open { font-size: 8px; color: #97a2b0; }
+
+  /* simple clip cards (strikes / per-mode) */
+  .ar-clips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 18px; }
+  @media (max-width: 860px) { .ar-clips { grid-template-columns: 1fr; } }
+  .ar-clip { background: #fff; border: 1px solid #d3d9e0; border-radius: 4px; padding: 10px 12px 11px;
+    box-shadow: 0 1px 2px rgba(24,32,42,.04); }
+  .ar-clip .ct { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+  .ar-clip .ct .n2 { font-size: 10.5px; font-weight: 800; }
+  .ar-clip .mini-spec { height: 40px; border-radius: 2px; border: 1px solid #c6cdd6; margin-bottom: 6px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 5px),
+      linear-gradient(180deg, #120b1e 0%, #33104e 32%, #6d1d5c 60%, #b8422f 84%, #eda13e 98%); position: relative; }
+  .ar-clip .mini-spec .ev { position: absolute; top: 0; bottom: 0; width: 4px;
+    background: linear-gradient(180deg, rgba(255,240,220,.85), transparent 75%); }
+  .ar-clip .meta { font-size: 8px; color: #7a8798; margin-top: 5px; }
+</style>
+
+<div class="ar">
+
+  <!-- app bar -->
+  <div class="ar-bar">
+    <div class="ar-brand"><b>ROWII</b><span>&thinsp;MONITOR</span></div>
+    <div class="ar-tabs"><a>Overview</a><a>Sensors</a><a>Live replay</a><a class="on">Audio &amp; review</a></div>
+    <div class="right">audio: 20 s clips · 48 kHz WAV</div>
+  </div>
+
+  <!-- toolbar -->
+  <div class="ar-lbl"><span class="t">AUDIO LIBRARY &amp; EXPERT REVIEW</span><span class="ln"></span><span class="cap">assessments stay in your browser until exported</span></div>
+  <div class="ar-tool">
+    <div class="ar-seg">
+      <span class="on">Flagged candidates<span class="n">12</span></span>
+      <span>Hammer strikes<span class="n">18</span></span>
+      <span>Per-mode audio<span class="n">8</span></span>
+    </div>
+    <div class="ar-filter">
+      <span class="on">all sessions</span><span>29 Jun</span><span>01 Jul</span><span>08 Jul</span><span>27 Jun</span>
+    </div>
+    <div class="right">
+      <span class="ar-prog"><b>5 / 12 assessed</b> · autosaved</span>
+      <span class="ar-export">EXPORT (.json)</span>
+    </div>
+  </div>
+
+  <!-- open candidate card -->
+  <div class="ar-card">
+    <div class="ar-chead">
+      <span class="ar-cid">candidate 290626-tu-02</span>
+      <span class="ar-ctime mono">2026-06-29 · 09:14:02 UTC · 20 s clip</span>
+      <span class="ar-badge sus">SUSTAINED</span>
+      <span class="ar-badge state">STATE: TURBINE</span>
+      <span class="ar-badge agree">SCADA ↔ DETECTOR AGREE</span>
+      <span class="st">2 of 12 · unreviewed</span>
+    </div>
+    <div class="ar-why"><b>WHY FLAGGED</b>41 s run of windows with p &lt; α = 0.05 against the turbine normal model — persistently unusual sound; clip shows the loudest 20 s.</div>
+
+    <div class="ar-lanes">
+      <div class="ar-lane">
+        <div class="lt"><span>GENERATOR MIC</span><span class="r">log-mel · 0–8 kHz</span></div>
+        <div class="ar-slab">
+          <span class="ev" style="left:34%"></span>
+          <span class="mark" style="left:52%"></span>
+          <span class="ph"></span>
+        </div>
+        <div class="ar-player"><span class="ar-play">▶</span><span class="ar-track"><i></i></span><span class="ar-ptime mono">00:07.2 / 00:20.0 s</span></div>
+      </div>
+      <div class="ar-lane">
+        <div class="lt"><span>TURBINE MIC</span><span class="r">log-mel · 0–8 kHz</span></div>
+        <div class="ar-slab">
+          <span class="ev" style="left:34%"></span>
+          <span class="ph"></span>
+        </div>
+        <div class="ar-player"><span class="ar-play">▶</span><span class="ar-track"><i></i></span><span class="ar-ptime mono">00:00.0 / 00:20.0 s</span></div>
+      </div>
+    </div>
+
+    <!-- SCADA block, same pattern as live -->
+    <div class="ar-scada">
+      <div class="sh"><span>OPERATING DATA (SCADA) — ±60 s AROUND THE CLIP</span><span class="r">playhead follows the audio</span></div>
+      <div class="ar-ribrow">
+        <div class="ar-riblab"><b>DETECTOR</b>step 1</div>
+        <div class="ar-ribbon">
+          <i class="lab" data-l="Turbine" style="width:100%;background:#2563a8"></i>
+        </div>
+      </div>
+      <div class="ar-ribrow" style="margin-bottom:6px">
+        <div class="ar-riblab"><b>SCADA</b>rule-based</div>
+        <div class="ar-ribbon" style="height:13px">
+          <i class="lab" data-l="Turbine" style="width:86%;background:#2563a8"></i><i style="width:14%;background:#c07f10"></i>
+        </div>
+      </div>
+      <div class="ar-swrap">
+        <div class="ar-trow">
+          <div class="ar-tlab"><span class="n">P · ACTIVE POWER</span><span class="lv mono">243.1<span class="u"> MW</span></span></div>
+          <div class="ar-tchart" style="height:26px">
+            <svg viewBox="0 0 900 26" preserveAspectRatio="none"><polyline points="0,8 220,7 300,9 420,8 560,10 700,8 900,9" fill="none" stroke="#2563a8" stroke-width="1.3"/></svg>
+          </div>
+        </div>
+        <div class="ar-trow">
+          <div class="ar-tlab"><span class="n">n · SHAFT SPEED</span><span class="lv mono">378.8<span class="u"> rpm</span></span></div>
+          <div class="ar-tchart" style="height:18px">
+            <svg viewBox="0 0 900 18" preserveAspectRatio="none"><polyline points="0,9 900,9" fill="none" stroke="#5b7fa6" stroke-width="1.2"/></svg>
+          </div>
+        </div>
+        <div class="ar-trow">
+          <div class="ar-tlab"><span class="n">Q · NET FLOW</span><span class="lv mono">40.9<span class="u"> m³/s</span></span></div>
+          <div class="ar-tchart" style="height:18px">
+            <svg viewBox="0 0 900 18" preserveAspectRatio="none"><polyline points="0,10 250,9 480,11 700,9 900,10" fill="none" stroke="#1d8a70" stroke-width="1.2"/></svg>
+          </div>
+        </div>
+        <div class="ar-trow" style="margin-bottom:0">
+          <div class="ar-tlab"><span class="n">KS · SPH. VALVE</span><span class="lv mono">2.8<span class="u"> pos</span></span></div>
+          <div class="ar-tchart" style="height:18px">
+            <svg viewBox="0 0 900 18" preserveAspectRatio="none"><polyline points="0,5 900,5" fill="none" stroke="#7c4dbc" stroke-width="1.2"/></svg>
+          </div>
+        </div>
+        <div style="position:absolute; top:0; bottom:0; left:calc(82px + (100% - 82px) * .36); width:2px; background:#18202a; box-shadow:0 0 0 1px rgba(255,255,255,.75)"></div>
+      </div>
+      <div class="ar-scap">curves span ±60 s around the clip · values at the audio playhead · yellow segment = SCADA transition window</div>
+    </div>
+
+    <!-- review form -->
+    <div class="ar-review">
+      <div class="rh"><span class="t">EXPERT ASSESSMENT</span><span class="r">saved locally · included in export</span></div>
+      <div class="ar-marks">
+        <span class="hint">marks (shift-click a spectrogram to flag a moment):</span>
+        <span class="ar-mark mono">00:07.2 s<b>×</b></span>
+        <span class="ar-mark mono">00:11.8 s<b>×</b></span>
+      </div>
+      <div class="ar-assess">
+        <span class="on">plausible anomaly</span>
+        <span>operational / explained</span>
+        <span>artifact / sensor</span>
+        <span>no finding</span>
+        <span>unclear</span>
+      </div>
+      <div class="ar-note"><span class="lbl2">NOTE</span><span class="inp">rattling overtone around 2 kHz, matches mark at 00:07.2 s …</span></div>
+    </div>
+  </div>
+
+  <!-- collapsed candidate -->
+  <div class="ar-cardrow">
+    <span class="id">candidate 010726-tu1-morning-09</span>
+    <span class="mono" style="font-size:9px;color:#5c6b7d">2026-07-01 · 06:02:47 UTC</span>
+    <span class="ar-badge tra" style="color:#c73a1d;border-color:#c73a1d">TRANSIENT</span>
+    <span class="ar-badge state">STATE: TURBINE</span>
+    <span class="ar-badge warn">NEAR TRANSITION</span>
+    <span class="ar-chip-open">assessed: operational / explained ✓</span>
+    <span class="exp">OPEN ▾</span>
+  </div>
+
+  <!-- other tabs preview -->
+  <div class="ar-lbl" style="margin-top:16px"><span class="t">SO SEHEN DIE ANDEREN TABS AUS (OHNE FORMULAR)</span><span class="ln"></span><span class="cap">hammer strikes &amp; per-mode audio — listen only</span></div>
+  <div class="ar-clips">
+    <div class="ar-clip">
+      <div class="ct"><span class="n2">Reference plate — generator ring, 0°</span><span class="ar-badge state" style="color:#7c4dbc;border-color:#7c4dbc">PUMP</span></div>
+      <div class="mini-spec"><span class="ev" style="left:22%"></span><span class="ev" style="left:46%"></span><span class="ev" style="left:71%"></span></div>
+      <div class="ar-player"><span class="ar-play">▶</span><span class="ar-track"><i style="width:0"></i></span><span class="ar-ptime mono">10 s</span></div>
+      <div class="meta">Schonhammer strike test · 3 logged strikes in clip · 2026-07-08 · 12:42:59 UTC</div>
+    </div>
+    <div class="ar-clip">
+      <div class="ct"><span class="n2">Ordinary turbine operation</span><span class="ar-badge state">TURBINE</span></div>
+      <div class="mini-spec"></div>
+      <div class="ar-player"><span class="ar-play">▶</span><span class="ar-track"><i style="width:0"></i></span><span class="ar-ptime mono">20 s</span></div>
+      <div class="meta">what "normal" sounds like in this mode · generator mic · 2026-06-29 · 11:20:00 UTC</div>
+    </div>
+    <div class="ar-clip">
+      <div class="ct"><span class="n2">Ordinary phase-shifter operation</span><span class="ar-badge state" style="color:#1d8a70;border-color:#1d8a70">PHASE-SHIFTER</span></div>
+      <div class="mini-spec"></div>
+      <div class="ar-player"><span class="ar-play">▶</span><span class="ar-track"><i style="width:0"></i></span><span class="ar-ptime mono">20 s</span></div>
+      <div class="meta">what "normal" sounds like in this mode · turbine mic · 2026-06-27 · 14:05:30 UTC</div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle">Kernpunkte: ein Ort für alles Audio; Formular + SCADA-Kontext nur bei Kandidaten; Fortschritt + Export oben rechts; SCADA als dieselben responsiven Kurven-Reihen wie im Live Replay (mit Playhead, der dem Audio folgt). Passt das — oder fehlt dir etwas fürs Experten-Handover?</p>

@@ -1,0 +1,399 @@
+<h2>v7 — v6-System, aber hell · alle Zahlen mit Einheit/Label</h2>
+<p class="subtitle">Gleiches Monitoring-Layout wie v6 (App-Leiste, Panel-Raster, Gruppenlabels mit Linie), aber als helle System-Oberfläche. Jede Zahl trägt jetzt Einheit oder Label (episodes, MW, rpm, %, σ, UTC …). Spektrogramm bleibt dunkel — das ist die Messgrafik selbst.</p>
+
+<style>
+  .v7 { background: #e9ecf0; color: #18202a; border: 1px solid #c6cdd6; border-radius: 6px;
+    font-family: "Helvetica Neue", Arial, sans-serif; max-width: 1080px; margin: 0 auto 22px;
+    text-align: left; overflow: hidden; }
+  .v7 .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  /* app bar */
+  .v7-bar { display: flex; align-items: center; gap: 18px; padding: 10px 18px;
+    background: #ffffff; border-bottom: 1px solid #d3d9e0; }
+  .v7-brand { font-size: 14px; letter-spacing: .04em; color: #18202a; white-space: nowrap; }
+  .v7-brand b { font-weight: 800; }
+  .v7-brand span { font-weight: 300; color: #5c6b7d; }
+  .v7-tabs { display: flex; gap: 2px; margin-left: 6px; }
+  .v7-tabs a { font-size: 10.5px; font-weight: 600; color: #5c6b7d; padding: 6px 11px; border-radius: 4px;
+    text-decoration: none; white-space: nowrap; }
+  .v7-tabs a.on { color: #18202a; background: #eef1f5; box-shadow: inset 0 0 0 1px #d3d9e0; }
+  .v7-bar .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 10px; color: #5c6b7d; white-space: nowrap; }
+  .v7-bar .right .rep { color: #0e8f6f; font-weight: 700; letter-spacing: .08em; }
+  .v7-bar .right .clk { font-size: 12px; color: #18202a; font-weight: 600; }
+
+  /* group label */
+  .v7-lbl { margin: 14px 18px 7px; display: flex; align-items: center; gap: 10px; }
+  .v7-lbl .t { font-size: 8.5px; letter-spacing: .16em; color: #7a8798; font-weight: 800; white-space: nowrap; }
+  .v7-lbl .ln { flex: 1; height: 1px; background: #d3d9e0; }
+  .v7-lbl .cap { font-size: 9px; color: #97a2b0; white-space: nowrap; }
+
+  .v7-panel { background: #ffffff; border: 1px solid #d3d9e0; border-radius: 4px; box-shadow: 0 1px 2px rgba(24,32,42,.04); }
+
+  /* recording */
+  .v7-sess { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 18px; }
+  .v7-card { background: #ffffff; border: 1px solid #d3d9e0; border-radius: 4px; padding: 8px 11px 9px;
+    box-shadow: 0 1px 2px rgba(24,32,42,.04); }
+  .v7-card .dt { font-size: 7.5px; letter-spacing: .06em; color: #7a8798; font-weight: 700; white-space: nowrap; }
+  .v7-card .nm { font-size: 12px; font-weight: 800; margin: 2px 0 1px; letter-spacing: -.01em; }
+  .v7-card .in { font-size: 8.5px; color: #5c6b7d; margin-bottom: 7px; }
+  .v7-card.on { border-color: #18202a; box-shadow: inset 3px 0 0 #18202a, 0 1px 2px rgba(24,32,42,.06); }
+  .v7-card .ev { display: inline-block; font-size: 6.5px; font-weight: 800; letter-spacing: .08em;
+    color: #a16207; border: 1px solid #c9a227; padding: 0 4px; border-radius: 2px; margin-left: 5px; vertical-align: 1.5px; }
+  .v7-mini { display: flex; height: 6px; border-radius: 2px; overflow: hidden; position: relative; }
+  .v7-mini i { height: 100%; }
+  .v7-mini .mt { position: absolute; top: -1px; width: 1.5px; height: 8px; background: #c73a1d; }
+
+  /* KPI */
+  .v7-kpis { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1.1fr 1.1fr; gap: 8px; margin: 8px 18px 0; }
+  .v7-kpi { background: #ffffff; border: 1px solid #d3d9e0; border-radius: 4px; padding: 8px 11px 9px;
+    box-shadow: 0 1px 2px rgba(24,32,42,.04); }
+  .v7-kpi .k { font-size: 8px; letter-spacing: .1em; color: #7a8798; font-weight: 700; }
+  .v7-kpi .v { font-size: 22px; font-weight: 300; color: #18202a; letter-spacing: -.01em; margin-top: 5px; line-height: 1; white-space: nowrap; }
+  .v7-kpi .v b { font-weight: 700; font-size: 16px; }
+  .v7-kpi .v .u { font-size: 10px; color: #5c6b7d; font-weight: 500; }
+  .v7-kpi .s { font-size: 8px; color: #7a8798; margin-top: 4px; }
+  .v7-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #2563a8; margin-right: 6px; vertical-align: 2px; }
+  .v7-red { color: #c73a1d; }
+
+  /* timeline */
+  .v7-instr { margin: 0 18px; padding: 11px 13px 10px; }
+  .v7-instr .hd { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; gap: 10px; flex-wrap: wrap; }
+  .v7-instr .hd .t { font-size: 8.5px; letter-spacing: .14em; font-weight: 700; color: #7a8798; }
+  .v7-instr .hd .r { font-size: 9.5px; color: #5c6b7d; }
+  .v7-instr .hd .r .ok { color: #0e8f6f; font-weight: 700; }
+  .v7-ribrow { display: grid; grid-template-columns: 82px 1fr; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .v7-riblab { font-size: 7.5px; letter-spacing: .05em; color: #7a8798; font-weight: 700; text-align: right; line-height: 1.3; }
+  .v7-riblab b { display: block; color: #18202a; font-size: 8.5px; }
+  .v7-ribbon { position: relative; display: flex; height: 22px; border: 1px solid #c6cdd6; border-radius: 2px; overflow: hidden; }
+  .v7-ribbon.slim { height: 18px; }
+  .v7-ribbon i { display: block; height: 100%; position: relative; }
+  .v7-ribbon i.lab::after { content: attr(data-l); position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+    font-size: 8px; font-weight: 700; color: rgba(255,255,255,.92); letter-spacing: .03em; white-space: nowrap; }
+  .v7-tick { position: absolute; top: 0; width: 2px; height: 8px; background: #c73a1d; }
+  .v7-play { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #18202a; box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
+  .v7-legend { display: flex; flex-wrap: wrap; gap: 4px 13px; margin: 7px 0 0 90px; font-size: 8.5px; color: #5c6b7d; }
+  .v7-legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .v7-legend .td { display: inline-block; width: 2px; height: 8px; background: #c73a1d; margin-right: 4px; vertical-align: -1px; }
+  .v7-trend { position: relative; margin-top: 8px; }
+  .v7-trow { display: grid; grid-template-columns: 82px 1fr; gap: 8px; align-items: stretch; margin-bottom: 2px; }
+  .v7-tlab { display: flex; flex-direction: column; justify-content: center; text-align: right; line-height: 1.2; }
+  .v7-tlab .n { font-size: 7px; letter-spacing: .05em; color: #7a8798; font-weight: 700; }
+  .v7-tlab .lv { font-size: 10.5px; color: #18202a; font-weight: 700; }
+  .v7-tlab .lv .u { font-size: 7.5px; color: #7a8798; font-weight: 500; }
+  .v7-tchart { border: 1px solid #dfe4ea; background: #f7f9fb; border-radius: 2px; position: relative; }
+  .v7-tchart svg { display: block; width: 100%; height: 100%; }
+  .v7-tcap { margin: 5px 0 0 90px; font-size: 8px; color: #97a2b0; }
+  .v7-tcap b { color: #18202a; }
+
+  /* spectrogram */
+  .v7-spec { position: relative; height: 104px; border: 1px solid #c6cdd6; border-radius: 2px; overflow: hidden;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.045) 0 1px, transparent 1px 6px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.03) 0 1px, transparent 1px 9px),
+      linear-gradient(180deg, #120b1e 0%, #33104e 26%, #6d1d5c 52%, #b8422f 78%, #eda13e 96%);
+  }
+  .v7-spec .ph { position: absolute; top: 0; bottom: 0; left: 58%; width: 2px; background: #ffffff; box-shadow: 0 0 6px rgba(255,255,255,.7); }
+  .v7-spec .fx { position: absolute; left: 5px; font-size: 7px; color: rgba(255,255,255,.6); }
+  .v7-spec .tx { position: absolute; bottom: 3px; font-size: 7px; color: rgba(255,255,255,.6); }
+  .v7-strike { position: absolute; top: 0; bottom: 0; width: 6px;
+    background: linear-gradient(180deg, rgba(255,240,220,.85), rgba(255,240,220,.15) 70%, transparent); }
+
+  /* pipeline */
+  .v7-pipe { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 18px; }
+  @media (max-width: 900px) { .v7-pipe { grid-template-columns: 1fr; } }
+  .v7-pipe .v7-panel { padding: 10px 12px; }
+  .v7-pipe .ph2 { font-size: 8.5px; letter-spacing: .14em; font-weight: 700; color: #7a8798; margin-bottom: 8px;
+    display: flex; justify-content: space-between; gap: 8px; }
+  .v7-pipe .ph2 .r { color: #18202a; letter-spacing: 0; font-weight: 700; }
+  .v7-pipe .ph2 .r .ok { color: #0e8f6f; }
+  .v7-kv { display: flex; justify-content: space-between; gap: 8px; font-size: 9.5px; padding: 4px 0; border-bottom: 1px solid #eef1f5; }
+  .v7-kv:last-child { border-bottom: 0; }
+  .v7-kv .k { color: #5c6b7d; }
+  .v7-kv .v { color: #18202a; font-weight: 700; text-align: right; }
+  .v7-verdict { font-size: 8.5px; color: #5c6b7d; line-height: 1.45; margin-top: 7px; padding-top: 7px; border-top: 1px solid #eef1f5; }
+  .v7-verdict b { color: #0e8f6f; }
+  .v7-gauge { position: relative; height: 8px; background: #eef1f5; border-radius: 5px; margin: 7px 0 2px; border: 1px solid #dfe4ea; }
+  .v7-gauge .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 76%; background: #0e8f6f; border-radius: 5px 0 0 5px; }
+  .v7-gauge .mark { position: absolute; left: 80%; top: -3px; bottom: -3px; width: 2px; background: #18202a; }
+  .fp7-row { display: grid; grid-template-columns: 120px 1fr 44px; gap: 7px; align-items: center; padding: 2.5px 0; }
+  .fp7-row .nm { font-size: 8px; color: #5c6b7d; text-align: right; line-height: 1.2; }
+  .fp7-bar { position: relative; height: 8px; background: #eef1f5; border: 1px solid #dfe4ea; border-radius: 2px; }
+  .fp7-bar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #b9c2cd; }
+  .fp7-bar i { position: absolute; top: 0; bottom: 0; border-radius: 1px; }
+  .fp7-val { font-size: 8.5px; color: #18202a; font-weight: 700; }
+  .fp7-strip { display: flex; align-items: flex-end; height: 16px; border: 1px solid #dfe4ea; background: #f7f9fb; margin-top: 7px; padding: 0 1px; position: relative; }
+  .fp7-strip i { flex: 1; background: #9db4d0; margin: 0 .5px; }
+  .fp7-strip .hot { background: #c07f10; }
+  .fp7-strip .split { position: absolute; left: 58%; top: 0; bottom: 0; border-left: 1px dashed #b9c2cd; }
+  .fp7-note { font-size: 7.5px; color: #97a2b0; margin-top: 4px; line-height: 1.4; }
+
+  /* register */
+  .v7-reg table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  .v7-reg th { text-align: left; font-size: 8px; letter-spacing: .08em; color: #7a8798; font-weight: 700;
+    border-bottom: 1px solid #d3d9e0; padding: 5px 8px 4px; }
+  .v7-reg td { padding: 6px 8px; border-bottom: 1px solid #eef1f5; vertical-align: top; color: #33404d; }
+  .v7-reg tr:last-child td { border-bottom: 0; }
+  .v7-badge { display: inline-block; font-size: 7.5px; font-weight: 800; letter-spacing: .05em; padding: 1px 5px;
+    border-radius: 2px; border: 1px solid; }
+  .v7-badge.sus { color: #a16207; border-color: #c9a227; }
+  .v7-badge.tra { color: #c73a1d; border-color: #c73a1d; }
+  .v7-reg .listen { font-size: 8.5px; color: #18202a; font-weight: 700; letter-spacing: .04em; white-space: nowrap;
+    border-bottom: 1px solid #18202a; }
+
+  /* transport */
+  .v7-transport { position: sticky; bottom: 0; display: flex; align-items: center; gap: 12px; margin-top: 14px;
+    background: #ffffff; padding: 10px 18px; border-top: 1px solid #d3d9e0; flex-wrap: wrap;
+    box-shadow: 0 -3px 10px rgba(24,32,42,.06); }
+  .v7-transport .pl { background: #18202a; color: #ffffff; font-weight: 800; font-size: 11px; padding: 6px 16px; border-radius: 3px; }
+  .v7-transport .sp { font-size: 9.5px; padding: 4px 8px; border: 1px solid #d3d9e0; border-radius: 3px; color: #5c6b7d; }
+  .v7-transport .sp.on { background: #eef1f5; color: #18202a; border-color: #7a8798; font-weight: 700; }
+  .v7-sep { width: 1px; align-self: stretch; background: #d3d9e0; }
+  .v7-listen { display: flex; align-items: center; gap: 5px; }
+  .v7-listen .lb { font-size: 8px; letter-spacing: .12em; color: #7a8798; font-weight: 700; margin-right: 2px; }
+  .v7-listen .mic { font-size: 9.5px; padding: 4px 9px; border: 1px solid #d3d9e0; border-radius: 999px; color: #5c6b7d; }
+  .v7-listen .mic.on { background: #0e8f6f; border-color: #0e8f6f; color: #ffffff; font-weight: 700; }
+  .v7-vol { display: flex; align-items: center; gap: 5px; }
+  .v7-vol .tr { width: 64px; height: 3px; background: #dfe4ea; border-radius: 2px; position: relative; }
+  .v7-vol .tr i { position: absolute; left: 0; top: 0; bottom: 0; width: 65%; background: #7a8798; border-radius: 2px; }
+  .v7-vol .tr b { position: absolute; left: 65%; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: #18202a; transform: translateX(-50%); }
+  .v7-transport .tm { margin-left: auto; font-size: 10.5px; color: #5c6b7d; }
+</style>
+
+<div class="v7">
+
+  <!-- app bar -->
+  <div class="v7-bar">
+    <div class="v7-brand"><b>ROWII</b><span>&thinsp;MONITOR</span></div>
+    <div class="v7-tabs"><a>Overview</a><a>Sensors</a><a class="on">Live replay</a><a>Audio &amp; review</a></div>
+    <div class="right"><span class="rep">● REPLAY</span><span>MON 29 JUN 2026</span><span class="clk mono">14:02:11 UTC</span></div>
+  </div>
+
+  <!-- recording -->
+  <div class="v7-lbl"><span class="t">RECORDING</span><span class="ln"></span><span class="cap">replay of recorded data — not a live feed</span></div>
+  <div class="v7-sess">
+    <div class="v7-card on">
+      <div class="dt">MON · 29 JUN 2026 · 04:19 h</div>
+      <div class="nm">Turbine day</div>
+      <div class="in">quiet reference day · 3 alarm episodes</div>
+      <div class="v7-mini">
+        <i style="width:17%;background:#6b7684"></i><i style="width:2.5%;background:#c07f10"></i><i style="width:47%;background:#2563a8"></i><i style="width:2.5%;background:#c07f10"></i><i style="width:15%;background:#7c4dbc"></i><i style="width:16%;background:#6b7684"></i>
+        <span class="mt" style="left:33%"></span><span class="mt" style="left:51%"></span><span class="mt" style="left:56%"></span>
+      </div>
+    </div>
+    <div class="v7-card">
+      <div class="dt">WED · 08 JUL 2026 · 03:52 h</div>
+      <div class="nm">Hammer-strike day<span class="ev">EVENTS</span></div>
+      <div class="in">controlled tap tests at each sensor</div>
+      <div class="v7-mini">
+        <i style="width:38%;background:#7c4dbc"></i><i style="width:3%;background:#c07f10"></i><i style="width:42%;background:#6b7684"></i><i style="width:17%;background:#7c4dbc"></i>
+        <span class="mt" style="left:12%"></span><span class="mt" style="left:19%"></span><span class="mt" style="left:26%"></span><span class="mt" style="left:33%"></span><span class="mt" style="left:55%"></span><span class="mt" style="left:63%"></span><span class="mt" style="left:71%"></span>
+      </div>
+    </div>
+    <div class="v7-card">
+      <div class="dt">WED · 01 JUL 2026 · 02:41 h</div>
+      <div class="nm">Morning session</div>
+      <div class="in">turbine start-up in the morning</div>
+      <div class="v7-mini">
+        <i style="width:22%;background:#6b7684"></i><i style="width:3%;background:#c07f10"></i><i style="width:75%;background:#2563a8"></i>
+        <span class="mt" style="left:40%"></span><span class="mt" style="left:44%"></span>
+      </div>
+    </div>
+    <div class="v7-card">
+      <div class="dt">SAT · 27 JUN 2026 · 05:07 h</div>
+      <div class="nm">Cycling day</div>
+      <div class="in">pump ⇄ phase-shifter cycles</div>
+      <div class="v7-mini">
+        <i style="width:14%;background:#7c4dbc"></i><i style="width:2%;background:#c07f10"></i><i style="width:12%;background:#1d8a70"></i><i style="width:2%;background:#c07f10"></i><i style="width:15%;background:#7c4dbc"></i><i style="width:2%;background:#c07f10"></i><i style="width:13%;background:#1d8a70"></i><i style="width:2%;background:#c07f10"></i><i style="width:16%;background:#7c4dbc"></i><i style="width:2%;background:#c07f10"></i><i style="width:20%;background:#1d8a70"></i>
+        <span class="mt" style="left:29%"></span><span class="mt" style="left:61%"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- KPI -->
+  <div class="v7-kpis">
+    <div class="v7-kpi">
+      <div class="k">OPERATING STATE — STEP 1</div>
+      <div class="v"><span class="v7-dot"></span><b>Turbine</b></div>
+      <div class="s">since 00:41:12 UTC · threshold certified</div>
+    </div>
+    <div class="v7-kpi">
+      <div class="k">ACTIVE POWER P</div>
+      <div class="v mono">245.9<span class="u"> MW</span></div>
+      <div class="s">SCADA, 1 Hz mean</div>
+    </div>
+    <div class="v7-kpi">
+      <div class="k">SHAFT SPEED n</div>
+      <div class="v mono">378.8<span class="u"> rpm</span></div>
+      <div class="s">turbine +, pump −</div>
+    </div>
+    <div class="v7-kpi">
+      <div class="k">ALARM EPISODES TODAY</div>
+      <div class="v mono">3<span class="u"> episodes</span></div>
+      <div class="s"><span class="v7-red" style="font-weight:700">1 active now</span> · rows in register</div>
+    </div>
+    <div class="v7-kpi">
+      <div class="k">FALSE-ALARM RATE</div>
+      <div class="v mono">7.5<span class="u"> % of windows</span></div>
+      <div class="s">realized · budget α = 5 %</div>
+    </div>
+  </div>
+
+  <!-- timeline -->
+  <div class="v7-lbl"><span class="t">SESSION TIMELINE</span><span class="ln"></span><span class="cap">full day · click or drag to seek</span></div>
+  <div class="v7-panel v7-instr">
+    <div class="hd"><span class="t">29 JUN 2026 — FULL DAY (00:00–04:19 h)</span>
+      <span class="r mono">top: detector · bottom: SCADA rules</span></div>
+    <div class="v7-ribrow">
+      <div class="v7-riblab"><b>DETECTOR</b>step 1</div>
+      <div class="v7-ribbon">
+        <i class="lab" data-l="Standstill" style="width:17%;background:#6b7684"></i><i style="width:2.5%;background:#c07f10"></i><i class="lab" data-l="Turbine" style="width:47%;background:#2563a8"></i><i style="width:2.5%;background:#c07f10"></i><i class="lab" data-l="Pump" style="width:15%;background:#7c4dbc"></i><i class="lab" data-l="Standstill" style="width:16%;background:#6b7684"></i>
+        <span class="v7-tick" style="left:33%"></span><span class="v7-tick" style="left:51%"></span><span class="v7-tick" style="left:56.5%"></span>
+        <span class="v7-play" style="left:58%"></span>
+      </div>
+    </div>
+    <div class="v7-ribrow">
+      <div class="v7-riblab"><b>SCADA</b>rule-based</div>
+      <div class="v7-ribbon slim">
+        <i class="lab" data-l="Standstill" style="width:16.4%;background:#6b7684"></i><i style="width:2.3%;background:#c07f10"></i><i class="lab" data-l="Turbine" style="width:47%;background:#2563a8"></i><i style="width:2%;background:#c07f10"></i><i class="lab" data-l="Pump" style="width:15.5%;background:#7c4dbc"></i><i class="lab" data-l="Standstill" style="width:16.8%;background:#6b7684"></i>
+      </div>
+    </div>
+    <div class="v7-legend">
+      <span><span class="sw" style="background:#2563a8"></span>Turbine</span>
+      <span><span class="sw" style="background:#7c4dbc"></span>Pump</span>
+      <span><span class="sw" style="background:#1d8a70"></span>Phase-shifter</span>
+      <span><span class="sw" style="background:#6b7684"></span>Standstill</span>
+      <span><span class="sw" style="background:#c07f10"></span>Transition</span>
+      <span><span class="td"></span>Alarm episode → register</span>
+      <span style="color:#0e8f6f;font-weight:700">agreement today: 96.8 % of windows</span>
+    </div>
+    <div class="v7-trend">
+      <div class="v7-trow">
+        <div class="v7-tlab"><span class="n">P · ACTIVE POWER</span><span class="lv mono">245.9<span class="u"> MW</span></span></div>
+        <div class="v7-tchart" style="height:36px">
+          <svg viewBox="0 0 900 36" preserveAspectRatio="none">
+            <polyline points="0,31 150,31 165,11 420,9 425,8 575,11 590,29 730,29 745,31 900,31" fill="none" stroke="#2563a8" stroke-width="1.5"/>
+          </svg>
+        </div>
+      </div>
+      <div class="v7-trow">
+        <div class="v7-tlab"><span class="n">n · SHAFT SPEED</span><span class="lv mono">378.8<span class="u"> rpm</span></span></div>
+        <div class="v7-tchart" style="height:24px">
+          <svg viewBox="0 0 900 24" preserveAspectRatio="none">
+            <polyline points="0,20 152,20 160,5 585,5 594,20 900,20" fill="none" stroke="#5b7fa6" stroke-width="1.2"/>
+          </svg>
+        </div>
+      </div>
+      <div class="v7-trow">
+        <div class="v7-tlab"><span class="n">Q · NET FLOW</span><span class="lv mono">41.3<span class="u"> m³/s</span></span></div>
+        <div class="v7-tchart" style="height:24px">
+          <svg viewBox="0 0 900 24" preserveAspectRatio="none">
+            <polyline points="0,21 150,21 168,7 300,6 420,8 520,6 578,9 592,21 900,21" fill="none" stroke="#1d8a70" stroke-width="1.2"/>
+          </svg>
+        </div>
+      </div>
+      <div class="v7-trow" style="margin-bottom:0">
+        <div class="v7-tlab"><span class="n">KS · SPHERICAL VALVE</span><span class="lv mono">2.8<span class="u"> pos</span></span></div>
+        <div class="v7-tchart" style="height:24px">
+          <svg viewBox="0 0 900 24" preserveAspectRatio="none">
+            <polyline points="0,20 148,20 148,5 590,5 590,20 900,20" fill="none" stroke="#7c4dbc" stroke-width="1.2"/>
+          </svg>
+        </div>
+      </div>
+      <div style="position:absolute; top:0; bottom:0; left:calc(90px + (100% - 90px) * .58); width:2px; background:#18202a; box-shadow:0 0 0 1px rgba(255,255,255,.75)"></div>
+    </div>
+    <div class="v7-tcap">values left of each curve = <b>at the playhead (14:02:11 UTC)</b> · curves = whole day, same time axis as the ribbons</div>
+  </div>
+
+  <!-- spectrogram -->
+  <div class="v7-lbl"><span class="t">SPECTROGRAM</span><span class="ln"></span><span class="cap">what you hear, as an image — bright = loud · mic &amp; volume in the player bar</span></div>
+  <div class="v7-panel v7-instr">
+    <div class="hd">
+      <span class="t">LOG-MEL · ±30 s AROUND PLAYHEAD</span>
+      <span class="r mono">listening: <span class="ok">generator mic</span> · 64 mel bands · 0–8 kHz</span>
+    </div>
+    <div class="v7-spec">
+      <span class="fx" style="top:5px">8 kHz</span><span class="fx" style="bottom:12px">0 kHz</span>
+      <span class="tx" style="left:5px">−30 s</span><span class="tx" style="right:5px">+30 s</span>
+      <span class="v7-strike" style="left:23%"></span>
+      <span class="v7-strike" style="left:41%"></span>
+      <span class="ph"></span>
+    </div>
+  </div>
+
+  <!-- pipeline -->
+  <div class="v7-lbl"><span class="t">PIPELINE DIAGNOSTICS</span><span class="ln"></span><span class="cap">the same second under the playhead, stage by stage</span></div>
+  <div class="v7-pipe">
+    <div class="v7-panel">
+      <div class="ph2"><span>STAGE 1 — INPUT FEATURES</span><span class="r mono">231 features</span></div>
+      <div class="fp7-row"><span class="nm">Generator mic 3 · octave 2 kHz</span>
+        <span class="fp7-bar"><i style="left:50%;width:23%;background:#c07f10"></i></span><span class="fp7-val mono">+1.8 σ</span></div>
+      <div class="fp7-row"><span class="nm">Turbine vibration · axial RMS</span>
+        <span class="fp7-bar"><i style="left:50%;width:11%;background:#c07f10"></i></span><span class="fp7-val mono">+0.9 σ</span></div>
+      <div class="fp7-row"><span class="nm">Turbine mic · spectral centroid</span>
+        <span class="fp7-bar"><i style="right:50%;width:9%;background:#2563a8"></i></span><span class="fp7-val mono">−0.7 σ</span></div>
+      <div class="fp7-row"><span class="nm">Generator mic 1 · band 50 Hz</span>
+        <span class="fp7-bar"><i style="left:50%;width:8%;background:#c07f10"></i></span><span class="fp7-val mono">+0.6 σ</span></div>
+      <div class="fp7-strip">
+        <span class="split"></span>
+        <i style="height:40%"></i><i style="height:65%"></i><i style="height:30%"></i><i class="hot" style="height:85%"></i><i style="height:50%"></i><i style="height:38%"></i><i style="height:55%"></i><i style="height:42%"></i><i style="height:28%"></i><i style="height:60%"></i><i style="height:35%"></i><i style="height:48%"></i><i style="height:52%"></i><i style="height:31%"></i><i style="height:44%"></i><i style="height:58%"></i><i style="height:36%"></i><i style="height:49%"></i><i style="height:27%"></i><i style="height:53%"></i><i style="height:41%"></i><i style="height:33%"></i><i style="height:57%"></i><i style="height:45%"></i><i class="hot" style="height:70%"></i><i style="height:39%"></i><i style="height:51%"></i><i style="height:29%"></i><i style="height:46%"></i><i style="height:56%"></i><i style="height:34%"></i><i style="height:47%"></i>
+      </div>
+      <div class="fp7-note">most deviating of 231 features, in σ vs. this day's mean · full vector below — audio (135) | vibration (96)</div>
+    </div>
+    <div class="v7-panel">
+      <div class="ph2"><span>STAGE 2 — STATE &amp; DRIFT SENTINEL</span></div>
+      <div class="v7-kv"><span class="k">Detected state</span><span class="v">Turbine · since 00:41:12 UTC</span></div>
+      <div class="v7-kv"><span class="k">Mode bank</span><span class="v">cluster 2 · threshold certified</span></div>
+      <div class="v7-kv"><span class="k">Windows fitting no mode</span><span class="v mono">7.67 % / budget 8.05 %</span></div>
+      <div class="v7-gauge"><span class="fill"></span><span class="mark"></span></div>
+      <div class="v7-verdict"><b>Sentinel quiet</b> — once-calibrated thresholds stay frozen. Above its budget, the day would be flagged for recalibration.</div>
+    </div>
+    <div class="v7-panel">
+      <div class="ph2"><span>STAGE 3 — ANOMALY VERDICT</span><span class="r mono">p = 0.41 · <span class="ok">normal</span></span></div>
+      <svg viewBox="0 0 340 64" style="display:block;width:100%;height:64px;background:#f7f9fb;border:1px solid #dfe4ea;border-radius:2px">
+        <line x1="0" y1="46" x2="340" y2="46" stroke="#c07f10" stroke-width=".8" stroke-dasharray="4 3"/>
+        <text x="296" y="43" fill="#c07f10" font-size="7">α = 0.05</text>
+        <polyline points="0,20 18,23 36,18 54,27 72,21 90,29 108,20 126,17 144,33 162,24 180,20 198,28 216,22 234,16 252,26 270,20 288,23 306,18 324,22 340,20" fill="none" stroke="#0e8f6f" stroke-width="1.2"/>
+        <circle cx="110" cy="55" r="2" fill="#c73a1d"/><circle cx="151" cy="58" r="2" fill="#c73a1d"/><circle cx="219" cy="56" r="2" fill="#c73a1d"/>
+        <line x1="197" y1="0" x2="197" y2="64" stroke="#18202a" stroke-width="1" opacity=".8"/>
+      </svg>
+      <div class="v7-kv" style="margin-top:5px"><span class="k">Alarm rule</span><span class="v mono">p &lt; α = 0.05, per state</span></div>
+      <div class="v7-kv"><span class="k">Near a mode transition</span><span class="v">no</span></div>
+      <div class="v7-verdict">Scored against <b>its own state's</b> normal model. A firing window becomes a register episode.</div>
+    </div>
+  </div>
+
+  <!-- register -->
+  <div class="v7-lbl"><span class="t">ALARM REGISTER</span><span class="ln"></span><span class="cap">every episode with its trigger criterion</span></div>
+  <div class="v7-panel v7-reg" style="margin: 0 18px; padding: 4px 8px 2px;">
+    <table>
+      <tr><th>TIME (UTC)</th><th>PATH</th><th>STATE</th><th>WHY FLAGGED</th><th></th></tr>
+      <tr><td class="mono">09:14:02</td><td><span class="v7-badge sus">SUSTAINED</span></td><td>Turbine</td>
+        <td>41 s run of windows with p &lt; 0.05 — persistently unusual sound for turbine operation</td>
+        <td><span class="listen">LISTEN ▸</span></td></tr>
+      <tr><td class="mono">11:32:47</td><td><span class="v7-badge tra">TRANSIENT</span></td><td>Turbine</td>
+        <td>single window p = 0.003, impulsive — short event, no mode change nearby</td>
+        <td><span class="listen">LISTEN ▸</span></td></tr>
+      <tr><td class="mono">13:45:31</td><td><span class="v7-badge sus">SUSTAINED</span></td><td>Pump</td>
+        <td>28 s run with p &lt; 0.05, starts 90 s after a mode change — transition caution</td>
+        <td><span class="listen">LISTEN ▸</span></td></tr>
+    </table>
+  </div>
+
+  <div style="height:4px"></div>
+
+  <!-- transport -->
+  <div class="v7-transport">
+    <span class="pl">▶&nbsp;PLAY</span>
+    <span class="sp on">1×</span><span class="sp">4×</span><span class="sp">16×</span>
+    <span class="v7-sep"></span>
+    <span class="v7-listen">
+      <span class="lb">LISTEN</span>
+      <span class="mic">muted</span><span class="mic on">generator mic</span><span class="mic">turbine mic</span>
+    </span>
+    <span class="v7-vol"><span style="font-size:8.5px;color:#7a8798">vol</span><span class="tr"><i></i><b></b></span><span class="mono" style="font-size:8.5px;color:#5c6b7d">65 %</span></span>
+    <span class="tm mono">t = 02:31:12 / 04:19:45 h</span>
+  </div>
+
+</div>
+
+<p class="subtitle">v6-System in hell: weisse Panels auf technischem Grau, Status-Farben (grün/amber/rot) und Modus-Farben bleiben semantisch, Spektrogramm bleibt als Messgrafik dunkel. Alle Zahlen tragen Einheit oder Label (episodes, MW, rpm, % of windows, σ, UTC, h, mel bands, m³/s, pos, %). Passt diese Basis?</p>
