@@ -22,7 +22,9 @@ def test_session_summary_shape() -> None:
     assert s["events"] is True
     assert s["duration_s"] == 3600.0
     assert s["n_episodes"] == 7
-    assert s["date_label"].startswith("WED · 08 JUL 2026")
+    date_label = s["date_label"]
+    assert isinstance(date_label, str)
+    assert date_label.startswith("WED · 08 JUL 2026")
 
 
 def test_humanized_names_helper() -> None:
