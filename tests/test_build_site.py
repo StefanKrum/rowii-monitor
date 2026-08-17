@@ -286,3 +286,23 @@ def test_find_external_resource_urls_ignores_bare_text_mentions() -> None:
     # attribute, is not a resource load and must not be flagged.
     html = "<p>Data courtesy of the plant operator (see https://example.org/policy).</p>"
     assert bs.find_external_resource_urls(html) == []
+
+
+def test_design_css_v7_tokens_and_no_legacy_look() -> None:
+    css = (Path(__file__).resolve().parents[1] / "docs" / "site" / "assets" / "design.css").read_text()
+    # v7 tokens (spec §3)
+    for token in [
+        "--paper: #e9ecf0", "--panel: #ffffff", "--ink: #18202a", "--hair: #d3d9e0",
+        "--live: #0e8f6f", "--alarm: #c73a1d", "--warn-text: #a16207", "--warn-fill: #c07f10",
+        "--s-turbine: #2563a8", "--s-pump: #7c4dbc", "--s-phase: #1d8a70",
+        "--s-standstill: #6b7684", "--s-transition: #c07f10", "--s-unknown: #aab2bc",
+    ]:
+        assert token in css, token
+    # v7 components exist
+    for cls in [".app-bar", ".group-label", ".session-card", ".kpi-band", ".trend-row",
+                ".stage-grid", ".register-table", ".transport", ".seg-tabs", ".clip-card"]:
+        assert cls in css, cls
+    # legacy look must be gone
+    assert "Avenir Next" not in css
+    assert "--paper: #eceef0" not in css
+    assert ".topbar" not in css
