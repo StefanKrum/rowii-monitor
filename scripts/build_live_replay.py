@@ -349,17 +349,19 @@ def sentinel_payload(
     """Map one `trigger_log` row (*trig*) and one `regimes` row (*regime*) --
     either or both may be `None`, since not every `LIVE_SESSIONS` entry was
     scored by the once-calibrated sentinel driver -- to `payload["sentinel"]`'s
-    own three-shape contract (review round 1 ruling: honest degradation, no
-    invented values, no counterfactuals):
+    own three-shape contract (review round 2 correction: `decision` is REAL
+    recorded sentinel data, carried through verbatim whenever *trig* exists --
+    never discarded just because *regime* happens to be missing).
 
     - both present -> the original full shape, plus `"available": "full"`.
     - *trig* only (*regime* is `None`) -> exactly the fields the trigger row
       itself carries (era, s1_rate, s1_threshold, s1_fired, s2_fired,
-      s2_attribution) plus `"decision": None` -- a regime decision was never
-      RECORDED for this session, whatever the trigger row's own `decision`
-      guess happens to read -- `"available": "trigger_only"`, and an
-      explanatory `"note"`. No FAR field (`realized_far` etc.) is present:
-      those are only ever derivable from *regime*.
+      s2_attribution, decision -- verbatim, since it's the sentinel's own
+      real recorded decision, not something *regime* derives) plus
+      `"available": "trigger_only"` and an explanatory `"note"`. No FAR field
+      (`realized_far` etc.) is present: those are only ever derivable from
+      *regime* -- what's genuinely missing here is the regime REPLAY/FAR
+      bookkeeping, never the decision.
     - neither present (*trig* is `None`) -> `{"available": "none", "note":
       ...}` and NOTHING else -- no fabricated rates of any kind.
 
@@ -380,19 +382,19 @@ def sentinel_payload(
         "s1_fired": bool(trig["s1_fired"]),
         "s2_fired": bool(trig["s2_fired"]),
         "s2_attribution": trig["s2_attribution"],
+        "decision": trig["decision"],
     }
     if regime is None:
         return {
             **trig_fields,
-            "decision": None,
             "available": "trigger_only",
             "note": (
-                "sentinel scored this day, but no regime decision was recorded for this session"
+                "sentinel decision recorded; no regime replay (FAR evaluation) exists for "
+                "this session"
             ),
         }
     return {
         **trig_fields,
-        "decision": trig["decision"],
         "nominal_alpha": 0.05,
         "realized_far": round(regime["once_triggered_far"], 6),
         "always_frozen_far": round(regime["always_frozen_far"], 6),

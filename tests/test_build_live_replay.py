@@ -193,11 +193,16 @@ def test_sentinel_payload_full_when_trigger_and_regime_rows_both_present() -> No
 
 def test_sentinel_payload_trigger_only_when_regime_row_missing() -> None:
     """270626-pu_ph_pu_ph_pu_ph-1's real shape: a trigger_log row exists (this
-    session WAS sentinel-scored) but no regimes row (it was never monitored
-    under the pinned once-calibrated tree) -- `decision` must come out `None`
-    even though the raw trigger row's own `decision` field is NOT null (a
-    regime decision was never RECORDED for this session, whatever the
-    trigger row's own guess reads), and no FAR field may be fabricated."""
+    session WAS sentinel-scored, with a REAL recorded decision) but no
+    regimes row (no regime REPLAY/FAR bookkeeping exists for this session --
+    it was never monitored under the pinned once-calibrated tree). `decision`
+    carries the trigger row's own real value VERBATIM -- it is real recorded
+    data, not something a missing regime replay should discard (contract
+    correction, review round 2: an earlier version of this shape wrongly
+    forced `decision: None` here). Only the FAR-derived fields
+    (`nominal_alpha`, `realized_far`, `always_frozen_far`,
+    `always_recalibrate_far`, `far_basis`) are genuinely unavailable without a
+    regime row, so those -- and only those -- stay absent."""
     trig = {
         "era": "A", "s1_rate": 0.3273, "s1_threshold": 0.0805,
         "s1_fired": True, "s2_fired": False, "s2_attribution": "machine",
@@ -212,9 +217,17 @@ def test_sentinel_payload_trigger_only_when_regime_row_missing() -> None:
         "s1_fired": True,
         "s2_fired": False,
         "s2_attribution": "machine",
-        "decision": None,
-        "note": "sentinel scored this day, but no regime decision was recorded for this session",
+        "decision": "recalibrate",
+        "note": (
+            "sentinel decision recorded; no regime replay (FAR evaluation) exists for "
+            "this session"
+        ),
     }
+    for far_key in (
+        "nominal_alpha", "realized_far", "always_frozen_far",
+        "always_recalibrate_far", "far_basis",
+    ):
+        assert far_key not in payload
 
 
 def test_sentinel_payload_none_when_neither_row_present() -> None:
