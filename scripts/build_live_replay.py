@@ -2,7 +2,7 @@
 in `LIVE_SESSIONS` (real, native -- not iframed) from already-computed real
 artifacts -- NEVER touches `ROWII_DATA_ROOT`/raw Gantner burst files. Everything a
 page needs (state timeline, p-value stream, alarm feed, sentinel verdict, SCADA
-line, per-stream level series, a downsampled log-mel strip, a downsampled feature
+line, a downsampled log-mel strip, a downsampled feature
 snapshot matrix) is precomputed into ONE embedded JSON payload per session,
 injected into `docs/site/live_template.html` at a single `__LIVE_DATA_JSON__`
 token, producing `docs/site/<LIVE_SESSIONS[run]["out"]>`. Reproducible from
@@ -36,11 +36,11 @@ identical either way. fusion is the headline REPRESENTATION for every session in
 per session, read from the same `REGIME_BY_SESSION` lookup `candidate_kit.py`
 itself uses.
 
-Alert-feed source: `results/candidate-kit/candidates.csv` rows for this session
-(already the two-path SUSTAINED/TRANSIENT classification, already SCADA-attached,
-already carrying a human criterion sentence) -- NOT the raw 275 frozen-mode alarm
-episodes, which lack a why-line entirely. See `scripts/candidate_kit.py`'s own
-module docstring for the selection rule.
+Alert-feed source: `results/candidate-kit/candidates_meta.json` rows for this
+session (already the two-path SUSTAINED/TRANSIENT classification, already
+SCADA-attached, already carrying a human criterion sentence) -- NOT the raw 275
+frozen-mode alarm episodes, which lack a why-line entirely. See
+`scripts/candidate_kit.py`'s own module docstring for the selection rule.
 
 Time alignment: every per-second series in this payload (RMS levels, log-mel strip,
 feature snapshot, SCADA) is aligned to the PRIMARY (fusion monitor) timeline by
@@ -62,9 +62,9 @@ streams' first/last-file spans (`common_grid`'s `max(t0)`/`min(t_end)`,
 (verified against `_synthesize_run_header`: only each stream's FIRST/LAST file
 feeds the grid). Both still share the
 identical `grid_t0_ns`, so index `i` means the same real second in either one;
-`load_levels`/`load_feature_snapshot` truncate every array they combine down to the
-shortest cache's own length before indexing (`_truncate_to_common_length`) rather
-than assuming agreement. For a 1 Hz visual replay the sub-second/metadata-only
+`load_feature_snapshot` truncates every array it combines down to the shortest
+cache's own length before indexing (`_truncate_to_common_length`) rather than
+assuming agreement. For a 1 Hz visual replay the sub-second/metadata-only
 `grid_t0_ns` disagreement above, and any truncated tail beyond the primary (fusion)
 timeline's own `duration_s`, are both immaterial; index `i` is treated as "second `i`
 of the replay" throughout.
@@ -96,7 +96,6 @@ import build_live_audio as lva  # noqa: E402
 import candidate_kit as ck  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import run_step1 as rs1  # noqa: E402
-import site_common as sc  # noqa: E402
 from feature_labels import humanize_feature_name  # noqa: E402
 
 from rowii.config import load_config  # noqa: E402
@@ -177,7 +176,6 @@ class RunContext:
     factored out here (not a local variable inside that function, as it was
     before this field existed) so `preflight` can check its existence too,
     from the SAME formula, without duplicating the path-join."""
-    candidates_csv: Path
     candidates_meta: Path
     audio_dir: Path
     audio_meta_json: Path
@@ -203,7 +201,6 @@ def make_run_context(run: str) -> RunContext:
         fusion_json=(
             RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / f"{REPRESENTATION}.json"
         ),
-        candidates_csv=RESULTS_ROOT / "candidate-kit" / "candidates.csv",
         candidates_meta=RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
         audio_dir=AUDIO_DIR,
         audio_meta_json=AUDIO_DIR / f"{run}_audio_meta.json",
@@ -284,16 +281,15 @@ def _truncate_to_common_length(*arrays: np.ndarray, label: str) -> tuple[np.ndar
     EXACT alignment over the shared prefix, not a lossy approximation, and the
     discarded vibration tail is beyond the primary (fusion) timeline's own
     `duration_s` anyway -- the replay's own playhead never reaches it. Used by
-    `load_levels`/`load_feature_snapshot`, both of which combine an
-    `audio.npz`-derived `valid_mask`/length with `vibration.npz`-derived
-    arrays.
+    `load_feature_snapshot`, which combines an `audio.npz`-derived `valid_mask`/
+    length with `vibration.npz`-derived arrays.
 
     *label* identifies the caller for the `logger.warning` this emits WHEN
     truncation actually discards data (the common length is shorter than the
-    longest input) -- e.g. `f"load_levels[{ctx.run}]"`. Silent (no warning) in
-    the equal-length common case; reviewer finding (round 1) was that a real
-    mismatch like the 270626 case above was previously absorbed with no log
-    trace at all.
+    longest input) -- e.g. `f"load_feature_snapshot[{ctx.run}]"`. Silent (no
+    warning) in the equal-length common case; reviewer finding (round 1) was
+    that a real mismatch like the 270626 case above was previously absorbed
+    with no log trace at all.
     """
     lengths = [a.shape[0] for a in arrays]
     n = min(lengths)
@@ -436,7 +432,7 @@ def sentinel_payload(
             "available": "none",
             "note": (
                 "session not scored by the once-calibrated sentinel driver; alarms come "
-                "from the frozen-threshold monitoring extension"
+                "from the coverage-extension monitor run (recalibrate thresholds)"
             ),
         }
     trig_fields = {
@@ -479,69 +475,6 @@ def load_sentinel(ctx: RunContext) -> dict[str, Any]:
         fusion_json = json.loads(ctx.fusion_json.read_text(encoding="utf-8"))
         regime = next((r for r in fusion_json["regimes"] if r["run"] == ctx.run), None)
     return sentinel_payload(trig, regime)
-
-
-# ---------------------------------------------------------------------------
-# Per-stream RMS level series (sensor panel ring pulsing)
-# ---------------------------------------------------------------------------
-
-
-def load_levels(ctx: RunContext) -> dict[str, Any]:
-    """One 1 Hz level series per raw stream -- mic streams use channel 0's
-    `log_rms` (the pipeline's own established "channel 0 of each stream"
-    convention, `make_demo_assets.MONO_CHANNEL_INDEX`); vibration streams use the
-    MEAN `log_rms` over every channel the handcrafted cache actually carries for
-    that stream (no established single-channel convention exists for vibration,
-    module docstring's own honesty note on the ring's real position<->channel
-    mapping never being verified)."""
-    audio = np.load(CACHE_DIR / f"{ctx.run}--audio.npz", allow_pickle=True)
-    vibration = np.load(CACHE_DIR / f"{ctx.run}--vibration.npz", allow_pickle=True)
-
-    def _column(d: Any, name: str) -> np.ndarray:
-        idx = int(np.where(d["feature_names"] == name)[0][0])
-        return np.asarray(d["features"][:, idx], dtype=np.float64)
-
-    def _mean_columns(d: Any, prefix: str, suffix: str) -> np.ndarray:
-        names = list(d["feature_names"])
-        cols = [i for i, n in enumerate(names) if n.startswith(prefix) and n.endswith(suffix)]
-        if not cols:
-            raise ValueError(f"no columns matching {prefix}*{suffix} in cache")
-        return np.asarray(d["features"][:, cols], dtype=np.float64).mean(axis=1)
-
-    gen_mic = _column(audio, "RAWGeneratorMic__0::ch0_log_rms")
-    tur_mic = _column(audio, "RAWTurbineMic__1::ch0_log_rms")
-    gen_vib = _mean_columns(vibration, "RAWGeneratorVib__2::", "_log_rms")
-    tur_vib = _mean_columns(vibration, "RAWTurbineVib__3::", "_log_rms")
-    valid = np.asarray(audio["valid_mask"], dtype=bool)
-    # audio.npz and vibration.npz are not guaranteed to share one grid_n_windows
-    # (_truncate_to_common_length's own docstring: 270626-pu_ph_pu_ph_pu_ph-1 is
-    # the real case where they don't) -- truncate every series to the shortest
-    # one's length before `valid` is used to index any of them.
-    gen_mic, tur_mic, gen_vib, tur_vib, valid = _truncate_to_common_length(
-        gen_mic, tur_mic, gen_vib, tur_vib, valid, label=f"load_levels[{ctx.run}]"
-    )
-    gen_mic = np.asarray(gen_mic, dtype=np.float64)
-    tur_mic = np.asarray(tur_mic, dtype=np.float64)
-    gen_vib = np.asarray(gen_vib, dtype=np.float64)
-    tur_vib = np.asarray(tur_vib, dtype=np.float64)
-    valid = np.asarray(valid, dtype=bool)
-
-    def _norm01(x: np.ndarray) -> np.ndarray:
-        finite = x[valid]
-        lo, hi = float(np.percentile(finite, 2)), float(np.percentile(finite, 98))
-        span = max(hi - lo, 1e-9)
-        out = np.clip((x - lo) / span, 0.0, 1.0)
-        out[~valid] = 0.0
-        return out
-
-    return {
-        "n": int(len(gen_mic)),
-        "gen_mic": _round_list(_norm01(gen_mic), 4),
-        "tur_mic": _round_list(_norm01(tur_mic), 4),
-        "gen_vib": _round_list(_norm01(gen_vib), 4),
-        "tur_vib": _round_list(_norm01(tur_vib), 4),
-        "valid": [bool(v) for v in valid],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -658,14 +591,13 @@ def load_logmel_strip(ctx: RunContext) -> dict[str, Any]:
 def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
     audio = np.load(CACHE_DIR / f"{ctx.run}--audio.npz", allow_pickle=True)
     vibration = np.load(CACHE_DIR / f"{ctx.run}--vibration.npz", allow_pickle=True)
-    beats = np.load(CACHE_DIR / f"{ctx.run}--audio-beats.npz", allow_pickle=True)
 
     audio_feats = np.asarray(audio["features"], dtype=np.float64)
     vib_feats = np.asarray(vibration["features"], dtype=np.float64)
     valid = np.asarray(audio["valid_mask"], dtype=bool)
-    # See _truncate_to_common_length's own docstring / load_levels's identical
-    # comment: audio.npz and vibration.npz do not always share one
-    # grid_n_windows (270626-pu_ph_pu_ph_pu_ph-1 is the real counter-case).
+    # See _truncate_to_common_length's own docstring: audio.npz and vibration.npz
+    # do not always share one grid_n_windows (270626-pu_ph_pu_ph_pu_ph-1 is the
+    # real counter-case).
     audio_feats, vib_feats, valid = _truncate_to_common_length(
         audio_feats, vib_feats, valid, label=f"load_feature_snapshot[{ctx.run}]"
     )
@@ -687,15 +619,6 @@ def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
     audio_z = _zscore(audio_feats)[idx]
     vib_z = _zscore(vib_feats)[idx]
 
-    beats_feats = np.asarray(beats["features"], dtype=np.float64)
-    beats_norm = np.linalg.norm(beats_feats, axis=1)
-    beats_valid = np.asarray(beats["valid_mask"], dtype=bool)
-    ref = beats_norm[beats_valid]
-    lo, hi = float(np.percentile(ref, 2)), float(np.percentile(ref, 98))
-    span = max(hi - lo, 1e-9)
-    beats_norm01 = np.clip((beats_norm - lo) / span, 0.0, 1.0)
-    beats_norm01[~beats_valid] = 0.0
-
     return {
         "t_idx": [int(i) for i in idx],
         "stride_s": FEATURE_SNAPSHOT_STRIDE_S,
@@ -706,8 +629,6 @@ def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
         "vib_names": humanize_names([str(n) for n in vibration["feature_names"]]),
         "audio_b64": _f32_b64(audio_z),
         "vibration_b64": _f32_b64(vib_z),
-        "n_beats": int(beats_feats.shape[1]),
-        "beats_norm01": _round_list(beats_norm01[idx], 4),
     }
 
 
@@ -954,7 +875,6 @@ def build_payload(ctx: RunContext, index: Any, cfg: Any) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         **primary,
         "sentinel": load_sentinel(ctx),
-        "levels": load_levels(ctx),
         "scada": load_scada(ctx, index, cfg),
         "logmel": load_logmel_strip(ctx),
         "features": load_feature_snapshot(ctx),
@@ -963,14 +883,6 @@ def build_payload(ctx: RunContext, index: Any, cfg: Any) -> dict[str, Any]:
         "session": session_summary(
             ctx.run, duration_s=primary["duration_s"], n_episodes=len(alerts)
         ),
-        "rings": {
-            "generator": sc.render_ring_svg(
-                "GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False
-            ),
-            "turbine": sc.render_ring_svg(
-                "TURBINE", sc.TURBINE_MARKERS, size=196, interactive=False
-            ),
-        },
     }
     return payload
 

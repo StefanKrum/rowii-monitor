@@ -209,7 +209,6 @@ main.page { max-width: 1200px; margin: 0 auto; padding: 0 0 40px; }
 .register-table td { padding: 6px 8px; border-bottom: 1px solid var(--hair-3);
   vertical-align: top; color: #33404d; }
 .register-table tr:last-child td { border-bottom: 0; }
-.register-table tr.acked { opacity: .45; }
 .register-table tr.future { opacity: .35; }
 .register-table .listen { font-size: 9px; color: var(--ink); font-weight: 700;
   letter-spacing: .04em; white-space: nowrap; border-bottom: 1px solid var(--ink); cursor: pointer; }
@@ -220,8 +219,6 @@ main.page { max-width: 1200px; margin: 0 auto; padding: 0 0 40px; }
   text-transform: uppercase; }
 .badge.sus { color: var(--warn-text); border-color: var(--warn-border); }
 .badge.tra { color: var(--alarm); border-color: var(--alarm); }
-.badge.state { color: var(--s-turbine); border-color: var(--s-turbine); }
-.badge.agree { color: var(--live); border-color: var(--live); }
 .badge.warn { color: var(--warn-text); border-color: var(--warn-border); }
 .badge.ev { color: var(--warn-text); border-color: var(--warn-border); margin-left: 5px;
   vertical-align: 1.5px; font-size: 7px; padding: 0 4px; }
@@ -291,10 +288,9 @@ a.card .go { display: block; margin-top: 10px; font-size: 10px; font-weight: 700
   color: var(--faint); font-size: 11px; border-top: 1px solid var(--hair); }
 
 /* state colors as utilities (closed vocabulary) */
-.st-turbine { color: var(--s-turbine); } .bg-turbine { background: var(--s-turbine); }
-.st-pump { color: var(--s-pump); } .bg-pump { background: var(--s-pump); }
-.st-phase-shifter { color: var(--s-phase); } .bg-phase-shifter { background: var(--s-phase); }
-.st-standstill { color: var(--s-standstill); } .bg-standstill { background: var(--s-standstill); }
-.st-transition { color: var(--s-transition); } .bg-transition { background: var(--s-transition); }
-.st-unknown { color: var(--s-unknown); } .bg-unknown { background: var(--s-unknown); }
-.text-live { color: var(--live); } .text-warn { color: var(--warn-text); }
+.bg-turbine { background: var(--s-turbine); }
+.bg-pump { background: var(--s-pump); }
+.bg-phase-shifter { background: var(--s-phase); }
+.bg-standstill { background: var(--s-standstill); }
+.bg-transition { background: var(--s-transition); }
+.bg-unknown { background: var(--s-unknown); }

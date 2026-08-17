@@ -2873,10 +2873,10 @@ flagged. In the interactive tool this is four responsive curves with a playhead
 that follows the audio, each row showing its own live reading as it plays.
 Underneath it, a two-row <strong>state ribbon</strong> shows the SCADA-derived
 state (top row) and the detector's own state (bottom row) for every second of
-the snippet, colored per the legend below. 27.06. has no Betriebsdaten at all,
-so its curves and readings stay blank (the state ribbon's SCADA row is then
-uniformly grey/&ldquo;unknown&rdquo;, correctly, since there is nothing to derive
-a state from).</p>
+the snippet, colored per the legend below. 27.06. has no SCADA operating data
+(Betriebsdaten) recorded for this session, so its curves and readings stay blank
+(the state ribbon's SCADA row is then uniformly grey/&ldquo;unknown&rdquo;,
+correctly, since there is nothing to derive a state from).</p>
 <div class="state-legend">__STATE_LEGEND_HTML__</div>
 <p><strong>Assessment:</strong> <em>plausible anomaly</em> = sounds like a genuine
 anomaly &middot; <em>operational/explained</em> = plausibly explained by normal

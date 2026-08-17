@@ -46,7 +46,7 @@
     if (!name) return "Unknown";
     if (name === "invalid") return "No usable data";
     if (name === "n/a") return "n/a"; // impulse-path candidates carry no detector state
-    return name.charAt(0).toUpperCase() + name.slice(1).replace("-", "-");
+    return name.charAt(0).toUpperCase() + name.slice(1);
   }
 
   // -------------------------------------------------------------- decoding
@@ -100,9 +100,9 @@
     var d = new Date(new Date(DATA.t0_utc).getTime() + playheadS * 1000);
     return pad2(d.getUTCDate()) + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
   }
-  function fmtNum(v, digits, suffix) {
+  function fmtNum(v, digits) {
     if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "—";
-    return v.toFixed(digits) + (suffix || "");
+    return v.toFixed(digits);
   }
 
   // -------------------------------------------------------------- lookups
@@ -495,21 +495,21 @@
     // conformal floor carries a +inf threshold and can therefore never alarm,
     // which an operator must be able to see AT the state, not only in a report.
     if (seg.state === -1) {
-      return { text: "no usable data", cls: "warn",
+      return { text: "no usable data",
         title: "This window has no usable sensor data -- it is never scored." };
     }
     var st = DATA.states[String(seg.state)];
     if (!st) {
-      return { text: "no snapshot reference", cls: "warn",
+      return { text: "no snapshot reference",
         title: "The detected mode has no reference in the calibrated snapshot, so it is never scored " +
           "and can never alarm." };
     }
     if (st.low_confidence) {
-      return { text: "low confidence", cls: "warn",
+      return { text: "low confidence",
         title: "Too few calibration windows to certify alpha for this state -- its threshold is +inf, " +
           "so it can never alarm." };
     }
-    return { text: "threshold certified", cls: "ok",
+    return { text: "threshold certified",
       title: "This state has enough calibration windows to certify its conformal threshold at the " +
         "nominal alpha." };
   }
@@ -710,8 +710,13 @@
       var el = audioEls[mode];
       if (!el.getAttribute("src")) {
         el.src = AUDIO[mode].file; // lazy -- never fetched until first selected
-        el.volume = parseFloat($("listenVolume").value);
       }
+      // Re-applied on EVERY switch, not just the first src assignment: the
+      // slider can move while this stream was not the active one (e.g. while
+      // muted, or while the other mic was selected), and audioEls[mode].volume
+      // must not stay stuck at whatever it was the last time this stream itself
+      // was active.
+      el.volume = parseFloat($("listenVolume").value);
       applyListenSpeed();
       syncAudio(state.playheadS, { forceSeek: true });
     }

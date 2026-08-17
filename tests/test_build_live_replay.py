@@ -130,7 +130,6 @@ def test_preflight_reports_missing_inputs_for_unbuilt_run() -> None:
             blr.RESULTS_ROOT / "step2" / "once-calibrated" / "audio-beats" / "audio-beats.json"
         ),
         fusion_json=blr.RESULTS_ROOT / "step2" / "once-calibrated" / "fusion" / "fusion.json",
-        candidates_csv=blr.RESULTS_ROOT / "candidate-kit" / "candidates.csv",
         candidates_meta=blr.RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
         audio_dir=blr.AUDIO_DIR,
         audio_meta_json=blr.AUDIO_DIR / f"{run}_audio_meta.json",
@@ -155,7 +154,6 @@ def test_preflight_reports_missing_sentinel_and_fusion_json_files() -> None:
         ),
         sentinel_json=blr.RESULTS_ROOT / "does-not-exist" / "audio-beats.json",
         fusion_json=blr.RESULTS_ROOT / "does-not-exist" / "fusion.json",
-        candidates_csv=blr.RESULTS_ROOT / "candidate-kit" / "candidates.csv",
         candidates_meta=blr.RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
         audio_dir=blr.AUDIO_DIR,
         audio_meta_json=blr.AUDIO_DIR / f"{run}_audio_meta.json",
@@ -240,7 +238,7 @@ def test_sentinel_payload_none_when_neither_row_present() -> None:
         "available": "none",
         "note": (
             "session not scored by the once-calibrated sentinel driver; alarms come "
-            "from the frozen-threshold monitoring extension"
+            "from the coverage-extension monitor run (recalibrate thresholds)"
         ),
     }
 
@@ -268,9 +266,9 @@ def test_truncate_to_common_length_real_270626_case(caplog: pytest.LogCaptureFix
     and 1.0 s `grid_window_ns` (verified directly against the real caches), so
     index `i` means the same real second in both and truncating the longer
     array down to the shorter one's length is exact alignment, not a lossy
-    approximation. This is the real shape that crashed `load_levels`/
-    `load_feature_snapshot` with a boolean-index length mismatch before this
-    fix (`_norm01`'s/`_zscore`'s `x[valid]`, `valid` being audio-length).
+    approximation. This is the real shape that crashed `load_feature_snapshot`
+    with a boolean-index length mismatch before this fix (`_zscore`'s
+    `x[valid]`, `valid` being audio-length).
 
     Reviewer finding (round 1): truncation that actually discards data was
     silent -- a real mismatch like this one produced no log trace anywhere.

@@ -759,7 +759,7 @@ microphones and two tri-axial accelerometers it detects the machine's operating 
 second by second &mdash; unsupervised, validated against SCADA-derived ground truth
 &mdash; and flags one-second windows that look unusual for the current mode, using a
 calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
-site replays a real recorded session end to end: where the sensors sit on the machine,
+site replays four recorded sessions end to end: where the sensors sit on the machine,
 a control-room replay of state, score and alarms, a library of real audio clips, and
 the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
 {_NOTICE_HTML}
@@ -771,10 +771,9 @@ the candidate-review tool used to hand model-flagged windows to a plant expert.<
     <span class="go">Open the sensor map &rarr;</span>
   </a>
   <a class="card" href="live.html">
-    <h2>Live Replay</h2>
-    <p>A real replay of one recorded session: operating state, features, sentinel and
-    p-value stream, and the alarm feed with its reasoning, in an operator control-room
-    view.</p>
+    <h2>Live replay</h2>
+    <p>Replays of four recorded sessions — operating state, features, sentinel and
+    alarms in a control-room view.</p>
     <span class="go">Open the control room &rarr;</span>
   </a>
   <a class="card" href="audio_review.html">

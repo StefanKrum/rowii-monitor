@@ -289,7 +289,8 @@ def test_find_external_resource_urls_ignores_bare_text_mentions() -> None:
 
 
 def test_design_css_v7_tokens_and_no_legacy_look() -> None:
-    css = (Path(__file__).resolve().parents[1] / "docs" / "site" / "assets" / "design.css").read_text()
+    css_path = Path(__file__).resolve().parents[1] / "docs" / "site" / "assets" / "design.css"
+    css = css_path.read_text()
     # v7 tokens (spec §3)
     for token in [
         "--paper: #e9ecf0", "--panel: #ffffff", "--ink: #18202a", "--hair: #d3d9e0",
