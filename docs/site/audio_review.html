@@ -105,6 +105,11 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .scada-tchart { border: 1px solid var(--hair-2); background: var(--panel);
                 border-radius: 2px; position: relative; width: 100%; }
 .scada-tchart svg { display: block; width: 100%; height: 100%; }
+.scada-ytick { position: absolute; left: 3px; font: 700 6px/1 var(--font-mono); color: var(--faint);
+               background: var(--panel); padding: 0 2px; border-radius: 1px; pointer-events: none;
+               font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scada-ytick.max { top: 1px; }
+.scada-ytick.min { bottom: 1px; }
 .scada-rows-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink);
                         box-shadow: 0 0 0 1px rgba(255,255,255,.75); pointer-events: none;
                         z-index: 4; }
@@ -691,22 +696,55 @@ var SCADA_CHANNELS = [
   { key: "ks_valve_1hz",     label: "KS · SPH. VALVE",     unit: "pos",  digits: 1, h: 18 },
 ];
 
-function scadaRowSvg(series, h) {
+function clampZero(value, digits) {
+  // -0.03 MW at standstill rounds to "-0.0" via toFixed -- clamp AFTER rounding
+  // (not before: rounding is what CREATES the spurious negative zero) so every
+  // live SCADA readout on this card -- the row's own text label and its mini-
+  // chart's y-ticks alike -- prints a clean "0.0" instead.
+  return +value.toFixed(digits) + 0;
+}
+
+function scadaRowSvg(series, h, digits) {
   var vals = series.filter(function (v) { return v !== null && isFinite(v); });
   if (!vals.length) return '<svg viewBox="0 0 100 ' + h + '"></svg>';
   var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
   var span = (max - min) || 1;
+  var pad = 2;
   var pts = [];
   for (var i = 0; i < series.length; i++) {
     var v = series[i];
     if (v === null || !isFinite(v)) continue;
     var x = (i / Math.max(series.length - 1, 1)) * 100;
-    var y = h - 2 - ((v - min) / span) * (h - 4);
+    var y = h - pad - ((v - min) / span) * (h - 2 * pad);
     pts.push(x.toFixed(2) + "," + y.toFixed(2));
   }
+  // Same Grafana-style dressing as the live page's own trend rows (assets/
+  // live.js's trendGridlinesSvg/trendZeroLineSvg): light gridlines always, a
+  // dashed zero line only when this channel's own min..max span actually
+  // crosses zero, min/max y-ticks as plain HTML overlay siblings (not SVG
+  // <text>) -- this SVG's 100-unit-wide viewBox is stretched many times over by
+  // preserveAspectRatio="none" onto the card's real (much wider) pixel width, so
+  // in-SVG text would render visibly stretched; a sibling <span> is immune to
+  // that scaling and stays self-contained (var(--...) tokens this page's own
+  // :root already defines, no assets/design.css dependency).
+  var gridFracs = h >= 24 ? [0.25, 0.5, 0.75] : [0.33, 0.67];
+  var grid = gridFracs.map(function (f) {
+    var gy = (h * f).toFixed(1);
+    return '<line x1="0" y1="' + gy + '" x2="100" y2="' + gy +
+      '" stroke="var(--hair-2)" stroke-opacity="0.6" stroke-width="1"/>';
+  }).join("");
+  var zero = "";
+  if (min <= 0 && max >= 0) {
+    var zy = (h - pad - ((0 - min) / span) * (h - 2 * pad)).toFixed(1);
+    zero = '<line x1="0" y1="' + zy + '" x2="100" y2="' + zy +
+      '" stroke="var(--dim)" stroke-width="1" stroke-dasharray="3 2"/>';
+  }
   return '<svg viewBox="0 0 100 ' + h + '" preserveAspectRatio="none">' +
+    grid + zero +
     '<polyline points="' + pts.join(" ") + '" fill="none" stroke="#2563a8" ' +
-    'stroke-width="1.2"/></svg>';
+    'stroke-width="1.2"/></svg>' +
+    '<span class="scada-ytick max">' + clampZero(max, digits).toFixed(digits) + "</span>" +
+    '<span class="scada-ytick min">' + clampZero(min, digits).toFixed(digits) + "</span>";
 }
 
 function buildScadaRows(card, meta) {
@@ -727,7 +765,7 @@ function buildScadaRows(card, meta) {
     scada.valueEls[ch.key] = { el: lv, unit: ch.unit, digits: ch.digits, series: series };
     var chart = el("div", { class: "scada-tchart" });
     chart.style.height = ch.h + "px";
-    chart.innerHTML = scadaRowSvg(series, ch.h);
+    chart.innerHTML = scadaRowSvg(series, ch.h, ch.digits);
     row.appendChild(lab);
     row.appendChild(chart);
     body.appendChild(row);
@@ -742,7 +780,8 @@ function buildScadaRows(card, meta) {
 }
 
 function formatReading(value, unit, digits) {
-  return (value === null || value === undefined) ? "–" : value.toFixed(digits) + " " + unit;
+  if (value === null || value === undefined) return "–";
+  return clampZero(value, digits).toFixed(digits) + " " + unit;
 }
 
 function renderScadaBlock(card) {

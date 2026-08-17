@@ -102,7 +102,10 @@
   }
   function fmtNum(v, digits) {
     if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "—";
-    return v.toFixed(digits);
+    // Clamp negative zero AFTER rounding (a -0.03 MW standstill reading rounds to
+    // "-0.0", which reads as a bogus negative value) -- the single funnel every
+    // trend label, KPI, and trend y-tick in this file prints a number through.
+    return (+v.toFixed(digits) + 0).toFixed(digits);
   }
 
   // -------------------------------------------------------------- lookups
@@ -353,7 +356,7 @@
   // approved v7 mockup itself reuses for these four lines (docs/superpowers/
   // specs/mockups/live-v7.html) via the same CSS custom properties the rest of
   // this file already draws SVG strokes from (buildPvalueSvg above).
-  var trendW = 560, trendH = 62, TREND_PAD = 6;
+  var trendW = 560, TREND_PAD = 6;
   function trendExtent(arr) {
     var lo = Infinity, hi = -Infinity;
     for (var i = 0; i < arr.length; i++) {
@@ -365,7 +368,7 @@
     if (!isFinite(lo)) return null;
     return [lo, hi - lo < 1e-9 ? lo + 1 : hi];
   }
-  function trendPolylines(arr, ext, step, n, color) {
+  function trendPolylines(arr, ext, step, n, color, h) {
     var runs = [], cur = [];
     for (var i = 0; i < n; i += step) {
       var v = arr[i];
@@ -375,13 +378,40 @@
         continue;
       }
       var x = (i / n) * trendW;
-      var y = trendH - TREND_PAD - ((v - ext[0]) / (ext[1] - ext[0])) * (trendH - 2 * TREND_PAD);
+      var y = h - TREND_PAD - ((v - ext[0]) / (ext[1] - ext[0])) * (h - 2 * TREND_PAD);
       cur.push(x.toFixed(1) + "," + y.toFixed(1));
     }
     if (cur.length > 1) runs.push(cur.join(" "));
     return runs.map(function (pts) {
       return '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.2"/>';
     }).join("");
+  }
+  // Grafana-style chart dressing, shared by every trend row: 2-3 light gridlines
+  // (always, denser once the row is tall enough to hold a middle one) and a
+  // dashed zero line (only when the row's own extent actually spans zero -- pump-
+  // day P/n both cross it, turbine-day P/n do not). The zero line reuses
+  // trendPolylines' own y-mapping so it lands exactly where the polyline itself
+  // would plot a 0 reading.
+  function trendGridlinesSvg(h) {
+    var fracs = h >= 40 ? [0.25, 0.5, 0.75] : [0.33, 0.67];
+    return fracs.map(function (f) {
+      var y = (h * f).toFixed(1);
+      return '<line x1="0" y1="' + y + '" x2="' + trendW + '" y2="' + y +
+        '" stroke="var(--hair-2)" stroke-opacity="0.6" stroke-width="1"/>';
+    }).join("");
+  }
+  function trendZeroLineSvg(ext, h) {
+    if (ext[0] > 0 || ext[1] < 0) return "";
+    var y = (h - TREND_PAD - ((0 - ext[0]) / (ext[1] - ext[0])) * (h - 2 * TREND_PAD)).toFixed(1);
+    return '<line x1="0" y1="' + y + '" x2="' + trendW + '" y2="' + y +
+      '" stroke="var(--dim)" stroke-width="1" stroke-dasharray="3 2"/>';
+  }
+  function trendTicksHtml(ext, digits) {
+    // Bare numbers only (no unit) -- the row label to the left already carries
+    // the unit (module docstring / task instruction). fmtNum's own -0.0 clamp
+    // keeps a near-zero extent edge from ever printing as "-0.0" here too.
+    return '<span class="trend-ytick max">' + fmtNum(ext[1], digits) + "</span>" +
+      '<span class="trend-ytick min">' + fmtNum(ext[0], digits) + "</span>";
   }
   var TRENDS = [
     { key: "power", el: "trendValP", digits: 1, unit: "MW", series: DATA.scada.power_mw, color: "var(--s-turbine)" },
@@ -399,8 +429,11 @@
         box.innerHTML = '<div style="padding:6px 8px;color:var(--faint);font-size:9px">no SCADA recorded for this session</div>';
         return;
       }
-      box.innerHTML = '<svg viewBox="0 0 ' + trendW + " " + trendH + '" preserveAspectRatio="none">' +
-        trendPolylines(t.series, ext, step, n, t.color) + "</svg>";
+      var h = box.clientHeight || 34; // template's own inline height (P 48px, others 34px)
+      box.innerHTML = '<svg viewBox="0 0 ' + trendW + " " + h + '" preserveAspectRatio="none">' +
+        trendGridlinesSvg(h) + trendZeroLineSvg(ext, h) +
+        trendPolylines(t.series, ext, step, n, t.color, h) + "</svg>" +
+        trendTicksHtml(ext, t.digits);
     });
   })();
 

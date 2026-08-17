@@ -154,6 +154,11 @@ main.page { max-width: 1200px; margin: 0 auto; padding: 0 0 40px; }
 .trend-chart { border: 1px solid var(--hair-2); background: var(--panel-2);
   border-radius: 2px; position: relative; }
 .trend-chart svg { display: block; width: 100%; height: 100%; }
+.trend-ytick { position: absolute; left: 4px; font: 700 7px/1 var(--font-mono); color: var(--faint);
+  background: var(--panel-2); padding: 1px 3px; border-radius: 2px; pointer-events: none;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trend-ytick.max { top: 3px; }
+.trend-ytick.min { bottom: 3px; }
 .trend-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink);
   box-shadow: 0 0 0 1px rgba(255,255,255,.75); pointer-events: none; z-index: 4; }
 .trend-cap { margin: 5px 0 0 90px; font-size: 9px; color: var(--fainter); }
