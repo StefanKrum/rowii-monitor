@@ -155,6 +155,12 @@ class RunContext:
     so this can never quietly drift from the SAME lookup `candidate_kit.py`'s own
     `select_session` uses to find each session's `alarms.parquet`."""
     sentinel_json: Path
+    fusion_json: Path
+    """`results/step2/once-calibrated/<representation>/<representation>.json` --
+    the SECOND file `load_sentinel` conditionally opens (its `regimes` table),
+    factored out here (not a local variable inside that function, as it was
+    before this field existed) so `preflight` can check its existence too,
+    from the SAME formula, without duplicating the path-join."""
     candidates_csv: Path
     candidates_meta: Path
     audio_dir: Path
@@ -177,6 +183,9 @@ def make_run_context(run: str) -> RunContext:
         sentinel_json=(
             RESULTS_ROOT / "step2" / "once-calibrated" / SENTINEL_REPRESENTATION
             / f"{SENTINEL_REPRESENTATION}.json"
+        ),
+        fusion_json=(
+            RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / f"{REPRESENTATION}.json"
         ),
         candidates_csv=RESULTS_ROOT / "candidate-kit" / "candidates.csv",
         candidates_meta=RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
@@ -334,40 +343,76 @@ def load_primary_timeline(ctx: RunContext) -> dict[str, Any]:
     }
 
 
-def load_sentinel(ctx: RunContext) -> dict[str, Any]:
-    payload = json.loads(ctx.sentinel_json.read_text(encoding="utf-8"))
-    trig = next((t for t in payload["trigger_log"] if t["run"] == ctx.run), None)
+def sentinel_payload(
+    trig: dict[str, Any] | None, regime: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Map one `trigger_log` row (*trig*) and one `regimes` row (*regime*) --
+    either or both may be `None`, since not every `LIVE_SESSIONS` entry was
+    scored by the once-calibrated sentinel driver -- to `payload["sentinel"]`'s
+    own three-shape contract (review round 1 ruling: honest degradation, no
+    invented values, no counterfactuals):
+
+    - both present -> the original full shape, plus `"available": "full"`.
+    - *trig* only (*regime* is `None`) -> exactly the fields the trigger row
+      itself carries (era, s1_rate, s1_threshold, s1_fired, s2_fired,
+      s2_attribution) plus `"decision": None` -- a regime decision was never
+      RECORDED for this session, whatever the trigger row's own `decision`
+      guess happens to read -- `"available": "trigger_only"`, and an
+      explanatory `"note"`. No FAR field (`realized_far` etc.) is present:
+      those are only ever derivable from *regime*.
+    - neither present (*trig* is `None`) -> `{"available": "none", "note":
+      ...}` and NOTHING else -- no fabricated rates of any kind.
+
+    Pure (no file I/O) so it's unit-testable directly against hand-built rows,
+    independent of `load_sentinel`'s own two-JSON-file read."""
     if trig is None:
-        raise LookupError(
-            f"{ctx.run!r}: no trigger_log entry in {ctx.sentinel_json} -- this session was "
-            "never scored by the once-calibrated sentinel (s1/s2) driver"
-        )
-    fusion_json_path = (
-        RESULTS_ROOT / "step2" / "once-calibrated" / ctx.representation
-        / f"{ctx.representation}.json"
-    )
-    fusion_json = json.loads(fusion_json_path.read_text(encoding="utf-8"))
-    regime = next((r for r in fusion_json["regimes"] if r["run"] == ctx.run), None)
-    if regime is None:
-        raise LookupError(
-            f"{ctx.run!r}: no regimes entry in {fusion_json_path} -- this session was never "
-            "monitored under the pinned once-calibrated tree (candidate_kit._MONITOR_EXT_SESSIONS "
-            "coverage-extension sessions have no once-calibrated FAR verdict)"
-        )
-    return {
+        return {
+            "available": "none",
+            "note": (
+                "session not scored by the once-calibrated sentinel driver; alarms come "
+                "from the frozen-threshold monitoring extension"
+            ),
+        }
+    trig_fields = {
         "era": trig["era"],
         "s1_rate": round(trig["s1_rate"], 6),
         "s1_threshold": round(trig["s1_threshold"], 6),
         "s1_fired": bool(trig["s1_fired"]),
         "s2_fired": bool(trig["s2_fired"]),
         "s2_attribution": trig["s2_attribution"],
+    }
+    if regime is None:
+        return {
+            **trig_fields,
+            "decision": None,
+            "available": "trigger_only",
+            "note": (
+                "sentinel scored this day, but no regime decision was recorded for this session"
+            ),
+        }
+    return {
+        **trig_fields,
         "decision": trig["decision"],
         "nominal_alpha": 0.05,
         "realized_far": round(regime["once_triggered_far"], 6),
         "always_frozen_far": round(regime["always_frozen_far"], 6),
         "always_recalibrate_far": round(regime["always_recalibrate_far"], 6),
         "far_basis": regime["far_basis"],
+        "available": "full",
     }
+
+
+def load_sentinel(ctx: RunContext) -> dict[str, Any]:
+    """`sentinel_payload` fed from *ctx*'s real two files -- `regime` is only
+    looked up (a second file read) when a `trig` row exists at all, since with
+    no `trig` row `sentinel_payload` returns `"none"` regardless of *regime*."""
+    payload = json.loads(ctx.sentinel_json.read_text(encoding="utf-8"))
+    trig = next((t for t in payload["trigger_log"] if t["run"] == ctx.run), None)
+    regime = None
+    if trig is not None:
+        fusion_json = json.loads(ctx.fusion_json.read_text(encoding="utf-8"))
+        regime = next((r for r in fusion_json["regimes"] if r["run"] == ctx.run), None)
+    return sentinel_payload(trig, regime)
 
 
 # ---------------------------------------------------------------------------
@@ -686,13 +731,18 @@ def _check_audio_covers_replay(
 def preflight(ctx: RunContext) -> list[str]:
     """Human-readable problems blocking *ctx*'s build (empty list if *ctx.run* is
     ready) -- each entry names the missing path and the script that produces it,
-    so `main`'s abort message is immediately actionable. Deliberately does NOT
-    check `ctx.sentinel_json`'s own `trigger_log`/regimes ROWS (only that the
-    underlying npz caches, monitor dir, candidate rows, and live-audio assets
-    exist as files) -- `load_sentinel` itself raises a clear `LookupError` naming
-    the missing row if a requested run was never scored by the once-calibrated
-    sentinel driver, since fixing that gap is a data-production decision, not a
-    file-existence check this function can make."""
+    so `main`'s abort message is immediately actionable. Checks `ctx.sentinel_json`/
+    `ctx.fusion_json` exist as FILES, same as every other input here (an absent
+    file would otherwise bypass this function's promise entirely and crash
+    mid-build with a bare `FileNotFoundError`) -- but deliberately does NOT check
+    whether either file actually HAS a `trigger_log`/`regimes` ROW for this run.
+    Row absence is real and expected (270626-pu_ph_pu_ph_pu_ph-1 has a
+    trigger_log row but no regimes row; 010726-tu1-morning has neither -- neither
+    was ever scored/monitored by the once-calibrated driver), and is NOT a
+    preflight abort: `load_sentinel`/`sentinel_payload` degrade it honestly at
+    build time instead (`payload["sentinel"]["available"]` in `{"full",
+    "trigger_only", "none"}`), since which of a session's real rows exist is a
+    data-production fact this function has no basis to gate the whole build on."""
     problems: list[str] = []
 
     for variant in ("audio", "vibration", "logmel", "audio-beats"):
@@ -714,6 +764,13 @@ def preflight(ctx: RunContext) -> list[str]:
                 else "scripts/run_once_calibrated.py"
             )
             problems.append(f"{ctx.run!r}: missing {monitor_path} -- run `{producer}` first")
+
+    for sentinel_path in (ctx.sentinel_json, ctx.fusion_json):
+        if not sentinel_path.is_file():
+            problems.append(
+                f"{ctx.run!r}: missing {sentinel_path} -- run "
+                "`scripts/run_once_calibrated.py` first"
+            )
 
     if not ctx.candidates_meta.is_file():
         problems.append(

@@ -86,6 +86,9 @@ def test_make_run_context_once_calibrated_session() -> None:
         blr.RESULTS_ROOT / "step2" / "once-calibrated" / "fusion" / "monitor"
         / "290626-tu" / "frozen"
     )
+    assert ctx.fusion_json == (
+        blr.RESULTS_ROOT / "step2" / "once-calibrated" / "fusion" / "fusion.json"
+    )
     assert ctx.audio_meta_json == blr.AUDIO_DIR / "290626-tu_audio_meta.json"
 
 
@@ -124,6 +127,7 @@ def test_preflight_reports_missing_inputs_for_unbuilt_run() -> None:
         sentinel_json=(
             blr.RESULTS_ROOT / "step2" / "once-calibrated" / "audio-beats" / "audio-beats.json"
         ),
+        fusion_json=blr.RESULTS_ROOT / "step2" / "once-calibrated" / "fusion" / "fusion.json",
         candidates_csv=blr.RESULTS_ROOT / "candidate-kit" / "candidates.csv",
         candidates_meta=blr.RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
         audio_dir=blr.AUDIO_DIR,
@@ -132,3 +136,95 @@ def test_preflight_reports_missing_inputs_for_unbuilt_run() -> None:
     problems = blr.preflight(ctx)
     assert problems
     assert all(run in p for p in problems)
+
+
+def test_preflight_reports_missing_sentinel_and_fusion_json_files() -> None:
+    """Reviewer fix (round 1, item 2): an absent `sentinel_json`/`fusion_json`
+    must abort in preflight, not crash mid-build with FileNotFoundError."""
+    run = "zzz-never-built-session"
+    ctx = blr.RunContext(
+        run=run,
+        representation="fusion",
+        regime="frozen",
+        sentinel_representation="audio-beats",
+        unit_name=blr.UNIT_NAME,
+        monitor_dir=(
+            blr.RESULTS_ROOT / "step2" / "once-calibrated" / "fusion" / "monitor" / run / "frozen"
+        ),
+        sentinel_json=blr.RESULTS_ROOT / "does-not-exist" / "audio-beats.json",
+        fusion_json=blr.RESULTS_ROOT / "does-not-exist" / "fusion.json",
+        candidates_csv=blr.RESULTS_ROOT / "candidate-kit" / "candidates.csv",
+        candidates_meta=blr.RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
+        audio_dir=blr.AUDIO_DIR,
+        audio_meta_json=blr.AUDIO_DIR / f"{run}_audio_meta.json",
+    )
+    problems = blr.preflight(ctx)
+    assert any("audio-beats.json" in p and "run_once_calibrated.py" in p for p in problems)
+    assert any("fusion.json" in p and "run_once_calibrated.py" in p for p in problems)
+
+
+def test_sentinel_payload_full_when_trigger_and_regime_rows_both_present() -> None:
+    trig = {
+        "era": "B", "s1_rate": 0.0767, "s1_threshold": 0.0805,
+        "s1_fired": False, "s2_fired": False, "s2_attribution": "machine",
+        "decision": "frozen",
+    }
+    regime = {
+        "once_triggered_far": 0.075, "always_frozen_far": 0.075,
+        "always_recalibrate_far": 0.0439, "far_basis": "common-window",
+    }
+    payload = blr.sentinel_payload(trig, regime)
+    assert payload == {
+        "available": "full",
+        "era": "B",
+        "s1_rate": 0.0767,
+        "s1_threshold": 0.0805,
+        "s1_fired": False,
+        "s2_fired": False,
+        "s2_attribution": "machine",
+        "decision": "frozen",
+        "nominal_alpha": 0.05,
+        "realized_far": 0.075,
+        "always_frozen_far": 0.075,
+        "always_recalibrate_far": 0.0439,
+        "far_basis": "common-window",
+    }
+
+
+def test_sentinel_payload_trigger_only_when_regime_row_missing() -> None:
+    """270626-pu_ph_pu_ph_pu_ph-1's real shape: a trigger_log row exists (this
+    session WAS sentinel-scored) but no regimes row (it was never monitored
+    under the pinned once-calibrated tree) -- `decision` must come out `None`
+    even though the raw trigger row's own `decision` field is NOT null (a
+    regime decision was never RECORDED for this session, whatever the
+    trigger row's own guess reads), and no FAR field may be fabricated."""
+    trig = {
+        "era": "A", "s1_rate": 0.3273, "s1_threshold": 0.0805,
+        "s1_fired": True, "s2_fired": False, "s2_attribution": "machine",
+        "decision": "recalibrate",
+    }
+    payload = blr.sentinel_payload(trig, None)
+    assert payload == {
+        "available": "trigger_only",
+        "era": "A",
+        "s1_rate": 0.3273,
+        "s1_threshold": 0.0805,
+        "s1_fired": True,
+        "s2_fired": False,
+        "s2_attribution": "machine",
+        "decision": None,
+        "note": "sentinel scored this day, but no regime decision was recorded for this session",
+    }
+
+
+def test_sentinel_payload_none_when_neither_row_present() -> None:
+    """010726-tu1-morning's real shape: no trigger_log row and no regimes
+    row -- never scored by the once-calibrated sentinel driver at all."""
+    payload = blr.sentinel_payload(None, None)
+    assert payload == {
+        "available": "none",
+        "note": (
+            "session not scored by the once-calibrated sentinel driver; alarms come "
+            "from the frozen-threshold monitoring extension"
+        ),
+    }
