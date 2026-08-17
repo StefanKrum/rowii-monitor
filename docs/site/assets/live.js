@@ -742,13 +742,20 @@
   //                      s1_rate/threshold, s1_fired, decision) but no regime
   //                      replay (no FAR numbers) was ever computed for this
   //                      session: the gauge still renders from s1_rate/
-  //                      threshold (a real measurement), the verdict states
-  //                      the real recorded decision in plain language --
-  //                      NOT the s1-specific "budget exceeded" claim, since a
-  //                      recalibrate decision can also come from s2 alone
+  //                      threshold (a real measurement) and stays keyed on
+  //                      s1_fired specifically (it visualizes s1, nothing
+  //                      else), but the verdict states the real recorded
+  //                      decision in plain language -- NOT the s1-specific
+  //                      "budget exceeded" claim, since a recalibrate
+  //                      decision can also come from s2 alone
   //                      (run_once_calibrated.py's own _trigger_verdict, s1 OR
-  //                      s2) -- plus the payload's own explanatory note, and
-  //                      the FAR KPI stays a dash.
+  //                      s2) -- plus the payload's own explanatory note. The
+  //                      verdict's OWN .fired class therefore follows
+  //                      `decision === "recalibrate"`, not s1_fired: those two
+  //                      can legitimately disagree (s1_fired=false, decision=
+  //                      "recalibrate" when s2 alone triggered it), and the
+  //                      verdict text must never read "recalibrate" in green.
+  //                      The FAR KPI stays a dash either way.
   //   "none"         -- this session was never scored by the once-calibrated
   //                      driver at all: the sentinel rows/gauge are hidden,
   //                      the verdict slot carries the payload's own note, and
@@ -797,6 +804,14 @@
     verdictEl.classList.toggle("fired", sent.s1_fired);
 
     if (sent.available === "trigger_only") {
+      // The verdict text below reports the real recorded `decision`, which
+      // can diverge from `s1_fired` (decision is s1 OR s2 -- s2 alone can
+      // drive a recalibrate even when s1 itself stayed under budget). Its
+      // own .fired class must follow the SAME signal the text reports, not
+      // s1_fired, or a "recalibrate" verdict could render in the "quiet"
+      // (green) style. The gauge just above stays keyed on s1_fired -- it
+      // visualizes s1's own rate vs. threshold specifically, nothing else.
+      verdictEl.classList.toggle("fired", sent.decision === "recalibrate");
       verdictEl.innerHTML = trigVerdict(sent.decision) + " " + capitalize(sent.note);
       $("farKpiSub").textContent = "no regime replay recorded for this session";
       return;
