@@ -331,3 +331,26 @@ def test_group_label_html() -> None:
     assert 'class="group-label"' in html
     assert "SESSION TIMELINE" in html.upper()
     assert "full day · click or drag to seek" in html
+
+
+# ---------------------------------------------------------------------------
+# 7. build_site v7 page renderers -- render_index / render_redirect_stub
+# ---------------------------------------------------------------------------
+
+
+def test_render_index_v7() -> None:
+    import build_site as bs
+    html = bs.render_index()
+    assert 'class="app-bar"' in html and 'class="group-label"' in html
+    assert "audio_review.html" in html
+    assert "snippets.html" not in html and 'href="review.html"' not in html
+    assert "Research prototype, not a certified product" in html
+    assert bs.find_external_resource_urls(html) == []
+
+
+def test_render_redirect_stub() -> None:
+    import build_site as bs
+    html = bs.render_redirect_stub("audio_review.html", "Audio & review")
+    assert '<meta http-equiv="refresh" content="0; url=audio_review.html">' in html
+    assert '<a href="audio_review.html">' in html
+    assert bs.find_external_resource_urls(html) == []

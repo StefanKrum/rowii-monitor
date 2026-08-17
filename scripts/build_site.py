@@ -26,13 +26,15 @@ Two subcommands:
                    site_manifest.json` (the curated selection + every field
                    `build-pages` needs, so that step touches no `results/`
                    data at all).
-    build-pages    Renders `docs/site/{index,sensors,live,snippets}.html` from
-                   `site_manifest.json` (written by curate-clips) plus the
-                   existing `docs/demo/assets/manifest.json` (for the
-                   "normal operation" per-mode clips, reused via a relative
-                   `../demo/assets/...` path, never copied). Touches no
+    build-pages    Renders `docs/site/index.html`/`sensors.html` (v7 markup,
+                   no manifest data needed) plus tiny same-repo redirect
+                   stubs at `docs/site/snippets.html`/`review.html`
+                   pointing to the merged `audio_review.html` page, so old
+                   bookmarks to the former Listening Library / Candidate
+                   Review pages still land somewhere useful. Touches no
                    `results/` data, so this step alone is fast and safe to
-                   rerun after any HTML/CSS wording change.
+                   rerun after any HTML/CSS wording change. `live.html` is
+                   built separately by `scripts/build_live_replay.py`.
 
 Pure helpers (candidate curation/pinning, the two clip-trim-window arithmetic
 variants, the as-built sensor-geometry table, and the "did this page make an
@@ -552,10 +554,11 @@ def _page_shell(
     *, title: str, active_file: str, body_html: str, extra_css: str = "", wide: bool = False
 ) -> str:
     """Every `docs/site/*.html` page shares ONE stylesheet link
-    (`assets/design.css`, the v2 light HMI design system) plus `site_common`'s
-    topbar/footer markup -- `extra_css` is a small, page-scoped `<style>` block
-    for layout that genuinely differs per page (the sensor rings, the clip
-    grid, ...), never a re-declaration of a shared token."""
+    (`assets/design.css`, the v7 light-monitoring design system) plus
+    `site_common`'s app-bar/footer markup -- `extra_css` is a small,
+    page-scoped `<style>` block for layout that genuinely differs per page
+    (the sensor rings, the clip grid, ...), never a re-declaration of a
+    shared token."""
     page_cls = "page wide" if wide else "page"
     style_tag = f"<style>{extra_css}</style>\n" if extra_css else ""
     return f"""<!doctype html>
@@ -578,26 +581,23 @@ def _page_shell(
 
 
 _SENSORS_CSS = """
-.sensor-section-head { margin-top: 30px; }
-.sensor-section-head h2 { font-size: 16px; margin-bottom: 2px; }
-.sensor-section-head p { color: var(--dim); font-size: 13px; max-width: 68ch; }
-.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap;
-  margin-top: 10px; }
+.sensor-layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
 .sensor-diagram { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--hair);
-  border-radius: var(--radius-lg); padding: 14px; }
+  border-radius: var(--radius); padding: 14px; }
 .sensor-diagram svg { width: 300px; height: auto; display: block; }
 .sensor rect, .sensor circle, .sensor line { transition: fill .15s ease, stroke .15s ease; }
 .sensor.mic circle { fill: var(--live); fill-opacity: .3; stroke: var(--ink); stroke-width: 1;
   cursor: pointer; }
 .sensor.mic:hover circle, .sensor.mic:focus circle { fill: var(--live); fill-opacity: .85; }
-.sensor.vib rect { fill: var(--panel); stroke: var(--warn); stroke-width: 1.1; cursor: pointer; }
-.sensor.vib line { stroke: var(--warn); stroke-width: 1; }
-.sensor.vib:hover rect, .sensor.vib:focus rect { fill: var(--warn); fill-opacity: .28; }
+.sensor.vib rect { fill: var(--panel); stroke: var(--warn-border); stroke-width: 1.1;
+  cursor: pointer; }
+.sensor.vib line { stroke: var(--warn-border); stroke-width: 1; }
+.sensor.vib:hover rect, .sensor.vib:focus rect { fill: var(--warn-fill); fill-opacity: .28; }
 .m-block { fill: var(--panel-2); stroke: var(--hair); stroke-width: 1.4; }
 .m-shaft { fill: var(--hair-2); }
 .m-label { fill: var(--dim); font-size: 10.5px; font-weight: 700; letter-spacing: .03em; }
 .sensor-readout { flex: 1 1 260px; background: var(--panel-2); border: 1px solid var(--hair);
-  border-radius: var(--radius-lg); padding: 16px 18px; min-height: 84px; font-size: 13.5px;
+  border-radius: var(--radius); padding: 16px 18px; min-height: 84px; font-size: 13.5px;
   color: var(--dim); }
 .sensor-readout .rlabel { display: block; color: var(--ink); font-weight: 800; font-size: 15px;
   margin-bottom: 4px; }
@@ -608,13 +608,13 @@ table.sensor-table th, table.sensor-table td { text-align: left; padding: 7px 10
 table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: uppercase;
   font-size: 10.5px; letter-spacing: .05em; }
 .callout { background: var(--panel); border: 1px solid var(--hair);
-  border-left: 3px solid var(--warn);
+  border-left: 3px solid var(--warn-border);
   border-radius: 8px; padding: 12px 16px; margin-top: 22px; font-size: 13.5px; color: var(--dim);
   line-height: 1.55; }
 .callout strong { color: var(--ink); }
 .plan-rings { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
 .plan-ring-cell { background: var(--panel); border: 1px solid var(--hair);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius);
   padding: 12px; }
 .plan-ring-cell svg { display: block; }
 """
@@ -769,22 +769,35 @@ def _sensor_svg(points: Sequence[SensorPoint]) -> str:
     return "".join(parts)
 
 
+def render_redirect_stub(target: str, title: str) -> str:
+    """Tiny self-contained redirect page so old bookmarks keep working."""
+    return (
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        f"<title>{title} — ROWII Monitor</title>\n"
+        f'<meta http-equiv="refresh" content="0; url={target}">\n'
+        "</head>\n<body>\n"
+        f'<p>This page moved to <a href="{target}">{target}</a>.</p>\n'
+        "</body>\n</html>\n"
+    )
+
+
 def render_index() -> str:
     body = f"""
-<section class="hero">
-  <h1>ROWII Monitor</h1>
-  <p class="lede">ROWII Monitor is a research-prototype condition-monitoring pipeline for
-  the Rodundwerk&nbsp;II pump-turbine, built as part of an HSG master thesis. From nine
-  microphones and two tri-axial accelerometers it detects the machine's operating state
-  second by second &mdash; unsupervised, validated against SCADA-derived ground truth
-  &mdash; and flags one-second windows that look unusual for the current mode, using a
-  calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
-  site replays a real recorded session end to end: where the sensors sit on the machine,
-  a control-room replay of state, score and alarms, a library of real audio clips, and
-  the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
-</section>
+{sc.group_label_html(
+        "ROWII Monitor",
+        "acoustic condition monitoring · Rodundwerk II · measurement campaign 2026",
+    )}
+<p class="lede">ROWII Monitor is a research-prototype condition-monitoring pipeline for
+the Rodundwerk&nbsp;II pump-turbine, built as part of an HSG master thesis. From nine
+microphones and two tri-axial accelerometers it detects the machine's operating state
+second by second &mdash; unsupervised, validated against SCADA-derived ground truth
+&mdash; and flags one-second windows that look unusual for the current mode, using a
+calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
+site replays a real recorded session end to end: where the sensors sit on the machine,
+a control-room replay of state, score and alarms, a library of real audio clips, and
+the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
 {_NOTICE_HTML}
-<section class="cards">
+<div class="cards">
   <a class="card" href="sensors.html">
     <h2>Sensors</h2>
     <p>The as-built microphone and accelerometer layout on the machine &mdash; vertical
@@ -798,22 +811,13 @@ def render_index() -> str:
     view.</p>
     <span class="go">Open the control room &rarr;</span>
   </a>
-  <a class="card" href="snippets.html">
-    <h2>Listening Library</h2>
-    <p>Hammer-strike tests, ordinary per-mode audio, and a handful of model-flagged,
-    unverified candidates &mdash; browse and listen.</p>
-    <span class="go">Open the listening library &rarr;</span>
+  <a class="card" href="audio_review.html">
+    <h2>Audio &amp; review</h2>
+    <p>Hammer-strike tests, per-mode audio, and every model-flagged candidate with SCADA
+    context and the expert assessment form.</p>
+    <span class="go">Open audio &amp; review &rarr;</span>
   </a>
-</section>
-<section class="cards" style="grid-template-columns: 1fr; margin-top: 16px;">
-  <a class="card" href="review.html">
-    <h2>Candidate Review</h2>
-    <p>The handover tool: every model-flagged candidate on days without controlled
-    acoustic events, with SCADA context, the exact trigger criterion, and an assessment form
-    for a plant expert to fill in.</p>
-    <span class="go">Open the candidate review kit &rarr;</span>
-  </a>
-</section>
+</div>
 """
     return _page_shell(title="ROWII Monitor", active_file="index.html", body_html=body)
 
@@ -829,30 +833,28 @@ def render_sensors() -> str:
             f"<td>{html.escape(p.description)}</td></tr>"
         )
     body = f"""
-<section class="page-head">
-  <h1>Sensor layout</h1>
-  <p>The as-built acoustic and vibration sensor geometry on the machine set, in two
-  views: a vertical section (how the sensors sit on the machine) and a plan view
-  (looking straight down each ring). Hover or keyboard-focus any marker for its
-  stream/channel name; the full table is below for reference.</p>
-</section>
+{sc.group_label_html("Sensor layout")}
+<p class="lede">The as-built acoustic and vibration sensor geometry on the machine set, in two
+views: a vertical section (how the sensors sit on the machine) and a plan view
+(looking straight down each ring). Hover or keyboard-focus any marker for its
+stream/channel name; the full table is below for reference.</p>
 
-<div class="sensor-section-head">
-  <h2>Vertical section</h2>
-</div>
-<div class="sensor-layout">
-  <div class="sensor-diagram">{_sensor_svg(points)}</div>
-  <div class="sensor-readout" id="sensorReadout">Hover or focus a sensor marker to see
-  its name here.</div>
+{sc.group_label_html("Vertical section")}
+<div class="panel panel-pad">
+  <div class="sensor-layout">
+    <div class="sensor-diagram">{_sensor_svg(points)}</div>
+    <div class="sensor-readout" id="sensorReadout">Hover or focus a sensor marker to see
+    its name here.</div>
+  </div>
 </div>
 
-<div class="sensor-section-head">
-  <h2>Plan view (top-down)</h2>
+{sc.group_label_html("Plan view rings")}
+<div class="panel panel-pad">
   <p>Each ring drawn from above: the same 4&times;90&deg; microphone spacing (plus the
   turbine ring's off-ring bottom microphone) and the two tri-axial accelerometers per
   level. Markers share the same hover readout as the section view above.</p>
+  {sc.render_plan_rings_block(size=210, interactive=True)}
 </div>
-{sc.render_plan_rings_block(size=210, interactive=True)}
 
 <table class="sensor-table">
   <thead><tr><th>Label</th><th>Stream</th><th>Ring position</th>
@@ -866,15 +868,7 @@ def render_sensors() -> str:
   spacing on the generator ring, 4 at 90&deg; spacing plus one additional bottom
   microphone on the turbine ring, and one tri-axial accelerometer pair (0&deg;/180&deg;)
   per level. The discrepancy between the planned and as-built ring layout is not
-  reconciled in any delivered specification. Separately: the current detection
-  pipeline consumes one mono channel per audio stream (channel 0 of
-  <code>RAWGeneratorMic__0</code> / <code>RAWTurbineMic__1</code>); the full
-  multi-microphone geometry shown here is the physical installation, not (yet) a
-  per-channel model input &mdash; each ring's own markers in the plan view above
-  therefore share ONE live level (<code>live.html</code>'s sensor panel), not an
-  individually verified per-position reading (the exact channel-index &harr; azimuth
-  correspondence for the multi-channel ring recordings has never been independently
-  confirmed).
+  reconciled in any delivered specification.
 </div>
 {_sensor_readout_script()}
 """
@@ -1036,20 +1030,35 @@ def build_pages(
     demo_manifest_path: Path = DEFAULT_DEMO_MANIFEST_PATH,
     site_dir: Path = DEFAULT_SITE_DIR,
 ) -> list[Path]:
-    """Renders `index.html`/`sensors.html`/`snippets.html`. `live.html` is
-    deliberately NOT one of this function's outputs -- it is a full native
-    control-room replay with its own real-data precompute step, owned by
-    `scripts/build_live_replay.py` (this script's `curate-clips`/`build-pages`
-    split, "touches no results/ data" contract, does not fit a per-window
-    parquet/cache read). `review.html` is likewise owned by its own publish
-    step (`scripts/publish_review_site.py`, wrapping `scripts/candidate_kit.py`).
+    """Renders `index.html`/`sensors.html` (v7 markup, needs no manifest
+    data) plus tiny same-repo redirect stubs at `snippets.html`/
+    `review.html` pointing to `audio_review.html` -- the v7 redesign merges
+    the old Listening Library (`snippets.html`) and Candidate Review
+    (`review.html`) pages into that one page, so old bookmarks to either
+    former page still land somewhere useful. `audio_review.html` itself is
+    not one of this function's outputs (not yet built as of this function's
+    own v7 pass); `render_snippets` and its clip-card fragment functions
+    stay in this module unused by this function -- its eventual generator
+    imports them. `manifest_path`/`demo_manifest_path` are accepted (still
+    `curate-clips`'s own output paths) but no longer read here now that
+    nothing in this function's output needs manifest data.
+
+    `live.html` is deliberately NOT one of this function's outputs -- it is
+    a full native control-room replay with its own real-data precompute
+    step, owned by `scripts/build_live_replay.py` (this script's
+    `curate-clips`/`build-pages` split, "touches no results/ data" contract,
+    does not fit a per-window parquet/cache read). The `review.html` stub
+    written here is only a placeholder: `scripts/publish_review_site.py`
+    (wrapping `scripts/candidate_kit.py`) still writes the real,
+    non-stub `docs/site/review.html` (and `review_static.html`)
+    independently -- this function never produced `review_static.html` and
+    still does not.
     """
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    demo_manifest = json.loads(demo_manifest_path.read_text(encoding="utf-8"))
     pages = {
         "index.html": render_index(),
         "sensors.html": render_sensors(),
-        "snippets.html": render_snippets(manifest, demo_manifest),
+        "snippets.html": render_redirect_stub("audio_review.html", "Listening library"),
+        "review.html": render_redirect_stub("audio_review.html", "Candidate review"),
     }
     site_dir.mkdir(parents=True, exist_ok=True)
     written = []
