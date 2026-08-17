@@ -66,6 +66,7 @@ import candidate_kit as ck  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import run_step1 as rs1  # noqa: E402
 import site_common as sc  # noqa: E402
+from feature_labels import humanize_feature_name  # noqa: E402
 
 from rowii.config import load_config  # noqa: E402
 from rowii.io.dataset import discover, run_utc_offset_ns  # noqa: E402
@@ -90,6 +91,24 @@ SENTINEL_REPRESENTATION = "audio-beats"
 """s1/s2 always read the audio-beats mode bank/raw caches, representation-independent
 by construction (`run_once_calibrated.py`)."""
 UNIT_NAME = "ROWII Machine 1 — Rodundwerk II"
+
+LIVE_SESSIONS: dict[str, dict[str, object]] = {
+    "290626-tu": {"out": "live.html", "display_name": "Turbine day",
+                  "blurb": "quiet reference day", "events": False},
+    "080726-pu_strikes": {"out": "live-080726-pu-strikes.html", "display_name": "Hammer-strike day",
+                          "blurb": "controlled tap tests at each sensor", "events": True},
+    "010726-tu1-morning": {"out": "live-010726-tu1-morning.html", "display_name": "Morning session",
+                           "blurb": "turbine start-up in the morning", "events": False},
+    "270626-pu_ph_pu_ph_pu_ph-1": {"out": "live-270626-cycles.html", "display_name": "Cycling day",
+                                   "blurb": "pump ⇄ phase-shifter cycles", "events": False},
+}
+"""Registry of every recorded session this build script can turn into a `live*
+.html` replay page (`"out"` is the filename under `docs/site/`) -- SINGLE
+SOURCE OF TRUTH for `session_summary` below and, from Task 7 onward, for the
+multi-page build loop and the cross-session nav switcher. Only `RUN`
+(`"290626-tu"`) is actually built by this task; the other three entries exist
+so `session_summary`/`LIVE_SESSIONS` are already the real, final registry
+Task 7 extends rather than replaces."""
 
 MONITOR_DIR = RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / "monitor" / RUN / REGIME
 SENTINEL_JSON = (
@@ -146,6 +165,32 @@ def _png_b64(fig: Any) -> str:
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def humanize_names(raw_names: list[str]) -> list[str]:
+    """Human-readable labels for a list of raw handcrafted feature names
+    (`feature_labels.humanize_feature_name`, Task 5) -- used for the feature
+    snapshot panel's `audio_names`/`vib_names` (`load_feature_snapshot` below)."""
+    return [humanize_feature_name(n) for n in raw_names]
+
+
+def session_summary(run: str, *, duration_s: float, n_episodes: int) -> dict[str, object]:
+    """One `LIVE_SESSIONS` entry's UI-facing summary (`payload["session"]`,
+    `build_payload` below) -- `date_label` is derived from the session id's own
+    `DDMMYY` prefix (`run[:6]`) via `datetime.strptime`, never a hardcoded
+    weekday table, so it can never drift out of sync with the calendar."""
+    meta = LIVE_SESSIONS[run]
+    day = datetime.strptime(run[:6], "%d%m%y").replace(tzinfo=UTC)
+    date_label = day.strftime("%a · %d %b %Y").upper()
+    return {
+        "id": run,
+        "display_name": meta["display_name"],
+        "blurb": meta["blurb"],
+        "events": bool(meta["events"]),
+        "date_label": date_label,
+        "duration_s": float(duration_s),
+        "n_episodes": int(n_episodes),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -334,11 +379,26 @@ def load_scada(index: Any, cfg: Any) -> dict[str, Any]:
     def _round_or_none(v: float | None, digits: int) -> float | None:
         return None if v is None or math.isnan(v) else round(float(v), digits)
 
+    # flow_net_m3s/ks_valve (SCADA CONTEXT PANEL's 3rd/4th mini-axis, v2 site
+    # redesign): the SAME 1 Hz resampling `candidate_kit.build_extended_readout_
+    # series` already does for review.html's live readout, called here on
+    # *session_scada*'s own full-run span (`window_start_utc[0]`, `n` windows --
+    # window_s == 1.0s in this pipeline, so this reproduces `power_mw`/`speed_rpm`'s
+    # own index alignment exactly) rather than reimplementing its NaN-to-null
+    # resampling logic a second time. power_mw/speed_rpm above are discarded here
+    # since they're already extracted, unresampled, straight from *session_scada*.
+    n = len(session_scada.power_mw)
+    _, _, flow_net_m3s, ks_valve = ck.build_extended_readout_series(
+        session_scada, session_scada.window_start_utc[0], n
+    )
+
     return {
         "has_scada": session_scada.has_scada,
-        "n": len(session_scada.power_mw),
+        "n": n,
         "power_mw": [_round_or_none(v, 3) for v in session_scada.power_mw],
         "speed_rpm": [_round_or_none(v, 2) for v in session_scada.speed_rpm],
+        "flow_net_m3s": [_round_or_none(v, 3) for v in flow_net_m3s],
+        "ks_valve": [_round_or_none(v, 2) for v in ks_valve],
         "scada_state": session_scada.state,
         "load_bin": [int(v) for v in load_bin],
         "n_load_bins": int(cfg.gt.n_load_bins),
@@ -440,8 +500,8 @@ def load_feature_snapshot() -> dict[str, Any]:
         "n_t": int(len(idx)),
         "n_audio": int(audio_feats.shape[1]),
         "n_vibration": int(vib_feats.shape[1]),
-        "audio_names": [mda.shorten_feature_name(n) for n in audio["feature_names"]],
-        "vibration_names": [mda.shorten_feature_name(n) for n in vibration["feature_names"]],
+        "audio_names": humanize_names([str(n) for n in audio["feature_names"]]),
+        "vib_names": humanize_names([str(n) for n in vibration["feature_names"]]),
         "audio_b64": _f32_b64(audio_z),
         "vibration_b64": _f32_b64(vib_z),
         "n_beats": int(beats_feats.shape[1]),
@@ -556,6 +616,7 @@ def build_payload() -> dict[str, Any]:
     t0_ns = primary.pop("t0_ns")
     audio = load_audio()
     _check_audio_covers_replay(primary["t0_utc"], primary["duration_s"], audio)
+    alerts = load_alerts(t0_ns)
 
     payload: dict[str, Any] = {
         "run": RUN,
@@ -568,8 +629,9 @@ def build_payload() -> dict[str, Any]:
         "scada": load_scada(index, cfg),
         "logmel": load_logmel_strip(),
         "features": load_feature_snapshot(),
-        "alerts": load_alerts(t0_ns),
+        "alerts": alerts,
         "audio": audio,
+        "session": session_summary(RUN, duration_s=primary["duration_s"], n_episodes=len(alerts)),
         "rings": {
             "generator": sc.render_ring_svg(
                 "GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False
