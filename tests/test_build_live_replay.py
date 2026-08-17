@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -244,18 +245,23 @@ def test_sentinel_payload_none_when_neither_row_present() -> None:
     }
 
 
-def test_truncate_to_common_length_leaves_equal_length_arrays_untouched() -> None:
+def test_truncate_to_common_length_leaves_equal_length_arrays_untouched(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The common case (290626-tu, 080726-pu_strikes, 010726-tu1-morning): every
     array a caller passes already shares one length -- truncation must be a
-    no-op, not just a coincidentally-correct slice."""
+    no-op, not just a coincidentally-correct slice, and must stay SILENT (no
+    `logger.warning`) since nothing was actually discarded."""
     a = np.arange(5, dtype=np.float64)
     b = np.ones(5, dtype=bool)
-    out_a, out_b = blr._truncate_to_common_length(a, b)
+    with caplog.at_level(logging.WARNING):
+        out_a, out_b = blr._truncate_to_common_length(a, b, label="equal_case")
     np.testing.assert_array_equal(out_a, a)
     np.testing.assert_array_equal(out_b, b)
+    assert caplog.records == []
 
 
-def test_truncate_to_common_length_real_270626_case() -> None:
+def test_truncate_to_common_length_real_270626_case(caplog: pytest.LogCaptureFixture) -> None:
     """270626-pu_ph_pu_ph_pu_ph-1's real cache shapes: audio.npz's 2-mic grid
     intersection is 18716 windows, vibration.npz's 2-accelerometer grid
     intersection is 19436 windows -- both share the identical `grid_t0_ns`
@@ -264,16 +270,31 @@ def test_truncate_to_common_length_real_270626_case() -> None:
     array down to the shorter one's length is exact alignment, not a lossy
     approximation. This is the real shape that crashed `load_levels`/
     `load_feature_snapshot` with a boolean-index length mismatch before this
-    fix (`_norm01`'s/`_zscore`'s `x[valid]`, `valid` being audio-length)."""
+    fix (`_norm01`'s/`_zscore`'s `x[valid]`, `valid` being audio-length).
+
+    Reviewer finding (round 1): truncation that actually discards data was
+    silent -- a real mismatch like this one produced no log trace anywhere.
+    `_truncate_to_common_length` must now `logger.warning` exactly once,
+    naming the caller (*label*) and the per-array discarded window counts."""
     shorter = np.arange(3, dtype=np.float64)  # stands in for the 18716-long audio array
     longer = np.arange(5, dtype=np.float64)  # stands in for the 19436-long vibration array
     valid = np.array([True, False, True])
-    out_shorter, out_longer, out_valid = blr._truncate_to_common_length(shorter, longer, valid)
+    with caplog.at_level(logging.WARNING):
+        out_shorter, out_longer, out_valid = blr._truncate_to_common_length(
+            shorter, longer, valid, label="mismatch_case"
+        )
     np.testing.assert_array_equal(out_shorter, shorter)
     np.testing.assert_array_equal(out_longer, longer[:3])
     np.testing.assert_array_equal(out_valid, valid)
     # The whole point: indexing the truncated array by `valid` must not raise.
     out_longer[out_valid]
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.levelno == logging.WARNING
+    message = record.getMessage()
+    assert "mismatch_case" in message
+    assert "[3, 5, 3]" in message  # input lengths (shorter, longer, valid), in call order
+    assert "[0, 2, 0]" in message  # per-array discarded windows -- only the 5-long one loses (2)
 
 
 def test_truncate_to_common_length_preserves_2d_feature_matrix_columns() -> None:
@@ -281,6 +302,8 @@ def test_truncate_to_common_length_preserves_2d_feature_matrix_columns() -> None
     along axis 0 only -- the feature/column count must survive untouched."""
     audio_feats = np.zeros((4, 135))
     vib_feats = np.zeros((6, 96))
-    out_audio, out_vib = blr._truncate_to_common_length(audio_feats, vib_feats)
+    out_audio, out_vib = blr._truncate_to_common_length(
+        audio_feats, vib_feats, label="feature_matrix_case"
+    )
     assert out_audio.shape == (4, 135)
     assert out_vib.shape == (4, 96)

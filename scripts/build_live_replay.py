@@ -54,9 +54,13 @@ always shared, corrected here after this task's own full 4-session rebuild found
 real counter-case: each cache variant is its own intersection across only ITS OWN
 streams (`rowii.pipeline.build_run_grid`), so a variant built from fewer/differently
 -gapped streams can genuinely run longer or shorter than another --
-`270626-pu_ph_pu_ph_pu_ph-1`'s `audio.npz` (18716 windows, shortened by this
-docstring's own documented 24-min `RAWGeneratorMic__0` gap) vs. its `vibration.npz`
-(19436 windows, no such gap in either accelerometer stream). Both still share the
+`270626-pu_ph_pu_ph_pu_ph-1`'s `audio.npz` (18716 windows) vs. its `vibration.npz`
+(19436 windows): the audio variant's own common grid is 720 windows (12 min)
+shorter than vibration's for this run; per-variant grids intersect only their own
+streams' first/last-file spans (`common_grid`'s `max(t0)`/`min(t_end)`,
+`rowii.signals.windows.common_grid`) -- a mid-recording gap cannot be the cause
+(verified against `_synthesize_run_header`: only each stream's FIRST/LAST file
+feeds the grid). Both still share the
 identical `grid_t0_ns`, so index `i` means the same real second in either one;
 `load_levels`/`load_feature_snapshot` truncate every array they combine down to the
 shortest cache's own length before indexing (`_truncate_to_common_length`) rather
@@ -255,7 +259,7 @@ def humanize_names(raw_names: list[str]) -> list[str]:
     return [humanize_feature_name(n) for n in raw_names]
 
 
-def _truncate_to_common_length(*arrays: np.ndarray) -> tuple[np.ndarray, ...]:
+def _truncate_to_common_length(*arrays: np.ndarray, label: str) -> tuple[np.ndarray, ...]:
     """Every *array* truncated (axis 0 only -- a 2D feature matrix keeps every
     column) to the SHORTEST one's own length -- a no-op when every array already
     agrees, which is the common case (`290626-tu`/`080726-pu_strikes`/
@@ -269,10 +273,12 @@ def _truncate_to_common_length(*arrays: np.ndarray) -> tuple[np.ndarray, ...]:
     streams (`rowii.pipeline.build_run_grid`), so a variant built from
     fewer/differently-gapped streams can genuinely run longer or shorter than
     another. `270626-pu_ph_pu_ph_pu_ph-1` is the one real `LIVE_SESSIONS` case:
-    `audio.npz`'s 2-mic intersection is 18716 windows (shortened by the
-    module docstring's own documented 24-min `RAWGeneratorMic__0` gap),
-    `vibration.npz`'s 2-accelerometer intersection is 19436 windows -- 720 s
-    longer. Both caches still share the identical `grid_t0_ns`/1.0 s
+    `audio.npz`'s 2-mic intersection is 18716 windows, `vibration.npz`'s
+    2-accelerometer intersection is 19436 windows -- the audio variant's own
+    common grid is 720 windows (12 min) shorter than vibration's for this run;
+    per-variant grids intersect only their own streams' first/last-file spans
+    (`rowii.signals.windows.common_grid`); a mid-recording gap cannot be the
+    cause. Both caches still share the identical `grid_t0_ns`/1.0 s
     `grid_window_ns`, so index `i` means the same real second in either one;
     truncating the longer array down to the shorter one's length is therefore
     EXACT alignment over the shared prefix, not a lossy approximation, and the
@@ -280,8 +286,24 @@ def _truncate_to_common_length(*arrays: np.ndarray) -> tuple[np.ndarray, ...]:
     `duration_s` anyway -- the replay's own playhead never reaches it. Used by
     `load_levels`/`load_feature_snapshot`, both of which combine an
     `audio.npz`-derived `valid_mask`/length with `vibration.npz`-derived
-    arrays."""
-    n = min(a.shape[0] for a in arrays)
+    arrays.
+
+    *label* identifies the caller for the `logger.warning` this emits WHEN
+    truncation actually discards data (the common length is shorter than the
+    longest input) -- e.g. `f"load_levels[{ctx.run}]"`. Silent (no warning) in
+    the equal-length common case; reviewer finding (round 1) was that a real
+    mismatch like the 270626 case above was previously absorbed with no log
+    trace at all.
+    """
+    lengths = [a.shape[0] for a in arrays]
+    n = min(lengths)
+    if n < max(lengths):
+        discarded = [length - n for length in lengths]
+        logger.warning(
+            "%s: _truncate_to_common_length discarding data -- input lengths %s, "
+            "common length %d, discarded per array %s",
+            label, lengths, n, discarded,
+        )
     return tuple(a[:n] for a in arrays)
 
 
@@ -496,7 +518,7 @@ def load_levels(ctx: RunContext) -> dict[str, Any]:
     # the real case where they don't) -- truncate every series to the shortest
     # one's length before `valid` is used to index any of them.
     gen_mic, tur_mic, gen_vib, tur_vib, valid = _truncate_to_common_length(
-        gen_mic, tur_mic, gen_vib, tur_vib, valid
+        gen_mic, tur_mic, gen_vib, tur_vib, valid, label=f"load_levels[{ctx.run}]"
     )
     gen_mic = np.asarray(gen_mic, dtype=np.float64)
     tur_mic = np.asarray(tur_mic, dtype=np.float64)
@@ -644,7 +666,9 @@ def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
     # See _truncate_to_common_length's own docstring / load_levels's identical
     # comment: audio.npz and vibration.npz do not always share one
     # grid_n_windows (270626-pu_ph_pu_ph_pu_ph-1 is the real counter-case).
-    audio_feats, vib_feats, valid = _truncate_to_common_length(audio_feats, vib_feats, valid)
+    audio_feats, vib_feats, valid = _truncate_to_common_length(
+        audio_feats, vib_feats, valid, label=f"load_feature_snapshot[{ctx.run}]"
+    )
     audio_feats = np.asarray(audio_feats, dtype=np.float64)
     vib_feats = np.asarray(vib_feats, dtype=np.float64)
     valid = np.asarray(valid, dtype=bool)
