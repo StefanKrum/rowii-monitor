@@ -26,13 +26,21 @@ Steps:
        candidate-kit/<session>/` into `docs/site/assets/review/<session>/` (a
        TRACKED, committed location -- `results/` itself is gitignored, so the
        site's own copy is the only one that ever reaches git).
-    3. Render the candidates fragment (`candidate_kit.render_candidates_
+    3. Copy the 3 real `"state"`-kind demo clip WAVs from `docs/demo/assets/`
+       into `docs/site/assets/modes/` -- also site-LOCAL, not a `../demo/
+       assets/` sibling-directory reference: the real local dev setup serves
+       `docs/site/` itself as the web root (no GitHub Pages workflow in this
+       repo implies a `docs/`-rooted one instead), and a `..` above that root
+       collapses away under RFC 3986 dot-segment removal rather than escaping
+       it -- confirmed 404 against a `docs/site/`-rooted server.
+    4. Render the candidates fragment (`candidate_kit.render_candidates_
        fragment`, `asset_prefix=ASSET_PREFIX` so its embedded paths point at
        step 2's copy), the hammer-strikes clip cards (`build_site.
        render_clip_cards` over `docs/site/assets/site_manifest.json`'s own
        `"strikes"` list), and the per-mode clip cards (same function over
-       `docs/demo/assets/manifest.json`'s `"state"`-kind clips).
-    4. Compose (`compose_audio_review_html`) and write
+       `docs/demo/assets/manifest.json`'s `"state"`-kind clips, pointed at
+       step 3's copy).
+    5. Compose (`compose_audio_review_html`) and write
        `docs/site/audio_review.html`.
 
 Run from the repo root: `python scripts/publish_audio_review.py`.
@@ -61,6 +69,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = _SCRIPTS_DIR.parent
 SITE_DIR = REPO_ROOT / "docs" / "site"
 SITE_ASSETS_DIR = SITE_DIR / "assets" / "review"
+SITE_MODES_ASSETS_DIR = SITE_DIR / "assets" / "modes"
 ASSET_PREFIX = "assets/review/"
 
 
@@ -233,10 +242,22 @@ def publish(
 
     site_manifest = json.loads(site_manifest_path.read_text(encoding="utf-8"))
     demo_manifest = json.loads(demo_manifest_path.read_text(encoding="utf-8"))
+
+    # Site-local copy of the "state"-kind demo clips (see module docstring
+    # step 3 for why -- a `../demo/assets/` reference 404s once docs/site/
+    # itself is the served web root).
+    mode_clip_files = [c["file"] for c in demo_manifest["clips"] if c["kind"] == "state"]
+    if SITE_MODES_ASSETS_DIR.exists():
+        shutil.rmtree(SITE_MODES_ASSETS_DIR)
+    SITE_MODES_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    for filename in mode_clip_files:
+        shutil.copy2(demo_manifest_path.parent / filename, SITE_MODES_ASSETS_DIR / filename)
+        total_bytes += (SITE_MODES_ASSETS_DIR / filename).stat().st_size
+
     strikes_html = bs.render_clip_cards(site_manifest, "strikes")
     modes_html = bs.render_clip_cards(demo_manifest, "modes")
     n_strikes = len(site_manifest["strikes"])
-    n_modes = sum(1 for c in demo_manifest["clips"] if c["kind"] == "state")
+    n_modes = len(mode_clip_files)
 
     html = compose_audio_review_html(
         candidates_fragment=candidates_fragment,

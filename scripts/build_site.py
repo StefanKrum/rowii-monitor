@@ -874,16 +874,25 @@ def _strike_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
 </div>"""
 
 
-def _demo_clip_card(clip: Mapping[str, Any]) -> str:
+def _demo_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
     """v7 `.clip-card` for one `docs/demo/assets/manifest.json` `"state"`-kind
     clip (ordinary per-operating-mode audio, `render_clip_cards(..., "modes")`'s
-    only source) -- always a fixed `../demo/assets/` sibling-directory path
-    (`docs/demo/`'s own committed clips are never relocated), so unlike
-    `_strike_clip_card` this takes no `asset_prefix`."""
+    only source). Sourced from `<site>/assets/modes/` -- a site-LOCAL, tracked
+    copy `publish_audio_review.py`'s `publish()` makes of the 3 real `"state"`-
+    kind WAVs, NOT a `../demo/assets/` sibling-directory reference: the real
+    local dev setup serves `docs/site/` itself as the web root (`npx serve -l
+    5173 repos/rowii-monitor/docs/site`; there is no GitHub Pages workflow in
+    this repo implying a `docs/`-rooted deployment instead), and a `..` above
+    that root collapses away under standard relative-URL resolution (RFC 3986
+    S5.2.4) rather than escaping it -- so `../demo/assets/*.wav` 404s for real,
+    confirmed against a `docs/site/`-rooted server. `asset_prefix` mirrors
+    `_strike_clip_card`'s own convention (prepended to the already-relative
+    `assets/modes/...` path); empty by default, same reasoning as strikes."""
+    src = f"{asset_prefix}assets/modes/{html.escape(clip['file'])}"
     return f"""<div class="clip-card">
   <div class="ct"><span class="n2">State {html.escape(str(clip['label']))}</span>
   <span class="badge">unsupervised cluster</span></div>
-  <audio controls preload="none" src="../demo/assets/{html.escape(clip['file'])}"></audio>
+  <audio controls preload="none" src="{src}"></audio>
   <p class="meta">{_format_clip_timestamp(clip['start_utc'])}
   &middot; {html.escape(clip['source_run'])}</p>
 </div>"""
@@ -923,7 +932,7 @@ def render_clip_cards(manifest: Mapping[str, Any], kind: str, asset_prefix: str 
         return "".join(_strike_clip_card(c, asset_prefix) for c in manifest["strikes"])
     if kind == "modes":
         return "".join(
-            _demo_clip_card(c) for c in manifest["clips"] if c["kind"] == "state"
+            _demo_clip_card(c, asset_prefix) for c in manifest["clips"] if c["kind"] == "state"
         )
     raise ValueError(f"render_clip_cards: unknown kind {kind!r} (expected 'strikes' or 'modes')")
 

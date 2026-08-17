@@ -2680,15 +2680,23 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
              gap: 1rem; flex-wrap: wrap; }
 .card-title { font-weight: 700; font-family: var(--font-mono); font-size: 0.9rem; }
 /* -- badges: one shared component, v7 color-role variants (spec D6: red = alarm
-   only, amber = transition/caution, green = ok/live/agreement) -- */
-.badge { display: inline-block; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.72rem;
-         font-weight: 700; letter-spacing: .02em; border: 1px solid; background: var(--panel-2);
-         text-transform: uppercase; white-space: nowrap; }
-.badge.sustained { color: var(--warn-text); border-color: var(--warn-border); }
-.badge.transient { color: var(--alarm); border-color: var(--alarm); }
-.badge.impulse { color: var(--live); border-color: var(--live); }
-.badge.warn { color: var(--warn-text); border-color: var(--warn-border); }
-.badge.neutral { color: var(--dim); border-color: var(--hair); }
+   only, amber = transition/caution, green = ok/live/agreement) -- scoped under
+   `.candidate-card ` (descendant selector, not a bare `.badge`): every real
+   badge in this file already lives inside a `.candidate-card` (both here and
+   in `render_index_static_html`'s own markup), so this is a no-op there, but
+   it matters on the composed `docs/site/audio_review.html` -- design.css
+   defines its OWN, differently-sized `.badge` for the Hammer strikes/Per-mode
+   audio tabs' clip-card badges (`build_site.render_clip_cards`); a bare rule
+   here would win that cascade for ALL of them (this fragment's `<style>` comes
+   after design.css's `<link>`, same specificity), not just candidate cards. -- */
+.candidate-card .badge { display: inline-block; border-radius: 999px; padding: 0.1rem 0.6rem;
+         font-size: 0.72rem; font-weight: 700; letter-spacing: .02em; border: 1px solid;
+         background: var(--panel-2); text-transform: uppercase; white-space: nowrap; }
+.candidate-card .badge.sustained { color: var(--warn-text); border-color: var(--warn-border); }
+.candidate-card .badge.transient { color: var(--alarm); border-color: var(--alarm); }
+.candidate-card .badge.impulse { color: var(--live); border-color: var(--live); }
+.candidate-card .badge.warn { color: var(--warn-text); border-color: var(--warn-border); }
+.candidate-card .badge.neutral { color: var(--dim); border-color: var(--hair); }
 .meta-line { color: var(--dim); font-size: 0.85rem; margin: 0.3em 0; }
 .meta-line b { color: var(--ink); font-weight: 700; }
 

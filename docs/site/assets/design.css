@@ -254,6 +254,7 @@ main.page { max-width: 1200px; margin: 0 auto; padding: 0 0 40px; }
 .seg-tabs button:last-child { border-right: 0; }
 .seg-tabs button.active { background: var(--ink); color: #fff; }
 .seg-tabs button .n { font-weight: 500; opacity: .65; margin-left: 4px; }
+.pills { display: flex; gap: 4px; flex-wrap: wrap; }
 .pill { font-size: 10px; font-weight: 600; color: var(--dim); border: 1px solid var(--hair);
   background: var(--panel); padding: 4px 10px; border-radius: 999px; cursor: pointer; }
 .pill.active { color: var(--ink); border-color: var(--faint); background: var(--hair-3); font-weight: 700; }

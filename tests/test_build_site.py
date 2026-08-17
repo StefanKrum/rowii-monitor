@@ -300,7 +300,8 @@ def test_design_css_v7_tokens_and_no_legacy_look() -> None:
         assert token in css, token
     # v7 components exist
     for cls in [".app-bar", ".group-label", ".session-card", ".kpi-band", ".trend-row",
-                ".stage-grid", ".register-table", ".transport", ".seg-tabs", ".clip-card"]:
+                ".stage-grid", ".register-table", ".transport", ".seg-tabs", ".clip-card",
+                ".pills"]:
         assert cls in css, cls
     # legacy look must be gone
     assert "Avenir Next" not in css
@@ -425,11 +426,23 @@ def test_render_clip_cards_modes_selects_state_kind_only() -> None:
     html = bs.render_clip_cards(_demo_manifest(), "modes")
     assert 'class="clip-card"' in html
     assert "State 0" in html
-    assert '<audio controls preload="none" src="../demo/assets/state_cluster0.wav">' in html
+    # Site-local copy (docs/site/assets/modes/), NOT the docs/demo/ sibling
+    # directory: a `../demo/assets/...` reference 404s once docs/site/ itself
+    # is the served web root (the real local setup, and there is no GitHub
+    # Pages workflow implying otherwise) -- RFC 3986 dot-segment removal
+    # collapses `..` above the root rather than escaping it.
+    assert '<audio controls preload="none" src="assets/modes/state_cluster0.wav">' in html
+    assert "../demo/" not in html
     assert "2026-07-08 14:19:42 UTC" in html
     assert "080726-pu_strikes" in html
     assert "plate-tur_0" not in html  # the strike-kind clip must not leak into "modes"
     assert bs.find_external_resource_urls(html) == []
+
+
+def test_render_clip_cards_modes_respects_asset_prefix() -> None:
+    html = bs.render_clip_cards(_demo_manifest(), "modes", asset_prefix="assets/review/")
+    assert 'src="assets/review/assets/modes/state_cluster0.wav"' in html
+    assert "../demo/" not in html
 
 
 def test_render_clip_cards_unknown_kind_raises() -> None:

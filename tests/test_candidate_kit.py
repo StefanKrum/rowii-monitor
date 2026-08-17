@@ -1550,3 +1550,20 @@ def test_render_candidates_fragment_returns_scoped_reusable_pieces(tmp_path: Pat
     out = ck.render_index_html([result], tmp_path)
     html_text = out.read_text()
     assert css0 in html_text and body0 in html_text and js0 in html_text
+
+
+def test_render_candidates_fragment_badge_css_scoped_to_candidate_card() -> None:
+    """Fix round 1 (reviewer FIX 2): `_CANDIDATE_CARD_CSS`'s `.badge` rules must
+    be scoped under `.candidate-card ` (descendant selector), not bare. A bare
+    `.badge { border-radius: 999px; ... }` wins the cascade for EVERY `.badge`
+    element on the composed `docs/site/audio_review.html` (this fragment's
+    `<style>` tag is embedded after `assets/design.css`'s own `<link>`, same
+    specificity, later wins) -- including the Hammer strikes/Per-mode audio
+    tabs' clip-card badges (`build_site.render_clip_cards`), which must render
+    at design.css's OWN small-rectangle `.badge` size, not this fragment's pill
+    shape. `css` is independent of `results`, so an empty list is a valid,
+    minimal fixture here."""
+    css, _, _ = ck.render_candidates_fragment([], asset_prefix="")
+    for variant in ("", ".sustained", ".transient", ".impulse", ".warn", ".neutral"):
+        assert f".candidate-card .badge{variant} {{" in css, variant
+        assert f"\n.badge{variant} {{" not in css, variant
