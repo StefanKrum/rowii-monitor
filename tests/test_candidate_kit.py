@@ -14,8 +14,12 @@ so the module under test is imported directly by inserting `scripts/` onto `sys.
 Real parquet reads against `results/step2/once-calibrated/`, real WAV/PNG rendering and
 `index.html` assembly are exercised by actually running the CLI against real data
 instead, not by a test here (same split `test_annotation_kit.py` documents) -- EXCEPT
-the impulse path's z-threshold, which real data alone can validate: see the final
-`@pytest.mark.data` section below.
+the impulse path's z-threshold, which real data alone can validate (see the final
+`@pytest.mark.data` section below), and `render_index_html`'s own SCADA-rows JS/HTML
+wiring (section 16): which JS function builds the panel, which meta keys survive into
+the embedded JSON, which literal unit labels appear -- a "look" contract worth pinning
+directly on a synthetic fixture, since real-data coverage would not exercise that
+STRING output any differently.
 """
 from __future__ import annotations
 
@@ -1430,3 +1434,55 @@ def test_impulse_search_recovers_st_landmark_strikes() -> None:
             f"at z >= {impulse_mod.Z_REGISTER_THRESHOLD:g} on the better stream "
             f"({recovered_by_stream})"
         )
+
+
+# ---------------------------------------------------------------------------
+# 16. render_index_html -- v7 candidate card: SCADA rows replace scada_png
+# ---------------------------------------------------------------------------
+
+
+def test_render_index_html_v7_scada_rows(tmp_path: Path) -> None:
+    """One `CandidateAssetResult` built by hand (bypassing `build_all`'s real
+    audio/SCADA pipeline entirely -- module docstring's testing-philosophy note),
+    with 20 s of synthetic 1 Hz series matching `build_extended_readout_series`'
+    own 4-channel return shape. Pins the v7 SCADA-rows contract: `buildScadaRows`
+    is the emitted JS entry point, `scada_png` no longer reaches the interactive
+    page at all (not even inside the embedded JSON -- `render_index_static_html`'s
+    own `<img>` still needs it, unaffected by this test), the channel rows carry
+    their real units, and none of the existing assessment/export vocabulary moved."""
+    candidate = ck.Candidate(
+        session="290626-tu", klass="sustained",
+        start_utc=_utc(2026, 6, 29, 9, 14, 2), end_utc=_utc(2026, 6, 29, 9, 14, 5),
+        duration_s=3.0, min_p=0.002, state_name="turbine", near_transition=False,
+        n_windows=3, modality="fusion", regime="recalibrate", alarms_path="a.parquet",
+        candidate_id="290626-tu-02", rank=2, scada_state="turbine",
+        scada_transition=False, in_sample=False, context_note="",
+    )
+    n_seconds = 20
+    result = ck.CandidateAssetResult(
+        candidate=candidate,
+        asset_start_utc=_utc(2026, 6, 29, 9, 13, 52),
+        asset_duration_s=float(n_seconds),
+        gen_wav="290626-tu/290626-tu-02_gen.wav", tur_wav="290626-tu/290626-tu-02_tur.wav",
+        gen_png="290626-tu/290626-tu-02_gen.png", tur_png="290626-tu/290626-tu-02_tur.png",
+        gen_flat_png="290626-tu/290626-tu-02_gen_flat.png",
+        tur_flat_png="290626-tu/290626-tu-02_tur_flat.png",
+        scada_png="290626-tu/290626-tu-02_scada.png",
+        power_mw_1hz=[243.0 + 0.1 * i for i in range(n_seconds)],
+        speed_rpm_1hz=[378.8] * n_seconds,
+        flow_net_m3s_1hz=[40.9 + 0.05 * i for i in range(n_seconds)],
+        ks_valve_1hz=[2.8] * n_seconds,
+        ribbon_html=ck.render_state_ribbon_html(
+            scada_row=["turbine"] * n_seconds, detected_row=["turbine"] * n_seconds,
+            duration_s=float(n_seconds), px_per_s=ak._FLAT_PX_PER_S,
+        ),
+    )
+
+    out = ck.render_index_html([result], tmp_path)
+    html_text = out.read_text()
+
+    assert "buildScadaRows" in html_text
+    assert "scada_png" not in html_text  # image path no longer referenced
+    assert "m³/s" in html_text and "MW" in html_text  # units in the row labels
+    assert "plausible anomaly" in html_text  # assessment vocabulary unchanged
+    assert "EXPORT" in html_text.upper()

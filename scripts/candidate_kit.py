@@ -1404,7 +1404,7 @@ _STATE_COLORS: dict[str, str] = {
 (standstill/turbine/pump/phase-shifter/transition) plus `scada_majority_state`'s
 own `"unknown"` fallback (module docstring: "unknown = grey"). A colorblind-safe
 qualitative palette (Okabe & Ito, 2008), deliberately DISTINCT from `_CANDIDATE_CSS`'s
-own `--sustained`/`--transient`/`--impulse` class-badge colors (amber/purple/teal) so
+own `.badge.sustained`/`.badge.transient`/`.badge.impulse` colors (amber/red/teal) so
 the ribbon's state colors are never confused with the class badge above it. ONE shared mapping
 for BOTH ribbon rows (SCADA state and detected state) -- a detector `state_name`
 that carries a named mapping (`rowii.eval.metrics.derive_state_names`) uses the
@@ -2594,34 +2594,34 @@ _SESSION_LABEL: dict[str, str] = {
 _CANDIDATE_CSS = """
 :root {
   color-scheme: light;
-  --paper: #eceef0; --panel: #ffffff; --panel-2: #f7f8f9;
-  --ink: #1f2a37; --dim: #5b6b7c; --hair: #c7cdd4; --hair-2: #dde1e6;
-  --live: #0f766e; --alarm: #b93815; --warn: #a16207;
-  --sustained: #a16207; --transient: #b93815; --impulse: #0f766e;
-  --note-bg: #f7f8f9; --note-border: #0f766e;
+  --paper: #e9ecf0; --panel: #ffffff; --panel-2: #f7f9fb; --panel-3: #fbfcfd;
+  --ink: #18202a; --dim: #5c6b7d; --faint: #7a8798; --fainter: #97a2b0;
+  --hair: #d3d9e0; --hair-2: #dfe4ea; --hair-3: #eef1f5;
+  --live: #0e8f6f; --alarm: #c73a1d;
+  --warn-text: #a16207; --warn-fill: #c07f10; --warn-border: #c9a227;
   --font-ui: "Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif;
   --font-mono: "SF Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
   --radius: 8px; --radius-lg: 12px;
+  --shadow: 0 1px 2px rgba(24, 32, 42, .04);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { font-family: var(--font-ui); margin: 0; padding: 0; line-height: 1.5;
        background: var(--paper); color: var(--ink); }
-header.topbar { display: flex; align-items: center; gap: 24px; padding: 13px 22px;
-  border-bottom: 1px solid var(--hair); background: var(--panel); position: sticky; top: 0;
+.app-bar { display: flex; align-items: center; gap: 18px; padding: 10px 18px;
+  background: var(--panel); border-bottom: 1px solid var(--hair); position: sticky; top: 0;
   z-index: 40; }
-.brand { display: flex; align-items: baseline; gap: 7px; }
-.brand-mark { font-size: 15px; font-weight: 800; letter-spacing: .06em; color: var(--ink); }
-.brand-sub { font-size: 12.5px; color: var(--dim); font-weight: 600; }
-nav.nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
-nav.nav a { color: var(--dim); text-decoration: none; font-size: 13px; font-weight: 600;
-  padding: 7px 12px; border-radius: 6px; border: 1px solid transparent; }
-nav.nav a:hover { color: var(--ink); background: var(--panel-2); }
-nav.nav a.active { color: var(--ink); background: var(--panel-2); border-color: var(--hair); }
+.app-brand { font-size: 15px; letter-spacing: .04em; white-space: nowrap; }
+.app-brand b { font-weight: 800; }
+.app-brand span { font-weight: 300; color: var(--dim); }
+.group-label { margin: 16px 0 8px; display: flex; align-items: center; gap: 10px; }
+.group-label .t { font-size: 10px; letter-spacing: .16em; color: var(--faint);
+  font-weight: 800; white-space: nowrap; text-transform: uppercase; }
+.group-label .ln { flex: 1; height: 1px; background: var(--hair); }
+.group-label .cap { font-size: 10.5px; color: var(--fainter); white-space: nowrap; }
 .site-footer { max-width: 1320px; margin: 0 auto; padding: 24px 22px 46px; color: var(--dim);
   font-size: 12px; border-top: 1px solid var(--hair); }
 main.review-page { max-width: 1320px; margin: 0 auto; padding: 22px 22px 60px; }
-h1 { font-size: 22px; margin: 4px 0 4px; }
 h2 { font-size: 15px; margin-top: 2.2rem; border-bottom: 1px solid var(--hair);
      padding-bottom: 0.3rem; }
 code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em 0.3em;
@@ -2630,11 +2630,11 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .date-header { font-family: var(--font-mono); font-size: 12px; color: var(--dim);
                margin: 0 0 12px; }
 .instructions { background: var(--panel); border: 1px solid var(--hair);
-                border-radius: var(--radius-lg);
+                border-radius: var(--radius-lg); box-shadow: var(--shadow);
                 padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .instructions p { margin: 0.4em 0; }
 .legend { background: var(--panel); border: 1px solid var(--hair);
-          border-radius: var(--radius-lg);
+          border-radius: var(--radius-lg); box-shadow: var(--shadow);
           padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .legend h2 { margin: 0 0 0.5rem; border: none; padding: 0; font-size: 14px; }
 .legend p { margin: 0.5em 0; }
@@ -2646,18 +2646,21 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .session-status { color: var(--dim); font-size: 0.85rem; }
 
 .candidate-card { background: var(--panel); border: 1px solid var(--hair);
-                   border-radius: var(--radius-lg);
+                   border-radius: var(--radius-lg); box-shadow: var(--shadow);
                    padding: 0.9rem 1.1rem; margin-bottom: 1.2rem; outline-offset: 2px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline;
              gap: 1rem; flex-wrap: wrap; }
 .card-title { font-weight: 700; font-family: var(--font-mono); font-size: 0.9rem; }
-.class-badge { border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.72rem; font-weight: 700;
-                border: 1px solid; background: var(--panel-2); }
-.class-badge.sustained { color: var(--sustained); border-color: var(--sustained); }
-.class-badge.transient { color: var(--transient); border-color: var(--transient); }
-.class-badge.impulse { color: var(--impulse); border-color: var(--impulse); }
-.near-transition-badge { border: 1px solid var(--warn); color: var(--warn); border-radius: 999px;
-                          padding: 0.05rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
+/* -- badges: one shared component, v7 color-role variants (spec D6: red = alarm
+   only, amber = transition/caution, green = ok/live/agreement) -- */
+.badge { display: inline-block; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.72rem;
+         font-weight: 700; letter-spacing: .02em; border: 1px solid; background: var(--panel-2);
+         text-transform: uppercase; white-space: nowrap; }
+.badge.sustained { color: var(--warn-text); border-color: var(--warn-border); }
+.badge.transient { color: var(--alarm); border-color: var(--alarm); }
+.badge.impulse { color: var(--live); border-color: var(--live); }
+.badge.warn { color: var(--warn-text); border-color: var(--warn-border); }
+.badge.neutral { color: var(--dim); border-color: var(--hair); }
 .meta-line { color: var(--dim); font-size: 0.85rem; margin: 0.3em 0; }
 .meta-line b { color: var(--ink); font-weight: 700; }
 
@@ -2665,14 +2668,8 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
             margin: 0.6rem 0 0.15rem; }
 .mode-scada { font-size: 0.95rem; font-weight: 700; }
 .mode-detector { font-size: 0.85rem; color: var(--dim); }
-.mismatch-badge { background: var(--warn); color: white; border-radius: 999px;
-                   padding: 0.05rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
-.scada-transition-badge { border: 1px solid var(--hair); color: var(--dim); border-radius: 999px;
-                           padding: 0.05rem 0.55rem; font-size: 0.72rem; }
-.in-sample-badge { border: 1px solid var(--hair); color: var(--dim); border-radius: 999px;
-                    padding: 0.05rem 0.55rem; font-size: 0.72rem; }
 .criterion-line { color: var(--dim); font-size: 0.85rem; margin: 0.2em 0 0.6em; }
-.context-note { background: var(--note-bg); border-left: 3px solid var(--note-border);
+.context-note { background: var(--panel-2); border-left: 3px solid var(--live);
                   border-radius: 6px; padding: 0.4rem 0.7rem; font-size: 0.83rem;
                   margin: 0.2em 0 0.6em; }
 .context-note b { color: var(--live); }
@@ -2691,15 +2688,34 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 .lane-time { font-variant-numeric: tabular-nums; font-family: var(--font-mono);
              font-size: 0.82rem; color: var(--dim); }
 
-.scada-block { margin: 0.7rem 0 0.3rem; }
-.scada-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.3rem; }
-.scada-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px; }
-.scada-wrapper { position: relative; display: block; }
+.scada-block { margin: 0.9rem 0 0.3rem; border: 1px solid var(--hair-2);
+               border-radius: var(--radius); background: var(--panel-3);
+               padding: 10px 12px 9px; }
+.scada-title { font-size: 0.8rem; color: var(--dim); margin-bottom: 0.5rem; }
 .scada-img { display: block; width: 100%; height: 100%; }
-.scada-overlay-canvas { position: absolute; top: 0; left: 0; display: block; pointer-events: none; }
-.scada-readout { font-variant-numeric: tabular-nums; font-family: var(--font-mono);
-                  font-size: 0.82rem; color: var(--dim); margin-top: 0.3rem; }
-.scada-readout b { color: var(--ink); font-weight: 700; }
+/* -- SCADA rows: same responsive inline-SVG-per-channel pattern as the live
+   replay page (docs/site's own .trend-row family), not the OLD fixed-px raster
+   strip -- so the panel fills the card width on any viewport. Only .scada-img
+   above is still needed (the read-only static page's own <img>, `render_index_
+   static_html`'s own docstring); everything below is this (interactive-only)
+   page's own live rows. -- */
+.scada-rows { position: relative; }
+.scada-trow { display: grid; grid-template-columns: 100px 1fr; gap: 8px;
+              align-items: stretch; margin-bottom: 4px; }
+.scada-trow:last-child { margin-bottom: 0; }
+.scada-tlab { display: flex; flex-direction: column; justify-content: center;
+              text-align: right; line-height: 1.25; }
+.scada-tlab .n { font-size: 0.62rem; letter-spacing: .03em; color: var(--faint);
+                  font-weight: 700; }
+.scada-tlab .lv { font-size: 0.86rem; color: var(--ink); font-weight: 700;
+                   font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+                   margin-top: 1px; }
+.scada-tchart { border: 1px solid var(--hair-2); background: var(--panel);
+                border-radius: 2px; position: relative; width: 100%; }
+.scada-tchart svg { display: block; width: 100%; height: 100%; }
+.scada-rows-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink);
+                        box-shadow: 0 0 0 1px rgba(255,255,255,.75); pointer-events: none;
+                        z-index: 4; }
 
 /* -- state ribbon (HTML, not raster: in-band labels + native title tooltip) -- */
 .ribbon-scroll { overflow-x: auto; border: 1px solid var(--hair); border-radius: 4px;
@@ -2739,9 +2755,21 @@ audio.lane-audio { width: 100%; margin: 0.4rem 0; }
 
 .assessment-row { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;
                   margin: 0.6rem 0; }
-.assessment-options { display: flex; gap: 0.8rem; flex-wrap: wrap; font-size: 0.85rem; }
-.assessment-options label { display: inline-flex; align-items: center; gap: 0.3rem;
-                             cursor: pointer; }
+.assessment-options { display: flex; gap: 6px; flex-wrap: wrap; }
+/* -- assessment pills: the radio itself is visually hidden (kept in the a11y tree
+   and focusable, standard clip-rect pattern) -- the LABEL is the pill, toggled via
+   its own `.active` class (JS keeps this in sync with `radio.checked`, since a
+   plain `label > input` structure has no CSS-only way to style the label off the
+   checked state of a CHILD input). -- */
+.assessment-options label { position: relative; display: inline-flex; align-items: center;
+  font-size: 0.78rem; font-weight: 700; color: var(--dim); background: var(--panel);
+  border: 1px solid var(--hair); padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  user-select: none; }
+.assessment-options label:hover { border-color: var(--faint); }
+.assessment-options label.active { color: #fff; background: var(--ink); border-color: var(--ink); }
+.assessment-options label:focus-within { outline: 2px solid var(--live); outline-offset: 2px; }
+.assessment-options input[type="radio"] { position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .note-label { flex: 1 1 260px; display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;
               color: var(--dim); }
 .note-input { flex: 1; padding: 0.25rem 0.5rem; border: 1px solid var(--hair);
@@ -2797,15 +2825,15 @@ whose recording day was itself used to fit the detector/scoring model &ndash; it
 evidentiary status is weaker than a genuinely held-out day, shown here rather than
 left implicit.</p>
 <p><strong>SCADA context panel:</strong> below the two audio lanes, each card also
-shows the actual operating data (active power, shaft speed, net flow) over the
-same snippet, with the candidate window shaded and its start marked (dashed) --
+shows the actual operating data for the same snippet against a shared time axis
+&ndash; active power, shaft speed, net flow, and spherical-valve position &ndash;
 so you can judge what the machine was actually doing, not just what the model
-flagged. Underneath it, a two-row <strong>state ribbon</strong> shows the
-SCADA-derived state (top row) and the detector's own state (bottom row) for every
-second of the snippet, colored per the legend below. While a lane plays, the
-current power/speed reading is shown next to the panel's own time display,
-following the playhead. 27.06. has no Betriebsdaten at all, so its panel shows a
-placeholder instead of power/speed/flow (the state ribbon's SCADA row is then
+flagged. In the interactive tool this is four responsive curves with a playhead
+that follows the audio, each row showing its own live reading as it plays.
+Underneath it, a two-row <strong>state ribbon</strong> shows the SCADA-derived
+state (top row) and the detector's own state (bottom row) for every second of
+the snippet, colored per the legend below. 27.06. has no Betriebsdaten at all,
+so its curves and readings stay blank (the state ribbon's SCADA row is then
 uniformly grey/&ldquo;unknown&rdquo;, correctly, since there is nothing to derive
 a state from).</p>
 <div class="state-legend">__STATE_LEGEND_HTML__</div>
@@ -2862,10 +2890,16 @@ _CANDIDATE_JS = r"""
 var STORAGE_PREFIX = "candidate-review:v1:";
 var FLAT_PX_PER_S = __FLAT_PX_PER_S__;
 var FLAT_HEIGHT_PX = __FLAT_HEIGHT_PX__;
-var SCADA_HEIGHT_PX = __SCADA_HEIGHT_PX__;
 var ASSESSMENT_VALUES = __ASSESSMENT_VALUES_JSON__;
 var ARROW_STEP_S = 0.5;
 var ARROW_STEP_FINE_S = 0.05;
+// SCADA rows: label column width (`.scada-trow`'s own `grid-template-columns:
+// 100px 1fr; gap: 8px;`, _CANDIDATE_CSS) -- kept as one JS constant rather than
+// measured via `getBoundingClientRect()` so the playhead's `calc()` offset is a
+// plain static string (task instruction: "CSS calc like the mockup"), same as
+// every other fixed layout constant in this file (FLAT_PX_PER_S etc.). Keep in
+// sync with `.scada-trow`'s own CSS if that grid ever changes.
+var SCADA_ROW_LABEL_COL_PX = 108;
 var EXPORT_CSV_HEADER = [
   "session", "candidate_id", "class", "start_utc", "duration_s", "min_p", "state_name",
   "near_transition", "scada_state", "scada_transition", "assessment", "note", "marks_offsets_s"
@@ -3175,93 +3209,75 @@ function updateLaneTimeDisplay(lane) {
 }
 
 // ---------------------------------------------------------------------------
-// SCADA context panel: strip+ribbon image, shared playhead, live P/n readout.
-// The panel is ONE per card (not per mic lane, unlike the spectrogram lanes
-// above) -- its playhead/readout follow whichever lane is "active"
-// (card.activeLaneKey, set on that lane's own play/seek, defaulted to the
-// first lane at card-build time), since SCADA context does not depend on
-// which microphone is playing.
+// SCADA context panel: four responsive per-channel line charts (inline SVG,
+// data-driven from the *_1hz series already in `meta` -- NOT the old fixed-px
+// raster strip; no image path is referenced anywhere below), a shared
+// playhead, and each row's own live reading. One panel per card (not per mic
+// lane, unlike the spectrogram lanes above) -- its playhead/readings follow
+// whichever lane is "active" (card.activeLaneKey, set on that lane's own
+// play/seek, defaulted to the first lane at card-build time), since SCADA
+// context does not depend on which microphone is playing.
 // ---------------------------------------------------------------------------
 
-function buildScadaBlock(card, meta) {
-  var scada = { card: card, naturalWidth: 0, naturalHeight: 0 };
+var SCADA_CHANNELS = [
+  { key: "power_mw_1hz",     label: "P · ACTIVE POWER",    unit: "MW",   digits: 1, h: 26 },
+  { key: "speed_rpm_1hz",    label: "n · SHAFT SPEED",     unit: "rpm",  digits: 0, h: 18 },
+  { key: "flow_net_m3s_1hz", label: "Q · NET FLOW",        unit: "m³/s", digits: 1, h: 18 },
+  { key: "ks_valve_1hz",     label: "KS · SPH. VALVE",     unit: "pos",  digits: 1, h: 18 },
+];
 
-  var wrap = el("div", { class: "scada-block" });
-  wrap.appendChild(
-    el("div", { class: "scada-title", text: "Operating data (SCADA context)" })
-  );
-
-  var scroll = el("div", { class: "scada-scroll" });
-  var wrapper = el("div", { class: "scada-wrapper" });
-  var img = el("img", { class: "scada-img", alt: "SCADA strip and state ribbon" });
-  var canvas = el("canvas", { class: "scada-overlay-canvas" });
-  wrapper.appendChild(img);
-  wrapper.appendChild(canvas);
-  scroll.appendChild(wrapper);
-  wrap.appendChild(scroll);
-
-  var readout = el("div", { class: "scada-readout" });
-  wrap.appendChild(readout);
-
-  scada.el = wrap;
-  scada.imgEl = img;
-  scada.canvasEl = canvas;
-  scada.wrapperEl = wrapper;
-  scada.readoutEl = readout;
-
-  img.addEventListener("load", function () {
-    scada.naturalWidth = img.naturalWidth || flatWidthPx(meta.asset_duration_s);
-    scada.naturalHeight = img.naturalHeight || SCADA_HEIGHT_PX;
-    var w = scada.naturalWidth, h = scada.naturalHeight;
-    wrapper.style.width = w + "px";
-    wrapper.style.height = h + "px";
-    canvas.width = w;
-    canvas.height = h;
-    renderScadaBlock(card);
-  });
-  img.src = meta.scada_png;
-
-  return scada;
+function scadaRowSvg(series, h) {
+  var vals = series.filter(function (v) { return v !== null && isFinite(v); });
+  if (!vals.length) return '<svg viewBox="0 0 100 ' + h + '"></svg>';
+  var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+  var span = (max - min) || 1;
+  var pts = [];
+  for (var i = 0; i < series.length; i++) {
+    var v = series[i];
+    if (v === null || !isFinite(v)) continue;
+    var x = (i / Math.max(series.length - 1, 1)) * 100;
+    var y = h - 2 - ((v - min) / span) * (h - 4);
+    pts.push(x.toFixed(2) + "," + y.toFixed(2));
+  }
+  return '<svg viewBox="0 0 100 ' + h + '" preserveAspectRatio="none">' +
+    '<polyline points="' + pts.join(" ") + '" fill="none" stroke="#2563a8" ' +
+    'stroke-width="1.2"/></svg>';
 }
 
-function drawScadaOverlay(scada, t) {
-  var ctx = scada.canvasEl.getContext("2d");
-  var w = scada.canvasEl.width;
-  var h = scada.canvasEl.height;
-  ctx.clearRect(0, 0, w, h);
-  var dur = scada.card.meta.asset_duration_s;
-  if (!dur || dur <= 0 || !w) return;
+function buildScadaRows(card, meta) {
+  var scada = { card: card, valueEls: {} };
 
-  var x = clamp((t / dur) * w, 0, w);
-  ctx.strokeStyle = "#ef4444";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, h);
-  ctx.stroke();
+  var wrap = el("div", { class: "scada-block" });
+  wrap.appendChild(el("div", { class: "scada-title",
+    text: "Operating data (SCADA) — playhead follows the audio" }));
+
+  var body = el("div", { class: "scada-rows" });
+  SCADA_CHANNELS.forEach(function (ch) {
+    var series = meta[ch.key] || [];
+    var row = el("div", { class: "scada-trow" });
+    var lab = el("div", { class: "scada-tlab" });
+    lab.appendChild(el("span", { class: "n", text: ch.label }));
+    var lv = el("span", { class: "lv" });
+    lab.appendChild(lv);
+    scada.valueEls[ch.key] = { el: lv, unit: ch.unit, digits: ch.digits, series: series };
+    var chart = el("div", { class: "scada-tchart" });
+    chart.style.height = ch.h + "px";
+    chart.innerHTML = scadaRowSvg(series, ch.h);
+    row.appendChild(lab);
+    row.appendChild(chart);
+    body.appendChild(row);
+  });
+  var playhead = el("div", { class: "scada-rows-playhead" });
+  body.appendChild(playhead);
+  scada.playheadEl = playhead;
+  wrap.appendChild(body);
+
+  scada.el = wrap;
+  return scada;
 }
 
 function formatReading(value, unit, digits) {
   return (value === null || value === undefined) ? "–" : value.toFixed(digits) + " " + unit;
-}
-
-function updateScadaReadout(scada, meta, t) {
-  var total = meta.asset_duration_s;
-  var secIdx = Math.floor(clamp(t, 0, Math.max(total - 1e-6, 0)));
-  var powerSeries = meta.power_mw_1hz || [];
-  var speedSeries = meta.speed_rpm_1hz || [];
-  var flowSeries = meta.flow_net_m3s_1hz || [];
-  var ksSeries = meta.ks_valve_1hz || [];
-  var power = secIdx < powerSeries.length ? powerSeries[secIdx] : null;
-  var speed = secIdx < speedSeries.length ? speedSeries[secIdx] : null;
-  var flow = secIdx < flowSeries.length ? flowSeries[secIdx] : null;
-  var ksValve = secIdx < ksSeries.length ? ksSeries[secIdx] : null;
-  scada.readoutEl.textContent =
-    formatClock(t) + " / " + formatClock(total) +
-    "  ·  P: " + formatReading(power, "MW", 1) +
-    "  ·  n: " + formatReading(speed, "rpm", 0) +
-    "  ·  Q: " + formatReading(flow, "m3/s", 1) +
-    "  ·  KS: " + formatReading(ksValve, "pos", 1);
 }
 
 function renderScadaBlock(card) {
@@ -3270,10 +3286,23 @@ function renderScadaBlock(card) {
   var laneKey = card.activeLaneKey || (card.lanes[0] && card.lanes[0].key);
   var lane = card.lanes.filter(function (l) { return l.key === laneKey; })[0];
   var t = lane ? (lane.audioEl.currentTime || 0) : 0;
-  drawScadaOverlay(scada, t);
-  updateScadaReadout(scada, card.meta, t);
-  if (card.ribbonPlayheadEl && card.meta.asset_duration_s > 0) {
-    var pct = clamp(t / card.meta.asset_duration_s, 0, 1) * 100;
+  var total = card.meta.asset_duration_s;
+  var secIdx = Math.floor(clamp(t, 0, Math.max(total - 1e-6, 0)));
+
+  Object.keys(scada.valueEls).forEach(function (key) {
+    var ve = scada.valueEls[key];
+    var v = secIdx < ve.series.length ? ve.series[secIdx] : null;
+    ve.el.textContent = formatReading(v, ve.unit, ve.digits);
+  });
+
+  if (total > 0) {
+    var frac = clamp(t / total, 0, 1);
+    scada.playheadEl.style.left =
+      "calc(" + SCADA_ROW_LABEL_COL_PX + "px + (100% - " + SCADA_ROW_LABEL_COL_PX + "px) * " +
+      frac.toFixed(4) + ")";
+  }
+  if (card.ribbonPlayheadEl && total > 0) {
+    var pct = clamp(t / total, 0, 1) * 100;
     card.ribbonPlayheadEl.style.left = pct + "%";
   }
 }
@@ -3287,6 +3316,20 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+// Assessment pills: the visible "pressed" look lives on the <label> (a plain CSS
+// `label > input:checked` selector cannot reach upward from a CHILD input to style
+// its own parent), so every place that can change which assessment is selected --
+// building the card, a real click (radio's own "change" event), and the
+// window.CandidateKit.setAssessment() test hook, which sets `.checked` directly
+// without dispatching one -- goes through this ONE function, rather than three
+// independent copies of the same class-toggle drifting apart.
+function applyAssessmentActive(card, value) {
+  card.radios.forEach(function (r) {
+    var label = r.parentElement;
+    if (label && label.classList) label.classList.toggle("active", r.value === value);
+  });
+}
+
 function buildCard(meta) {
   var restoredState = loadState(meta.candidate_id);
   var hasRestoredData = !!restoredState.assessment || !!restoredState.note;
@@ -3296,16 +3339,19 @@ function buildCard(meta) {
   var head = el("div", { class: "card-head" });
   var titleSpan = el("span", { class: "card-title" });
   titleSpan.textContent = meta.candidate_id + " — " + meta.start_utc;
-  var classBadge = el("span", { class: "class-badge " + meta.class, text: meta.class });
+  var classBadge = el("span", { class: "badge " + meta.class, text: meta.class });
   head.appendChild(titleSpan);
   head.appendChild(classBadge);
   if (meta.near_transition) {
-    head.appendChild(el("span", { class: "near-transition-badge", text: "near transition" }));
+    head.appendChild(el("span", { class: "badge warn", text: "near transition" }));
   }
   if (meta.in_sample) {
-    head.appendChild(el("span", { class: "in-sample-badge", text: "in-sample (fit-pool day)" }));
+    head.appendChild(el("span", { class: "badge neutral", text: "in-sample (fit-pool day)" }));
   }
-  card.el = el("div", { class: "candidate-card" }, [head]);
+  // data-session: Task 11's session-filter toolbar selects candidate cards by this
+  // attribute (site redesign plan) -- set here rather than left to be inferred from
+  // meta.candidate_id's own session prefix, so the filter never has to re-parse an id.
+  card.el = el("div", { class: "candidate-card", "data-session": meta.session }, [head]);
 
   var modeRow = el("div", { class: "mode-row" });
   var scadaModeSpan = el("span", { class: "mode-scada" });
@@ -3316,12 +3362,12 @@ function buildCard(meta) {
   modeRow.appendChild(detectorModeSpan);
   if (meta.mode_mismatch) {
     modeRow.appendChild(
-      el("span", { class: "mismatch-badge", text: "⚠ SCADA/detector disagree" })
+      el("span", { class: "badge warn", text: "⚠ SCADA/detector disagree" })
     );
   }
   if (meta.scada_transition) {
     modeRow.appendChild(
-      el("span", { class: "scada-transition-badge", text: "SCADA: transition/ramp" })
+      el("span", { class: "badge warn", text: "SCADA: transition/ramp" })
     );
   }
   card.el.appendChild(modeRow);
@@ -3354,8 +3400,13 @@ function buildCard(meta) {
   card.lanes = [genLane, turLane];
   card.activeLaneKey = genLane.key;
 
-  card.scada = buildScadaBlock(card, meta);
+  // buildScadaRows renders synchronously (inline SVG, no <img> load event to wait
+  // on unlike the old raster strip) -- renderScadaBlock must be called explicitly
+  // once here to paint the t=0 playhead/readings; every later update comes from
+  // the lane's own play/pause/seeked listeners (renderLane -> renderScadaBlock).
+  card.scada = buildScadaRows(card, meta);
   card.el.appendChild(card.scada.el);
+  renderScadaBlock(card);
 
   var ribbonContainer = el("div", { class: "ribbon-scroll" });
   ribbonContainer.innerHTML = meta.ribbon_html || "";
@@ -3380,15 +3431,19 @@ function buildCard(meta) {
   ASSESSMENT_VALUES.forEach(function (value) {
     var id = radioName + "-" + value.replace(/[^a-z0-9]+/gi, "-");
     var radio = el("input", { type: "radio", name: radioName, value: value, id: id });
-    if (restoredState.assessment === value) radio.checked = true;
-    radio.addEventListener("change", function () {
-      card.state.assessment = value;
-      saveState(card);
-    });
-    radios.push(radio);
     var label = el("label", { for: id });
     label.appendChild(radio);
     label.appendChild(document.createTextNode(value));
+    if (restoredState.assessment === value) {
+      radio.checked = true;
+      label.classList.add("active");
+    }
+    radio.addEventListener("change", function () {
+      card.state.assessment = value;
+      applyAssessmentActive(card, value);
+      saveState(card);
+    });
+    radios.push(radio);
     options.appendChild(label);
   });
   assessmentRow.appendChild(options);
@@ -3521,6 +3576,7 @@ window.CandidateKit = {
     if (!card) return null;
     card.state.assessment = value;
     card.radios.forEach(function (r) { r.checked = r.value === value; });
+    applyAssessmentActive(card, value);
     saveState(card);
     return card.state.assessment;
   },
@@ -3577,17 +3633,29 @@ def _prefixed_metas(
 
 
 def _review_page_head(*, title: str, date_note: str) -> str:
-    """Shared page chrome for `index.html`/`index_static.html`: the site app bar
-    nav (SAME markup as every other `docs/site/*.html` page -- `site_common.
-    app_bar_html`) plus the page title and a one-line date/session-count note.
-    `review.html` is not itself a v7 `NAV_ITEMS` entry (that slot is
-    `audio_review.html`, not yet built -- see `site_common.py`), so no tab
-    shows active here until this page is folded into the audio-review
-    composer task."""
+    """Shared page chrome for `index.html`/`index_static.html`: a minimal,
+    fully self-contained v7 header -- brand wordmark plus a group-label-style
+    title (never an essay `<h1>`, the v7 design bans those) and a one-line
+    date/session-count note -- styled entirely by `_CANDIDATE_CSS`'s own v7
+    tokens (`.app-bar`/`.app-brand`/`.group-label`, BY VALUE identical to
+    `docs/site/assets/design.css`'s same-named classes, not a shared file).
+
+    Deliberately does NOT call `site_common.app_bar_html` (the real site's
+    multi-tab nav): this kit build (`results/candidate-kit/index.html`) is
+    opened standalone via `file://` with no sibling `index.html`/`sensors.
+    html`/`live.html` to link to, so a nav bar here would just be four dead
+    links. `render_index_html`'s own docstring's `asset_prefix` parameter lets
+    the SAME function also render the site's still-unmerged review copy
+    today -- that copy inherits this same nav-less header until the
+    audio-review composer task (site redesign plan Task 11) replaces it with
+    the real `site_common.app_bar_html` shell around a fragment of this page's
+    own cards."""
     return (
-        f"{sc.app_bar_html('review.html')}\n"
+        '<header class="app-bar"><div class="app-brand"><b>ROWII</b>'
+        "<span>&thinsp;MONITOR</span></div></header>\n"
         '<main class="review-page">\n'
-        f"<h1>{html.escape(title)}</h1>\n"
+        f'<div class="group-label"><span class="t">{html.escape(title)}</span>'
+        '<span class="ln"></span></div>\n'
         f'<p class="date-header">{html.escape(date_note)}</p>\n'
     )
 
@@ -3607,11 +3675,23 @@ def render_index_html(
     type="application/json">` block and read via `JSON.parse` at load time --
     same `file://` CORS rationale as `annotation_kit.render_interactive_index_
     html`'s own docstring. Every card's spectrogram image/audio element
-    references the real PNG/WAV by a RELATIVE path (never base64)."""
+    references the real PNG/WAV by a RELATIVE path (never base64).
+
+    The SCADA context panel is the ONE exception to "every real asset path
+    survives into the embedded JSON": this page's own SCADA context is
+    data-driven inline SVG rows built client-side from the `*_1hz` series
+    already in every meta dict (`buildScadaRows`/`scadaRowSvg` in
+    `_CANDIDATE_JS`), not an `<img>` referencing `scada_png` -- so that key is
+    dropped before embedding, making the field genuinely unreferenced by this
+    page rather than merely unused. `render_index_static_html`'s own call to
+    `_prefixed_metas` is untouched by this and keeps `scada_png` (that page
+    still embeds it as a plain `<img src>`, module docstring build/1's own
+    PNG generation is unaffected either way)."""
     metas = _prefixed_metas(results, asset_prefix)
     sessions = sorted({str(m["session"]) for m in metas})
     labels = {s: _SESSION_LABEL.get(s, s) for s in sessions}
-    metas_json = ak._json_script_safe(metas)
+    metas_for_js = [{k: v for k, v in m.items() if k != "scada_png"} for m in metas]
+    metas_json = ak._json_script_safe(metas_for_js)
     labels_json = ak._json_script_safe(labels)
 
     legend_html = _CANDIDATE_LEGEND_HTML.replace(
@@ -3626,7 +3706,6 @@ def render_index_html(
         _CANDIDATE_JS
         .replace("__FLAT_PX_PER_S__", repr(ak._FLAT_PX_PER_S))
         .replace("__FLAT_HEIGHT_PX__", repr(ak._FLAT_HEIGHT_PX))
-        .replace("__SCADA_HEIGHT_PX__", repr(_SCADA_TOTAL_HEIGHT_PX))
         .replace("__ASSESSMENT_VALUES_JSON__", ak._json_script_safe(list(ASSESSMENT_VALUES)))
     )
 
@@ -3704,7 +3783,7 @@ def render_index_static_html(
                 else ""
             )
             mismatch_html = (
-                '<span class="mismatch-badge">SCADA/detector disagree</span>'
+                '<span class="badge warn">SCADA/detector disagree</span>'
                 if m["mode_mismatch"]
                 else ""
             )
@@ -3719,10 +3798,11 @@ def render_index_static_html(
             tur_flat_png = html.escape(str(m["tur_flat_png"]))
             tur_wav = html.escape(str(m["tur_wav"]))
             scada_png = html.escape(str(m["scada_png"]))
+            session_attr = html.escape(session)
             cards.append(
-                f"""<div class="candidate-card">
+                f"""<div class="candidate-card" data-session="{session_attr}">
   <div class="card-head"><span class="card-title">{candidate_id} — {start_utc}</span>
-  <span class="class-badge {klass}">{klass}</span></div>
+  <span class="badge {klass}">{klass}</span></div>
   <div class="mode-row"><span class="mode-scada">Mode (SCADA): {scada_state}</span>
   <span class="mode-detector">Mode (Detector): {state_name}</span>{mismatch_html}</div>
   <div class="criterion-line">{criterion_text}</div>
