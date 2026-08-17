@@ -1,11 +1,22 @@
-"""Build `docs/site/live.html`: a real, native (not iframed) control-room replay of
-one recorded session (`RUN`, 290626-tu) from already-computed real artifacts --
-NEVER touches `ROWII_DATA_ROOT`/raw Gantner burst files. Everything the page needs
-(state timeline, p-value stream, alarm feed, sentinel verdict, SCADA line, per-stream
-level series, a downsampled log-mel strip, a downsampled feature snapshot matrix) is
-precomputed here into ONE embedded JSON payload, injected into `docs/site/
-live_template.html` at a single `__LIVE_DATA_JSON__` token, producing `docs/site/
-live.html`. Reproducible from `results/` + `docs/site/live_template.html` alone.
+"""Build one `docs/site/live*.html` control-room replay page PER recorded session
+in `LIVE_SESSIONS` (real, native -- not iframed) from already-computed real
+artifacts -- NEVER touches `ROWII_DATA_ROOT`/raw Gantner burst files. Everything a
+page needs (state timeline, p-value stream, alarm feed, sentinel verdict, SCADA
+line, per-stream level series, a downsampled log-mel strip, a downsampled feature
+snapshot matrix) is precomputed into ONE embedded JSON payload per session,
+injected into `docs/site/live_template.html` at a single `__LIVE_DATA_JSON__`
+token, producing `docs/site/<LIVE_SESSIONS[run]["out"]>`. Reproducible from
+`results/` + `docs/site/live_template.html` alone.
+
+Two-pass build (`main`): pass 1 builds every requested run's payload (one
+`RunContext` per run, `make_run_context`); pass 2 computes the cross-session nav
+switcher (`pages_nav` -- a ribbon + tick summary per session, derived from each
+run's OWN already-built payload) and injects it into every payload as
+`payload["sessions_nav"]` before rendering -- so a page's nav always reflects
+exactly the set of pages THIS invocation actually built (`--run`, repeatable;
+default: every `LIVE_SESSIONS` entry). A `preflight` gate runs before pass 1: if
+any requested run is missing a required real-data input, the build aborts naming
+the missing path and the script that produces it -- never a partially-built page.
 
 Representation/regime choice (documented, not arbitrary): the primary state/score/
 alarm arm is **fusion, frozen thresholds** -- `candidate_kit.REGIME_BY_SESSION
@@ -20,7 +31,10 @@ FAR under frozen thresholds (7.5%, common-window basis) sits close to the nomina
 with ~1900 episodes and misrepresent the system's typical behaviour. The sentinel
 gauge itself is representation-independent by construction (s1 always reads the
 audio-beats mode bank, `run_once_calibrated.py`'s own docstring) so its numbers are
-identical either way.
+identical either way. fusion is the headline REPRESENTATION for every session in
+`LIVE_SESSIONS`, not just 290626-tu -- only REGIME (frozen vs. recalibrate) varies
+per session, read from the same `REGIME_BY_SESSION` lookup `candidate_kit.py`
+itself uses.
 
 Alert-feed source: `results/candidate-kit/candidates.csv` rows for this session
 (already the two-path SUSTAINED/TRANSIENT classification, already SCADA-attached,
@@ -42,6 +56,7 @@ index `i` is treated as "second `i` of the replay" throughout.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import io
 import json
 import logging
@@ -79,18 +94,24 @@ REPO_ROOT = _SCRIPTS_DIR.parent
 RESULTS_ROOT = REPO_ROOT / "results"
 CACHE_DIR = RESULTS_ROOT / "cache"
 DEFAULT_TEMPLATE = REPO_ROOT / "docs" / "site" / "live_template.html"
-DEFAULT_OUT = REPO_ROOT / "docs" / "site" / "live.html"
 
-RUN = "290626-tu"
 REPRESENTATION = "fusion"
-REGIME = ck.REGIME_BY_SESSION[RUN]
-"""`"frozen"` -- the real once-calibrated decision for this session (module
-docstring), read from the same lookup `candidate_kit.py` itself uses, not
-re-hardcoded."""
+"""The primary state/score/alarm arm for every replay page (module docstring) --
+NOT per-session: every `LIVE_SESSIONS` entry uses fusion as its headline
+representation, only `RunContext.regime` (frozen vs. recalibrate) varies by
+session."""
 SENTINEL_REPRESENTATION = "audio-beats"
 """s1/s2 always read the audio-beats mode bank/raw caches, representation-independent
 by construction (`run_once_calibrated.py`)."""
 UNIT_NAME = "ROWII Machine 1 — Rodundwerk II"
+AUDIO_DIR = REPO_ROOT / "docs" / "site" / "assets" / "live"
+"""Written by `scripts/build_live_audio.py` (the one step in this page's build
+that DOES touch `ROWII_DATA_ROOT` -- run rarely/manually, its two `.m4a` outputs
+committed like any other `docs/site/assets/` file). Reading its small, already-
+committed sidecar JSON (`RunContext.audio_meta_json`, `load_audio` below) keeps
+`build_live_replay.py` itself honest about its own module docstring's "NEVER
+touches ROWII_DATA_ROOT" -- it folds in already-extracted audio metadata, never
+raw sensor data."""
 
 LIVE_SESSIONS: dict[str, dict[str, object]] = {
     "290626-tu": {"out": "live.html", "display_name": "Turbine day",
@@ -103,28 +124,67 @@ LIVE_SESSIONS: dict[str, dict[str, object]] = {
                                    "blurb": "pump ⇄ phase-shifter cycles", "events": False},
 }
 """Registry of every recorded session this build script can turn into a `live*
-.html` replay page (`"out"` is the filename under `docs/site/`) -- SINGLE
-SOURCE OF TRUTH for `session_summary` below and, from Task 7 onward, for the
-multi-page build loop and the cross-session nav switcher. Only `RUN`
-(`"290626-tu"`) is actually built by this task; the other three entries exist
-so `session_summary`/`LIVE_SESSIONS` are already the real, final registry
-Task 7 extends rather than replaces."""
+.html` replay page (`"out"` is the filename under `docs/site/`) -- SINGLE SOURCE
+OF TRUTH for `session_summary`, `make_run_context`, `pages_nav`, and `main`'s own
+`--run` validation/default. `main` builds every entry here by default, or exactly
+the `--run`-selected subset; `preflight` gates each requested run on its own
+real-data inputs actually being present (module docstring) before ANY page is
+written."""
 
-MONITOR_DIR = RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / "monitor" / RUN / REGIME
-SENTINEL_JSON = (
-    RESULTS_ROOT / "step2" / "once-calibrated" / SENTINEL_REPRESENTATION
-    / f"{SENTINEL_REPRESENTATION}.json"
-)
-CANDIDATES_CSV = RESULTS_ROOT / "candidate-kit" / "candidates.csv"
-CANDIDATES_META = RESULTS_ROOT / "candidate-kit" / "candidates_meta.json"
-AUDIO_DIR = REPO_ROOT / "docs" / "site" / "assets" / "live"
-AUDIO_META_JSON = AUDIO_DIR / f"{RUN}_audio_meta.json"
-"""Written by `scripts/build_live_audio.py` (the one step in this page's build
-that DOES touch `ROWII_DATA_ROOT` -- run rarely/manually, its two `.m4a` outputs
-committed like any other `docs/site/assets/` file). Reading this small, already-
-committed sidecar keeps `build_live_replay.py` itself honest about its own module
-docstring's "NEVER touches ROWII_DATA_ROOT" -- it folds in already-extracted
-audio metadata, never raw sensor data."""
+
+@dataclasses.dataclass(frozen=True)
+class RunContext:
+    """Everything a `load_*`/`build_payload` function needs for ONE session's
+    build -- replaces the single hardcoded `RUN`-derived module constants this
+    file used before it built more than `live.html`. Built once per requested run
+    by `make_run_context` and threaded explicitly through every function below
+    (never read off a module global), so `main` can build any subset of
+    `LIVE_SESSIONS` in one process without cross-run state leaking."""
+
+    run: str
+    representation: str
+    regime: str
+    sentinel_representation: str
+    unit_name: str
+    monitor_dir: Path
+    """`results/step2/once-calibrated/<representation>/monitor/<run>/<regime>/`
+    for a normally-monitored session, or `results/monitor-ext/<run>/
+    <representation>/` (no `<regime>` path segment there) for a
+    `candidate_kit._MONITOR_EXT_SESSIONS` coverage-extension session --
+    `candidate_kit._alarms_path_for`'s own branch, reused here (not re-derived)
+    so this can never quietly drift from the SAME lookup `candidate_kit.py`'s own
+    `select_session` uses to find each session's `alarms.parquet`."""
+    sentinel_json: Path
+    candidates_csv: Path
+    candidates_meta: Path
+    audio_dir: Path
+    audio_meta_json: Path
+
+
+def make_run_context(run: str) -> RunContext:
+    """`RunContext` for *run* -- `run` should be a `LIVE_SESSIONS` key (`main`
+    validates this before calling; an unregistered run instead fails naturally
+    inside `ck.REGIME_BY_SESSION[run]` with a `KeyError`)."""
+    regime = ck.REGIME_BY_SESSION[run]
+    monitor_dir = ck._alarms_path_for(RESULTS_ROOT, REPRESENTATION, run, regime).parent
+    return RunContext(
+        run=run,
+        representation=REPRESENTATION,
+        regime=regime,
+        sentinel_representation=SENTINEL_REPRESENTATION,
+        unit_name=UNIT_NAME,
+        monitor_dir=monitor_dir,
+        sentinel_json=(
+            RESULTS_ROOT / "step2" / "once-calibrated" / SENTINEL_REPRESENTATION
+            / f"{SENTINEL_REPRESENTATION}.json"
+        ),
+        candidates_csv=RESULTS_ROOT / "candidate-kit" / "candidates.csv",
+        candidates_meta=RESULTS_ROOT / "candidate-kit" / "candidates_meta.json",
+        audio_dir=AUDIO_DIR,
+        audio_meta_json=AUDIO_DIR / f"{run}_audio_meta.json",
+    )
+
+
 AUDIO_COVERAGE_SLACK_S = 1.0
 """Seconds of tolerance `_check_audio_covers_replay` allows the extracted audio to
 fall short of the replay's own `[t0_utc, t0_utc + duration_s]` span by, before
@@ -134,7 +194,7 @@ that function's own docstring)."""
 
 FEATURE_SNAPSHOT_STRIDE_S = 4
 """Feature-snapshot heatmap cadence: one column every N seconds of replay time --
-231 raw dims (135 audio + 96 vibration) at 1 Hz for the whole ~4.4 h day would be
+231 raw dims (135 audio + 96 vibration) at 1 Hz for a whole ~4.4 h day would be
 ~14 MB of binary alone; every `FEATURE_SNAPSHOT_STRIDE_S`-th window keeps the panel
 genuinely live (a new column every few seconds of simulated time) inside the page's
 size budget."""
@@ -198,15 +258,15 @@ def session_summary(run: str, *, duration_s: float, n_episodes: int) -> dict[str
 # ---------------------------------------------------------------------------
 
 
-def load_primary_timeline() -> dict[str, Any]:
-    segments_df = pd.read_csv(MONITOR_DIR / "segments.csv")
+def load_primary_timeline(ctx: RunContext) -> dict[str, Any]:
+    segments_df = pd.read_csv(ctx.monitor_dir / "segments.csv")
     segments_df["start_utc"] = pd.to_datetime(segments_df["start_utc"], utc=True)
     segments_df["end_utc"] = pd.to_datetime(segments_df["end_utc"], utc=True)
     t0 = segments_df["start_utc"].min()
     t0_ns = int(t0.value)
     duration_s = (int(segments_df["end_utc"].max().value) - t0_ns) / 1e9
 
-    notes_text = (MONITOR_DIR / "monitor_notes.md").read_text(encoding="utf-8")
+    notes_text = (ctx.monitor_dir / "monitor_notes.md").read_text(encoding="utf-8")
     state_table = mda.parse_state_table(notes_text)
     states = {
         str(sid): {
@@ -231,10 +291,10 @@ def load_primary_timeline() -> dict[str, Any]:
         for r in segments_df.itertuples()
     ]
 
-    alarms_df = pd.read_parquet(MONITOR_DIR / "alarms.parquet")
+    alarms_df = pd.read_parquet(ctx.monitor_dir / "alarms.parquet")
     scored = alarms_df.loc[alarms_df["role"] == "scored"].sort_values("t_utc_ns")
     if scored.empty:
-        raise ValueError(f"{RUN}: no scored windows in {MONITOR_DIR / 'alarms.parquet'}")
+        raise ValueError(f"{ctx.run}: no scored windows in {ctx.monitor_dir / 'alarms.parquet'}")
     t_s = ((scored["t_utc_ns"].to_numpy() - t0_ns) / 1e9).round(3)
 
     trace = {
@@ -247,22 +307,24 @@ def load_primary_timeline() -> dict[str, Any]:
         "near_transition": [bool(v) for v in scored["near_transition"].to_numpy()],
     }
 
-    alarm_seg_df = pd.read_csv(MONITOR_DIR / "alarm_segments.csv")
+    alarm_seg_df = pd.read_csv(ctx.monitor_dir / "alarm_segments.csv")
     n_alarm_episodes = len(alarm_seg_df)
     n_scored = len(scored)
     n_alarmed_windows = int(scored["alarm"].sum())
 
-    # 290626-tu has no controlled events (no eval_events dir for this session);
-    # realized FAR/budget instead comes from the regimes table (load_sentinel
-    # below), matching every other non-event day's own reporting convention
-    # (run_once_calibrated.py).
+    # Some LIVE_SESSIONS entries (e.g. 080726-pu_strikes) have controlled acoustic
+    # events with their own eval_events/-based FAR computation elsewhere
+    # (scripts/eval_events.py); this function never reads that directory --
+    # realized FAR/budget for the SENTINEL gauge always comes from the regimes
+    # table instead (load_sentinel below), the same reporting convention
+    # run_once_calibrated.py itself uses for every day it monitors.
 
     return {
         "t0_ns": t0_ns,
         "t0_utc": t0.isoformat(),
         "duration_s": round(duration_s, 3),
-        "representation": REPRESENTATION,
-        "regime": REGIME,
+        "representation": ctx.representation,
+        "regime": ctx.regime,
         "states": states,
         "segments": segments,
         "trace": trace,
@@ -272,18 +334,26 @@ def load_primary_timeline() -> dict[str, Any]:
     }
 
 
-def load_sentinel() -> dict[str, Any]:
-    payload = json.loads(SENTINEL_JSON.read_text(encoding="utf-8"))
-    trig = next(t for t in payload["trigger_log"] if t["run"] == RUN)
-    fusion_json_path = (
-        RESULTS_ROOT / "step2" / "once-calibrated" / REPRESENTATION / f"{REPRESENTATION}.json"
-    )
-    fusion_json = json.loads(
-        fusion_json_path.read_text(
-            encoding="utf-8"
+def load_sentinel(ctx: RunContext) -> dict[str, Any]:
+    payload = json.loads(ctx.sentinel_json.read_text(encoding="utf-8"))
+    trig = next((t for t in payload["trigger_log"] if t["run"] == ctx.run), None)
+    if trig is None:
+        raise LookupError(
+            f"{ctx.run!r}: no trigger_log entry in {ctx.sentinel_json} -- this session was "
+            "never scored by the once-calibrated sentinel (s1/s2) driver"
         )
+    fusion_json_path = (
+        RESULTS_ROOT / "step2" / "once-calibrated" / ctx.representation
+        / f"{ctx.representation}.json"
     )
-    regime = next(r for r in fusion_json["regimes"] if r["run"] == RUN)
+    fusion_json = json.loads(fusion_json_path.read_text(encoding="utf-8"))
+    regime = next((r for r in fusion_json["regimes"] if r["run"] == ctx.run), None)
+    if regime is None:
+        raise LookupError(
+            f"{ctx.run!r}: no regimes entry in {fusion_json_path} -- this session was never "
+            "monitored under the pinned once-calibrated tree (candidate_kit._MONITOR_EXT_SESSIONS "
+            "coverage-extension sessions have no once-calibrated FAR verdict)"
+        )
     return {
         "era": trig["era"],
         "s1_rate": round(trig["s1_rate"], 6),
@@ -305,7 +375,7 @@ def load_sentinel() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load_levels() -> dict[str, Any]:
+def load_levels(ctx: RunContext) -> dict[str, Any]:
     """One 1 Hz level series per raw stream -- mic streams use channel 0's
     `log_rms` (the pipeline's own established "channel 0 of each stream"
     convention, `make_demo_assets.MONO_CHANNEL_INDEX`); vibration streams use the
@@ -313,8 +383,8 @@ def load_levels() -> dict[str, Any]:
     that stream (no established single-channel convention exists for vibration,
     module docstring's own honesty note on the ring's real position<->channel
     mapping never being verified)."""
-    audio = np.load(CACHE_DIR / f"{RUN}--audio.npz", allow_pickle=True)
-    vibration = np.load(CACHE_DIR / f"{RUN}--vibration.npz", allow_pickle=True)
+    audio = np.load(CACHE_DIR / f"{ctx.run}--audio.npz", allow_pickle=True)
+    vibration = np.load(CACHE_DIR / f"{ctx.run}--vibration.npz", allow_pickle=True)
 
     def _column(d: Any, name: str) -> np.ndarray:
         idx = int(np.where(d["feature_names"] == name)[0][0])
@@ -356,8 +426,8 @@ def load_levels() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load_scada(index: Any, cfg: Any) -> dict[str, Any]:
-    session_scada = ck.load_session_scada(index, RUN, cfg)
+def load_scada(ctx: RunContext, index: Any, cfg: Any) -> dict[str, Any]:
+    session_scada = ck.load_session_scada(index, ctx.run, cfg)
 
     # Load bin (Step 1 stage's "load bin" readout): re-derives `rowii.scada.labels.
     # gt_labels`'s own `load_bin` column (quantile-binned power, turbine/pump windows
@@ -367,7 +437,7 @@ def load_scada(index: Any, cfg: Any) -> dict[str, Any]:
     # directly here -- not via `candidate_kit`'s own namespace, which mypy's
     # `no_implicit_reexport` correctly refuses to treat as a public API) rather
     # than duplicating a second real-data read.
-    run = mda._get_run(index, RUN)
+    run = mda._get_run(index, ctx.run)
     betriebsdaten = index.betriebsdaten_by_day.get(run.day_root, [])
     offset_ns = run_utc_offset_ns(run)
     grid = build_run_grid(run, rs1._AUDIO_STREAMS, cfg.window.window_s, offset_ns=offset_ns)
@@ -410,7 +480,7 @@ def load_scada(index: Any, cfg: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load_logmel_strip() -> dict[str, Any]:
+def load_logmel_strip(ctx: RunContext) -> dict[str, Any]:
     """A `(LOGMEL_N_MELS, n_windows)` grayscale-then-colormapped PNG: each
     window's own `(49 frames, 64 mels)` patch (`RAWGeneratorMic__0` only --
     `rowii.signals.logmel`'s own frame/mel layout, verified against this cache's
@@ -424,7 +494,7 @@ def load_logmel_strip() -> dict[str, Any]:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    d = np.load(CACHE_DIR / f"{RUN}--logmel.npz", allow_pickle=True)
+    d = np.load(CACHE_DIR / f"{ctx.run}--logmel.npz", allow_pickle=True)
     features = np.asarray(d["features"], dtype=np.float32)
     valid = np.asarray(d["valid_mask"], dtype=bool)
     n_windows = features.shape[0]
@@ -462,10 +532,10 @@ def load_logmel_strip() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load_feature_snapshot() -> dict[str, Any]:
-    audio = np.load(CACHE_DIR / f"{RUN}--audio.npz", allow_pickle=True)
-    vibration = np.load(CACHE_DIR / f"{RUN}--vibration.npz", allow_pickle=True)
-    beats = np.load(CACHE_DIR / f"{RUN}--audio-beats.npz", allow_pickle=True)
+def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
+    audio = np.load(CACHE_DIR / f"{ctx.run}--audio.npz", allow_pickle=True)
+    vibration = np.load(CACHE_DIR / f"{ctx.run}--vibration.npz", allow_pickle=True)
+    beats = np.load(CACHE_DIR / f"{ctx.run}--audio-beats.npz", allow_pickle=True)
 
     audio_feats = np.asarray(audio["features"], dtype=np.float64)
     vib_feats = np.asarray(vibration["features"], dtype=np.float64)
@@ -514,9 +584,9 @@ def load_feature_snapshot() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def load_alerts(t0_ns: int) -> list[dict[str, Any]]:
-    meta = json.loads(CANDIDATES_META.read_text(encoding="utf-8"))
-    rows = [m for m in meta if m["session"] == RUN]
+def load_alerts(ctx: RunContext, t0_ns: int) -> list[dict[str, Any]]:
+    meta = json.loads(ctx.candidates_meta.read_text(encoding="utf-8"))
+    rows = [m for m in meta if m["session"] == ctx.run]
     rows.sort(key=lambda r: str(r["start_utc"]))
     out = []
     for r in rows:
@@ -544,32 +614,36 @@ def load_alerts(t0_ns: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def load_audio() -> dict[str, Any]:
+def load_audio(ctx: RunContext) -> dict[str, Any]:
     """The `{"gen": {...}, "tur": {...}}` sidecar `scripts/build_live_audio.py`
-    already wrote under `AUDIO_DIR`, unchanged except for dropping its own
+    already wrote under `ctx.audio_dir`, unchanged except for dropping its own
     `"stream"` key (`assets/live.js` never needs the raw stream name, only the
     `"gen"`/`"tur"` key it's already nested under and the human-readable
     `"label"`).
 
     Raises:
-        FileNotFoundError: if `AUDIO_META_JSON` does not exist -- run `python
-            scripts/build_live_audio.py` once (requires `ROWII_DATA_ROOT`) before
-            building this page; its two `.m4a` outputs plus this sidecar are then
-            committed like any other `docs/site/assets/` file, so every
-            subsequent `build_live_replay.py` run (which never touches
-            `ROWII_DATA_ROOT` itself) picks them up for free.
+        FileNotFoundError: if `ctx.audio_meta_json` does not exist -- run
+            `.venv/bin/python scripts/build_live_audio.py --run <run>` once
+            (requires `ROWII_DATA_ROOT`) before building this page; its two
+            `.m4a` outputs plus this sidecar are then committed like any other
+            `docs/site/assets/` file, so every subsequent `build_live_replay.py`
+            run (which never touches `ROWII_DATA_ROOT` itself) picks them up for
+            free.
     """
-    if not AUDIO_META_JSON.exists():
+    if not ctx.audio_meta_json.exists():
         raise FileNotFoundError(
-            f"{AUDIO_META_JSON} not found -- run `python scripts/build_live_audio.py` "
-            "first (see that script's own module docstring)"
+            f"{ctx.audio_meta_json} not found -- run `.venv/bin/python "
+            f"scripts/build_live_audio.py --run {ctx.run}` first (see that script's own "
+            "module docstring)"
         )
-    payload = json.loads(AUDIO_META_JSON.read_text(encoding="utf-8"))
+    payload = json.loads(ctx.audio_meta_json.read_text(encoding="utf-8"))
     streams = payload["streams"]
     return {key: {k: v for k, v in meta.items() if k != "stream"} for key, meta in streams.items()}
 
 
-def _check_audio_covers_replay(t0_utc: str, duration_s: float, audio: dict[str, Any]) -> None:
+def _check_audio_covers_replay(
+    ctx: RunContext, t0_utc: str, duration_s: float, audio: dict[str, Any]
+) -> None:
     """Fail loudly (not silently ship a broken sync) if either stream's extracted
     audio does not actually span the replay's own `[t0_utc, t0_utc + duration_s]`
     timeline -- the exact mapping `assets/live.js` applies client-side
@@ -592,15 +666,120 @@ def _check_audio_covers_replay(t0_utc: str, duration_s: float, audio: dict[str, 
         end_off = lva.audio_offset_s(duration_s, t0_utc, str(meta["start_utc"]))
         if start_off < -AUDIO_COVERAGE_SLACK_S:
             raise ValueError(
-                f"audio[{key!r}] starts {-start_off:.3f}s after the replay's own t0_utc "
-                "-- the opening seconds of the replay would have no audio"
+                f"{ctx.run}: audio[{key!r}] starts {-start_off:.3f}s after the replay's own "
+                "t0_utc -- the opening seconds of the replay would have no audio"
             )
         if end_off > float(meta["duration_s"]) + AUDIO_COVERAGE_SLACK_S:
             raise ValueError(
-                f"audio[{key!r}] ends {end_off - float(meta['duration_s']):.3f}s before the "
-                "replay's own t0_utc + duration_s -- the closing seconds of the replay "
-                "would have no audio"
+                f"{ctx.run}: audio[{key!r}] ends {end_off - float(meta['duration_s']):.3f}s "
+                "before the replay's own t0_utc + duration_s -- the closing seconds of the "
+                "replay would have no audio"
             )
+
+
+# ---------------------------------------------------------------------------
+# Preflight -- required real-data inputs for one run, checked BEFORE any page
+# in the requested build is written (no partial builds).
+# ---------------------------------------------------------------------------
+
+
+def preflight(ctx: RunContext) -> list[str]:
+    """Human-readable problems blocking *ctx*'s build (empty list if *ctx.run* is
+    ready) -- each entry names the missing path and the script that produces it,
+    so `main`'s abort message is immediately actionable. Deliberately does NOT
+    check `ctx.sentinel_json`'s own `trigger_log`/regimes ROWS (only that the
+    underlying npz caches, monitor dir, candidate rows, and live-audio assets
+    exist as files) -- `load_sentinel` itself raises a clear `LookupError` naming
+    the missing row if a requested run was never scored by the once-calibrated
+    sentinel driver, since fixing that gap is a data-production decision, not a
+    file-existence check this function can make."""
+    problems: list[str] = []
+
+    for variant in ("audio", "vibration", "logmel", "audio-beats"):
+        cache_path = CACHE_DIR / f"{ctx.run}--{variant}.npz"
+        if not cache_path.is_file():
+            problems.append(
+                f"{ctx.run!r}: missing {cache_path} -- run `scripts/warm_cache.py "
+                f"--runs {ctx.run} --variants {variant}` first"
+            )
+
+    for name in ("segments.csv", "monitor_notes.md", "alarms.parquet", "alarm_segments.csv"):
+        monitor_path = ctx.monitor_dir / name
+        if not monitor_path.is_file():
+            producer = (
+                "scripts/monitor.py --snapshot models/adapted/monitor_pool_b1_fusion_named.npz "
+                "--thresholds recalibrate (coverage-extension session -- see "
+                "candidate_kit._MONITOR_EXT_SESSIONS)"
+                if ctx.run in ck._MONITOR_EXT_SESSIONS
+                else "scripts/run_once_calibrated.py"
+            )
+            problems.append(f"{ctx.run!r}: missing {monitor_path} -- run `{producer}` first")
+
+    if not ctx.candidates_meta.is_file():
+        problems.append(
+            f"{ctx.run!r}: missing {ctx.candidates_meta} -- run "
+            "`scripts/candidate_kit.py select` first"
+        )
+    else:
+        meta = json.loads(ctx.candidates_meta.read_text(encoding="utf-8"))
+        if not any(row["session"] == ctx.run for row in meta):
+            problems.append(
+                f"{ctx.run!r}: no rows for this session in {ctx.candidates_meta} -- run "
+                "`scripts/candidate_kit.py select` first"
+            )
+
+    for suffix in ("gen", "tur"):
+        audio_path = ctx.audio_dir / f"{ctx.run}_{suffix}.m4a"
+        if not audio_path.is_file():
+            problems.append(
+                f"{ctx.run!r}: missing {audio_path} -- run `.venv/bin/python "
+                f"scripts/build_live_audio.py --run {ctx.run}` first"
+            )
+    if not ctx.audio_meta_json.is_file():
+        problems.append(
+            f"{ctx.run!r}: missing {ctx.audio_meta_json} -- run `.venv/bin/python "
+            f"scripts/build_live_audio.py --run {ctx.run}` first"
+        )
+
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Cross-session nav switcher
+# ---------------------------------------------------------------------------
+
+
+def pages_nav(
+    summaries: dict[str, dict[str, Any]], timelines: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The cross-session switcher payload for every session THIS build actually
+    produced: `summaries[run]` is that run's own `payload["session"]`
+    (`session_summary`'s output); `timelines[run]` is `{"segments": payload
+    ["segments"], "tick_s": [a["start_s"] for a in payload["alerts"]]}` -- built
+    by `main` from each run's already-assembled payload (segments/tick times are
+    never recomputed here). Iterates `LIVE_SESSIONS` (not `summaries`) so nav
+    entries always come out in registry order; a `LIVE_SESSIONS` id absent from
+    *summaries* (a `--run`-subset build that didn't include it) is simply skipped
+    -- never a dangling link to a page this invocation didn't write."""
+    nav = []
+    for run, meta in LIVE_SESSIONS.items():
+        if run not in summaries:
+            continue
+        s = summaries[run]
+        tl = timelines[run]
+        dur = float(s["duration_s"]) or 1.0
+        ribbon = [
+            {"start_frac": round(seg["start_s"] / dur, 4),
+             "end_frac": round(seg["end_s"] / dur, 4),
+             "state": seg["state_name"]}
+            for seg in tl["segments"]
+        ]
+        ticks = [round(t / dur, 4) for t in tl["tick_s"]]
+        nav.append({"id": run, "href": meta["out"], "display_name": s["display_name"],
+                    "date_label": s["date_label"], "duration_s": s["duration_s"],
+                    "n_episodes": s["n_episodes"], "events": s["events"],
+                    "blurb": s["blurb"], "ribbon": ribbon, "ticks": ticks})
+    return nav
 
 
 # ---------------------------------------------------------------------------
@@ -608,30 +787,38 @@ def _check_audio_covers_replay(t0_utc: str, duration_s: float, audio: dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def build_payload() -> dict[str, Any]:
-    cfg = load_config()
-    index = discover(cfg.data_root)
-
-    primary = load_primary_timeline()
+def build_payload(ctx: RunContext, index: Any, cfg: Any) -> dict[str, Any]:
+    primary = load_primary_timeline(ctx)
     t0_ns = primary.pop("t0_ns")
-    audio = load_audio()
-    _check_audio_covers_replay(primary["t0_utc"], primary["duration_s"], audio)
-    alerts = load_alerts(t0_ns)
+    audio = load_audio(ctx)
+    _check_audio_covers_replay(ctx, primary["t0_utc"], primary["duration_s"], audio)
+    alerts = load_alerts(ctx, t0_ns)
+
+    # "label" has no reader in docs/site/assets/live.js today (superseded by the
+    # structured "session" object below) -- kept only for payload back-compat,
+    # so it must still be a genuinely per-run string rather than 290626-tu's own
+    # hardcoded date, derived the SAME way `session_summary`'s own `date_label`
+    # is (`run[:6]` -> `datetime.strptime`), not re-hardcoded per session.
+    day = datetime.strptime(ctx.run[:6], "%d%m%y").replace(tzinfo=UTC)
+    display_name = str(LIVE_SESSIONS[ctx.run]["display_name"])
+    label = f"{day.strftime('%d.%m.%Y')} — {display_name.lower()}"
 
     payload: dict[str, Any] = {
-        "run": RUN,
-        "unit_name": UNIT_NAME,
-        "label": "29.06.2026 — turbine operation",
+        "run": ctx.run,
+        "unit_name": ctx.unit_name,
+        "label": label,
         "generated_at": datetime.now(UTC).isoformat(),
         **primary,
-        "sentinel": load_sentinel(),
-        "levels": load_levels(),
-        "scada": load_scada(index, cfg),
-        "logmel": load_logmel_strip(),
-        "features": load_feature_snapshot(),
+        "sentinel": load_sentinel(ctx),
+        "levels": load_levels(ctx),
+        "scada": load_scada(ctx, index, cfg),
+        "logmel": load_logmel_strip(ctx),
+        "features": load_feature_snapshot(ctx),
         "alerts": alerts,
         "audio": audio,
-        "session": session_summary(RUN, duration_s=primary["duration_s"], n_episodes=len(alerts)),
+        "session": session_summary(
+            ctx.run, duration_s=primary["duration_s"], n_episodes=len(alerts)
+        ),
         "rings": {
             "generator": sc.render_ring_svg(
                 "GENERATOR", sc.GENERATOR_MARKERS, size=196, interactive=False
@@ -660,17 +847,69 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--run", action="append", metavar="RUN",
+        help="Session to build (repeatable; default: every LIVE_SESSIONS entry). "
+        f"Valid ids: {', '.join(LIVE_SESSIONS)}.",
+    )
     parser.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
 
-    payload = build_payload()
-    out_path = render_live_html(payload, args.template, args.out)
-    size_mb = out_path.stat().st_size / (1024 * 1024)
-    print(
-        f"build_live_replay: wrote {out_path} ({size_mb:.2f} MB) -- {len(payload['segments'])} "
-        f"segments, {len(payload['trace']['t_s'])} scored windows, {len(payload['alerts'])} alerts"
-    )
+    runs: list[str] = args.run if args.run else list(LIVE_SESSIONS)
+    unknown = [r for r in runs if r not in LIVE_SESSIONS]
+    if unknown:
+        raise SystemExit(
+            f"build_live_replay: unknown --run {unknown!r} -- valid ids: "
+            f"{', '.join(LIVE_SESSIONS)}"
+        )
+
+    contexts = {run: make_run_context(run) for run in runs}
+
+    # Preflight EVERY requested run before building ANY of them -- "no partial
+    # pages" means the check for run N must not happen only after runs 1..N-1
+    # were already written.
+    problems: dict[str, list[str]] = {}
+    for run, ctx in contexts.items():
+        probs = preflight(ctx)
+        if probs:
+            problems[run] = probs
+    if problems:
+        lines = ["build_live_replay: preflight failed -- fix these before building "
+                  "(no pages written):"]
+        for run, probs in problems.items():
+            lines.append(f"  {run}:")
+            lines.extend(f"    - {p}" for p in probs)
+        raise SystemExit("\n".join(lines))
+
+    cfg = load_config()
+    index = discover(cfg.data_root)
+
+    # Pass 1: build every requested run's payload.
+    payloads: dict[str, dict[str, Any]] = {}
+    summaries: dict[str, dict[str, Any]] = {}
+    timelines: dict[str, dict[str, Any]] = {}
+    for run, ctx in contexts.items():
+        payload = build_payload(ctx, index, cfg)
+        payloads[run] = payload
+        summaries[run] = payload["session"]
+        timelines[run] = {
+            "segments": payload["segments"],
+            "tick_s": [a["start_s"] for a in payload["alerts"]],
+        }
+
+    # Pass 2: inject the cross-session nav (built from pass 1's own payloads) into
+    # every payload, then render.
+    nav = pages_nav(summaries, timelines)
+    for run, payload in payloads.items():
+        payload["sessions_nav"] = nav
+        out_path = REPO_ROOT / "docs" / "site" / str(LIVE_SESSIONS[run]["out"])
+        render_live_html(payload, args.template, out_path)
+        size_mb = out_path.stat().st_size / (1024 * 1024)
+        print(
+            f"build_live_replay: wrote {out_path} ({size_mb:.2f} MB) -- "
+            f"{len(payload['segments'])} segments, {len(payload['trace']['t_s'])} scored windows, "
+            f"{len(payload['alerts'])} alerts"
+        )
     return 0
 
 
