@@ -1,0 +1,24 @@
+{
+  "run": "010726-tu1-morning",
+  "generated_at": "2026-08-17T08:15:00.583933+00:00",
+  "streams": {
+    "gen": {
+      "stream": "RAWGeneratorMic__0",
+      "label": "Generator mic",
+      "file": "assets/live/010726-tu1-morning_gen.m4a",
+      "start_utc": "2026-07-01T02:14:29.698000+00:00",
+      "duration_s": 11054.1,
+      "sample_rate_hz": 16000,
+      "bytes": 56053668
+    },
+    "tur": {
+      "stream": "RAWTurbineMic__1",
+      "label": "Turbine mic",
+      "file": "assets/live/010726-tu1-morning_tur.m4a",
+      "start_utc": "2026-07-01T02:14:29.731000+00:00",
+      "duration_s": 11054.003,
+      "sample_rate_hz": 16000,
+      "bytes": 56053036
+    }
+  }
+}

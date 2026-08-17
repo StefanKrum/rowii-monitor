@@ -1,0 +1,24 @@
+{
+  "run": "080726-pu_strikes",
+  "generated_at": "2026-08-17T08:13:12.366047+00:00",
+  "streams": {
+    "gen": {
+      "stream": "RAWGeneratorMic__0",
+      "label": "Generator mic",
+      "file": "assets/live/080726-pu_strikes_gen.m4a",
+      "start_utc": "2026-07-08T11:46:03.396000+00:00",
+      "duration_s": 12845.0,
+      "sample_rate_hz": 16000,
+      "bytes": 65131108
+    },
+    "tur": {
+      "stream": "RAWTurbineMic__1",
+      "label": "Turbine mic",
+      "file": "assets/live/080726-pu_strikes_tur.m4a",
+      "start_utc": "2026-07-08T11:46:03.410000+00:00",
+      "duration_s": 12844.942,
+      "sample_rate_hz": 16000,
+      "bytes": 65130772
+    }
+  }
+}

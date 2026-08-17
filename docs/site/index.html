@@ -7,32 +7,21 @@
 <link rel="stylesheet" href="assets/design.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="brand-mark">ROWII</span><span class="brand-sub">Monitor</span></div>
-  <nav class="nav">
-    <a href="index.html" class="active">Overview</a>
-    <a href="sensors.html">Sensors</a>
-    <a href="live.html">Live Replay</a>
-    <a href="snippets.html">Listening Library</a>
-    <a href="review.html">Candidate Review</a>
-  </nav>
-</header>
+<header class="app-bar"><div class="app-brand"><b>ROWII</b><span>&thinsp;MONITOR</span></div><nav class="app-tabs"><a href="index.html" class="active">Overview</a><a href="sensors.html">Sensors</a><a href="live.html">Live replay</a><a href="audio_review.html">Audio &amp; review</a></nav></header>
 <main class="page">
 
-<section class="hero">
-  <h1>ROWII Monitor</h1>
-  <p class="lede">ROWII Monitor is a research-prototype condition-monitoring pipeline for
-  the Rodundwerk&nbsp;II pump-turbine, built as part of an HSG master thesis. From nine
-  microphones and two tri-axial accelerometers it detects the machine's operating state
-  second by second &mdash; unsupervised, validated against SCADA-derived ground truth
-  &mdash; and flags one-second windows that look unusual for the current mode, using a
-  calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
-  site replays a real recorded session end to end: where the sensors sit on the machine,
-  a control-room replay of state, score and alarms, a library of real audio clips, and
-  the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
-</section>
+<div class="group-label"><span class="t">ROWII Monitor</span><span class="ln"></span><span class="cap">acoustic condition monitoring · Rodundwerk II · measurement campaign 2026</span></div>
+<p class="lede">ROWII Monitor is a research-prototype condition-monitoring pipeline for
+the Rodundwerk&nbsp;II pump-turbine, built as part of an HSG master thesis. From nine
+microphones and two tri-axial accelerometers it detects the machine's operating state
+second by second &mdash; unsupervised, validated against SCADA-derived ground truth
+&mdash; and flags one-second windows that look unusual for the current mode, using a
+calibrate-once-per-instrumentation-era design with a label-free drift sentinel. This
+site replays a real recorded session end to end: where the sensors sit on the machine,
+a control-room replay of state, score and alarms, a library of real audio clips, and
+the candidate-review tool used to hand model-flagged windows to a plant expert.</p>
 <div class="notice"><strong>Research prototype, not a certified product.</strong> Data courtesy of the plant operator, used under a research data-sharing agreement for an HSG master thesis. Audio publication is pending Illwerke's data-release approval &mdash; this repository stays private and is not served from GitHub Pages.</div>
-<section class="cards">
+<div class="cards">
   <a class="card" href="sensors.html">
     <h2>Sensors</h2>
     <p>The as-built microphone and accelerometer layout on the machine &mdash; vertical
@@ -46,22 +35,13 @@
     view.</p>
     <span class="go">Open the control room &rarr;</span>
   </a>
-  <a class="card" href="snippets.html">
-    <h2>Listening Library</h2>
-    <p>Hammer-strike tests, ordinary per-mode audio, and a handful of model-flagged,
-    unverified candidates &mdash; browse and listen.</p>
-    <span class="go">Open the listening library &rarr;</span>
+  <a class="card" href="audio_review.html">
+    <h2>Audio &amp; review</h2>
+    <p>Hammer-strike tests, per-mode audio, and every model-flagged candidate with SCADA
+    context and the expert assessment form.</p>
+    <span class="go">Open audio &amp; review &rarr;</span>
   </a>
-</section>
-<section class="cards" style="grid-template-columns: 1fr; margin-top: 16px;">
-  <a class="card" href="review.html">
-    <h2>Candidate Review</h2>
-    <p>The handover tool: every model-flagged candidate on days without controlled
-    acoustic events, with SCADA context, the exact trigger criterion, and an assessment form
-    for a plant expert to fill in.</p>
-    <span class="go">Open the candidate review kit &rarr;</span>
-  </a>
-</section>
+</div>
 
 </main>
 <footer class="site-footer">Krummenacher, 2026, University of St. Gallen &mdash; see README.md and CITATION.cff for the full citation. Sensor recordings are proprietary plant data and are not redistributed (DATA_ACCESS.md).</footer>

@@ -1,0 +1,24 @@
+{
+  "run": "270626-pu_ph_pu_ph_pu_ph-1",
+  "generated_at": "2026-08-17T08:16:50.136328+00:00",
+  "streams": {
+    "gen": {
+      "stream": "RAWGeneratorMic__0",
+      "label": "Generator mic",
+      "file": "assets/live/270626-pu_ph_pu_ph_pu_ph-1_gen.m4a",
+      "start_utc": "2026-06-27T04:41:03.337000+00:00",
+      "duration_s": 18716.663,
+      "sample_rate_hz": 16000,
+      "bytes": 94902882
+    },
+    "tur": {
+      "stream": "RAWTurbineMic__1",
+      "label": "Turbine mic",
+      "file": "assets/live/270626-pu_ph_pu_ph_pu_ph-1_tur.m4a",
+      "start_utc": "2026-06-27T04:41:03.300000+00:00",
+      "duration_s": 18716.7,
+      "sample_rate_hz": 16000,
+      "bytes": 94903197
+    }
+  }
+}
