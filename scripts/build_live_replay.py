@@ -48,10 +48,22 @@ ARRAY INDEX, not by re-matching nanosecond timestamps. Real per-cache `grid_t0_n
 metadata disagrees by up to ~100 ms between caches (one legacy-format cache pair,
 `audio.npz`/`fusion.npz`, even carries a stale pre-UTC-offset-fix value entirely a
 different order of magnitude -- verified during this task, not a documented
-pre-existing fact) despite every cache sharing the SAME `grid_n_windows`/
-`grid_window_ns` (1.0 s) and being built from the same run's audio-stream offset.
-For a 1 Hz visual replay this sub-second/metadata-only disagreement is immaterial;
-index `i` is treated as "second `i` of the replay" throughout.
+pre-existing fact) despite every cache sharing the SAME `grid_window_ns` (1.0 s) and
+being built from the same run's audio-stream offset. `grid_n_windows` itself is NOT
+always shared, corrected here after this task's own full 4-session rebuild found a
+real counter-case: each cache variant is its own intersection across only ITS OWN
+streams (`rowii.pipeline.build_run_grid`), so a variant built from fewer/differently
+-gapped streams can genuinely run longer or shorter than another --
+`270626-pu_ph_pu_ph_pu_ph-1`'s `audio.npz` (18716 windows, shortened by this
+docstring's own documented 24-min `RAWGeneratorMic__0` gap) vs. its `vibration.npz`
+(19436 windows, no such gap in either accelerometer stream). Both still share the
+identical `grid_t0_ns`, so index `i` means the same real second in either one;
+`load_levels`/`load_feature_snapshot` truncate every array they combine down to the
+shortest cache's own length before indexing (`_truncate_to_common_length`) rather
+than assuming agreement. For a 1 Hz visual replay the sub-second/metadata-only
+`grid_t0_ns` disagreement above, and any truncated tail beyond the primary (fusion)
+timeline's own `duration_s`, are both immaterial; index `i` is treated as "second `i`
+of the replay" throughout.
 """
 from __future__ import annotations
 
@@ -241,6 +253,36 @@ def humanize_names(raw_names: list[str]) -> list[str]:
     (`feature_labels.humanize_feature_name`, Task 5) -- used for the feature
     snapshot panel's `audio_names`/`vib_names` (`load_feature_snapshot` below)."""
     return [humanize_feature_name(n) for n in raw_names]
+
+
+def _truncate_to_common_length(*arrays: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Every *array* truncated (axis 0 only -- a 2D feature matrix keeps every
+    column) to the SHORTEST one's own length -- a no-op when every array already
+    agrees, which is the common case (`290626-tu`/`080726-pu_strikes`/
+    `010726-tu1-morning`: `audio.npz` and `vibration.npz` share one
+    `grid_n_windows`).
+
+    Exists because that agreement is NOT guaranteed (module docstring's own
+    "Time alignment" note was wrong to claim it always holds -- found running
+    this exact function's callers for real, not a documented pre-existing
+    fact): each cache variant is its own intersection across only ITS OWN
+    streams (`rowii.pipeline.build_run_grid`), so a variant built from
+    fewer/differently-gapped streams can genuinely run longer or shorter than
+    another. `270626-pu_ph_pu_ph_pu_ph-1` is the one real `LIVE_SESSIONS` case:
+    `audio.npz`'s 2-mic intersection is 18716 windows (shortened by the
+    module docstring's own documented 24-min `RAWGeneratorMic__0` gap),
+    `vibration.npz`'s 2-accelerometer intersection is 19436 windows -- 720 s
+    longer. Both caches still share the identical `grid_t0_ns`/1.0 s
+    `grid_window_ns`, so index `i` means the same real second in either one;
+    truncating the longer array down to the shorter one's length is therefore
+    EXACT alignment over the shared prefix, not a lossy approximation, and the
+    discarded vibration tail is beyond the primary (fusion) timeline's own
+    `duration_s` anyway -- the replay's own playhead never reaches it. Used by
+    `load_levels`/`load_feature_snapshot`, both of which combine an
+    `audio.npz`-derived `valid_mask`/length with `vibration.npz`-derived
+    arrays."""
+    n = min(a.shape[0] for a in arrays)
+    return tuple(a[:n] for a in arrays)
 
 
 def session_summary(run: str, *, duration_s: float, n_episodes: int) -> dict[str, object]:
@@ -449,6 +491,18 @@ def load_levels(ctx: RunContext) -> dict[str, Any]:
     gen_vib = _mean_columns(vibration, "RAWGeneratorVib__2::", "_log_rms")
     tur_vib = _mean_columns(vibration, "RAWTurbineVib__3::", "_log_rms")
     valid = np.asarray(audio["valid_mask"], dtype=bool)
+    # audio.npz and vibration.npz are not guaranteed to share one grid_n_windows
+    # (_truncate_to_common_length's own docstring: 270626-pu_ph_pu_ph_pu_ph-1 is
+    # the real case where they don't) -- truncate every series to the shortest
+    # one's length before `valid` is used to index any of them.
+    gen_mic, tur_mic, gen_vib, tur_vib, valid = _truncate_to_common_length(
+        gen_mic, tur_mic, gen_vib, tur_vib, valid
+    )
+    gen_mic = np.asarray(gen_mic, dtype=np.float64)
+    tur_mic = np.asarray(tur_mic, dtype=np.float64)
+    gen_vib = np.asarray(gen_vib, dtype=np.float64)
+    tur_vib = np.asarray(tur_vib, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
 
     def _norm01(x: np.ndarray) -> np.ndarray:
         finite = x[valid]
@@ -587,6 +641,13 @@ def load_feature_snapshot(ctx: RunContext) -> dict[str, Any]:
     audio_feats = np.asarray(audio["features"], dtype=np.float64)
     vib_feats = np.asarray(vibration["features"], dtype=np.float64)
     valid = np.asarray(audio["valid_mask"], dtype=bool)
+    # See _truncate_to_common_length's own docstring / load_levels's identical
+    # comment: audio.npz and vibration.npz do not always share one
+    # grid_n_windows (270626-pu_ph_pu_ph_pu_ph-1 is the real counter-case).
+    audio_feats, vib_feats, valid = _truncate_to_common_length(audio_feats, vib_feats, valid)
+    audio_feats = np.asarray(audio_feats, dtype=np.float64)
+    vib_feats = np.asarray(vib_feats, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
     n = audio_feats.shape[0]
 
     idx = np.arange(0, n, FEATURE_SNAPSHOT_STRIDE_S)

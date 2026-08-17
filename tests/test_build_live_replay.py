@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -241,3 +242,45 @@ def test_sentinel_payload_none_when_neither_row_present() -> None:
             "from the frozen-threshold monitoring extension"
         ),
     }
+
+
+def test_truncate_to_common_length_leaves_equal_length_arrays_untouched() -> None:
+    """The common case (290626-tu, 080726-pu_strikes, 010726-tu1-morning): every
+    array a caller passes already shares one length -- truncation must be a
+    no-op, not just a coincidentally-correct slice."""
+    a = np.arange(5, dtype=np.float64)
+    b = np.ones(5, dtype=bool)
+    out_a, out_b = blr._truncate_to_common_length(a, b)
+    np.testing.assert_array_equal(out_a, a)
+    np.testing.assert_array_equal(out_b, b)
+
+
+def test_truncate_to_common_length_real_270626_case() -> None:
+    """270626-pu_ph_pu_ph_pu_ph-1's real cache shapes: audio.npz's 2-mic grid
+    intersection is 18716 windows, vibration.npz's 2-accelerometer grid
+    intersection is 19436 windows -- both share the identical `grid_t0_ns`
+    and 1.0 s `grid_window_ns` (verified directly against the real caches), so
+    index `i` means the same real second in both and truncating the longer
+    array down to the shorter one's length is exact alignment, not a lossy
+    approximation. This is the real shape that crashed `load_levels`/
+    `load_feature_snapshot` with a boolean-index length mismatch before this
+    fix (`_norm01`'s/`_zscore`'s `x[valid]`, `valid` being audio-length)."""
+    shorter = np.arange(3, dtype=np.float64)  # stands in for the 18716-long audio array
+    longer = np.arange(5, dtype=np.float64)  # stands in for the 19436-long vibration array
+    valid = np.array([True, False, True])
+    out_shorter, out_longer, out_valid = blr._truncate_to_common_length(shorter, longer, valid)
+    np.testing.assert_array_equal(out_shorter, shorter)
+    np.testing.assert_array_equal(out_longer, longer[:3])
+    np.testing.assert_array_equal(out_valid, valid)
+    # The whole point: indexing the truncated array by `valid` must not raise.
+    out_longer[out_valid]
+
+
+def test_truncate_to_common_length_preserves_2d_feature_matrix_columns() -> None:
+    """`load_feature_snapshot` truncates 2D `(n_windows, n_features)` matrices
+    along axis 0 only -- the feature/column count must survive untouched."""
+    audio_feats = np.zeros((4, 135))
+    vib_feats = np.zeros((6, 96))
+    out_audio, out_vib = blr._truncate_to_common_length(audio_feats, vib_feats)
+    assert out_audio.shape == (4, 135)
+    assert out_vib.shape == (4, 96)
