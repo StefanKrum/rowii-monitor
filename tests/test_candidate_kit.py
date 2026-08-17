@@ -1486,3 +1486,67 @@ def test_render_index_html_v7_scada_rows(tmp_path: Path) -> None:
     assert "m³/s" in html_text and "MW" in html_text  # units in the row labels
     assert "plausible anomaly" in html_text  # assessment vocabulary unchanged
     assert "EXPORT" in html_text.upper()
+
+
+# ---------------------------------------------------------------------------
+# 17. render_candidates_fragment -- the (css, body, js) tuple Task 11's
+#     audio_review.html composer embeds as the "Flagged candidates" tab
+# ---------------------------------------------------------------------------
+
+
+def test_render_candidates_fragment_returns_scoped_reusable_pieces(tmp_path: Path) -> None:
+    """Same fixture shape as `test_render_index_html_v7_scada_rows` above (one
+    hand-built `CandidateAssetResult`, bypassing the real audio/SCADA pipeline).
+    Pins the fragment's own new contract: `css` is card-internal only (no
+    `:root`/`.app-bar`/`.group-label` -- those would fight `assets/design.css`'s
+    own, non-identical definitions of the same selectors on the composed site
+    page), `body_html` carries the real candidate data with `asset_prefix`
+    applied and the export/app mount points but none of the standalone-only
+    page chrome, and `render_index_html` still composes byte-identically FROM
+    this exact fragment (mechanical factor-out, not a parallel reimplementation)."""
+    candidate = ck.Candidate(
+        session="290626-tu", klass="sustained",
+        start_utc=_utc(2026, 6, 29, 9, 14, 2), end_utc=_utc(2026, 6, 29, 9, 14, 5),
+        duration_s=3.0, min_p=0.002, state_name="turbine", near_transition=False,
+        n_windows=3, modality="fusion", regime="recalibrate", alarms_path="a.parquet",
+        candidate_id="290626-tu-02", rank=2, scada_state="turbine",
+        scada_transition=False, in_sample=False, context_note="",
+    )
+    n_seconds = 20
+    result = ck.CandidateAssetResult(
+        candidate=candidate,
+        asset_start_utc=_utc(2026, 6, 29, 9, 13, 52),
+        asset_duration_s=float(n_seconds),
+        gen_wav="290626-tu/290626-tu-02_gen.wav", tur_wav="290626-tu/290626-tu-02_tur.wav",
+        gen_png="290626-tu/290626-tu-02_gen.png", tur_png="290626-tu/290626-tu-02_tur.png",
+        gen_flat_png="290626-tu/290626-tu-02_gen_flat.png",
+        tur_flat_png="290626-tu/290626-tu-02_tur_flat.png",
+        scada_png="290626-tu/290626-tu-02_scada.png",
+        power_mw_1hz=[243.0] * n_seconds, speed_rpm_1hz=[378.8] * n_seconds,
+        flow_net_m3s_1hz=[40.9] * n_seconds, ks_valve_1hz=[2.8] * n_seconds,
+        ribbon_html=ck.render_state_ribbon_html(
+            scada_row=["turbine"] * n_seconds, detected_row=["turbine"] * n_seconds,
+            duration_s=float(n_seconds), px_per_s=ak._FLAT_PX_PER_S,
+        ),
+    )
+
+    css, body_html, js = ck.render_candidates_fragment([result], asset_prefix="assets/review/")
+
+    assert ":root" not in css
+    assert ".app-bar" not in css
+    assert ".group-label" not in css
+    assert ".candidate-card" in css  # the real card styling is still there
+
+    assert "290626-tu-02" in body_html
+    assert "assets/review/290626-tu/290626-tu-02_gen.wav" in body_html
+    assert 'id="export-all-btn"' in body_html
+    assert '<div id="app">' in body_html
+    assert "app-bar" not in body_html
+    assert "index_static.html" not in body_html  # dead link on the composed site page
+
+    assert "buildScadaRows" in js
+
+    css0, body0, js0 = ck.render_candidates_fragment([result], asset_prefix="")
+    out = ck.render_index_html([result], tmp_path)
+    html_text = out.read_text()
+    assert css0 in html_text and body0 in html_text and js0 in html_text

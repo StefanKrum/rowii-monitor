@@ -354,3 +354,106 @@ def test_render_redirect_stub() -> None:
     assert '<meta http-equiv="refresh" content="0; url=audio_review.html">' in html
     assert '<a href="audio_review.html">' in html
     assert bs.find_external_resource_urls(html) == []
+
+
+# ---------------------------------------------------------------------------
+# 8. render_clip_cards -- v7 .clip-card markup for the Hammer strikes / Per-mode
+#    audio tabs of the merged audio_review.html page (Task 11)
+# ---------------------------------------------------------------------------
+
+
+def _strike_manifest(**overrides: object) -> dict[str, object]:
+    """A minimal `site_manifest.json`-shaped dict -- only the `"strikes"` list
+    `render_clip_cards(..., "strikes")` reads (real key names verified against
+    `build_site_manifest`/`curate_strike_clips`'s own real output)."""
+    clip: dict[str, object] = {
+        "event_id": "01", "kind": "plate-gen_0", "session": "pu", "n_strikes": 3,
+        "clip_utc": "2026-07-08T12:42:59.568000+00:00", "side": "gen",
+        "wav": "strikes/pu-01_plate-gen_0_gen.wav",
+    }
+    clip.update(overrides)
+    return {"strikes": [clip]}
+
+
+def test_render_clip_cards_strikes_shape_and_units() -> None:
+    html = bs.render_clip_cards(_strike_manifest(), "strikes")
+    assert 'class="clip-card"' in html
+    assert "Reference plate" in html  # _KIND_LABELS lookup, not the raw "plate-gen_0" key
+    assert "3 strikes logged" in html
+    assert "2026-07-08 12:42:59 UTC" in html
+    assert '<audio controls preload="none" src="assets/strikes/pu-01_plate-gen_0_gen.wav">' in html
+    assert bs.find_external_resource_urls(html) == []
+
+
+def test_render_clip_cards_strikes_zero_count_uses_fallback_note() -> None:
+    html = bs.render_clip_cards(_strike_manifest(n_strikes=0), "strikes")
+    assert "no strike timestamp" in html
+    assert "0 strikes logged" not in html
+
+
+def test_render_clip_cards_strikes_singular_count_grammar() -> None:
+    html = bs.render_clip_cards(_strike_manifest(n_strikes=1), "strikes")
+    assert "1 strike logged" in html
+
+
+def test_render_clip_cards_strikes_respects_asset_prefix() -> None:
+    html = bs.render_clip_cards(_strike_manifest(), "strikes", asset_prefix="assets/review/")
+    assert 'src="assets/review/assets/strikes/pu-01_plate-gen_0_gen.wav"' in html
+
+
+def _demo_manifest(**overrides: object) -> dict[str, object]:
+    """A minimal `docs/demo/assets/manifest.json`-shaped dict (real key names
+    verified against the real committed file) -- one `"state"`-kind clip
+    (what `render_clip_cards(..., "modes")` selects) plus one `"strike"`-kind
+    clip (must be excluded: that family belongs to the Hammer strikes tab)."""
+    state_clip: dict[str, object] = {
+        "file": "state_cluster0.wav", "kind": "state", "label": "0",
+        "start_utc": "2026-07-08T14:19:42.410000+00:00", "duration_s": 10.0,
+        "source_run": "080726-pu_strikes",
+        "description": "Unsupervised-detected state 0 ...",
+    }
+    state_clip.update(overrides)
+    strike_clip = {
+        "file": "strike_pump_plate_tur_0.wav", "kind": "strike", "label": "plate-tur_0",
+        "start_utc": "2026-07-08T12:54:00+00:00", "duration_s": 10.0,
+        "source_run": "080726-pu_strikes", "description": "Schonhammer strike ...",
+    }
+    return {"clips": [state_clip, strike_clip]}
+
+
+def test_render_clip_cards_modes_selects_state_kind_only() -> None:
+    html = bs.render_clip_cards(_demo_manifest(), "modes")
+    assert 'class="clip-card"' in html
+    assert "State 0" in html
+    assert '<audio controls preload="none" src="../demo/assets/state_cluster0.wav">' in html
+    assert "2026-07-08 14:19:42 UTC" in html
+    assert "080726-pu_strikes" in html
+    assert "plate-tur_0" not in html  # the strike-kind clip must not leak into "modes"
+    assert bs.find_external_resource_urls(html) == []
+
+
+def test_render_clip_cards_unknown_kind_raises() -> None:
+    with pytest.raises(ValueError, match="kind"):
+        bs.render_clip_cards({"strikes": [], "clips": []}, "bogus")
+
+
+# ---------------------------------------------------------------------------
+# 9. compose_audio_review_html -- the merged audio_review.html shell (Task 11)
+# ---------------------------------------------------------------------------
+
+
+def test_audio_review_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import publish_audio_review as par
+    html = par.compose_audio_review_html(
+        candidates_fragment=("/*css*/", "<div id='cand'></div>", "/*js*/"),
+        strikes_html="<div class='clip-card'>strike</div>",
+        modes_html="<div class='clip-card'>mode</div>",
+        n_candidates=12, n_strikes=18, n_modes=8,
+        sessions=["290626-tu", "080726-pu_strikes"],
+    )
+    assert 'class="app-bar"' in html
+    assert "Flagged candidates" in html and "Hammer strikes" in html and "Per-mode audio" in html
+    assert "EXPORT" in html.upper()
+    assert "assessments stay in your browser until exported" in html
+    import build_site as bs
+    assert bs.find_external_resource_urls(html) == []

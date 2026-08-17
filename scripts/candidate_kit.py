@@ -373,6 +373,14 @@ ASSESSMENT_VALUES: tuple[str, ...] = (
     "unclear",
 )
 
+STORAGE_PREFIX: str = "candidate-review:v1:"
+"""localStorage key prefix for one candidate's saved assessment state (JS
+`storageKey`, `_CANDIDATE_JS`) -- exposed as a Python constant so a caller
+outside this module (`publish_audio_review.py`'s own progress-counter script)
+can read it without hardcoding a second copy of the string. Keep this in sync
+BY VALUE with `_CANDIDATE_JS`'s own `var STORAGE_PREFIX = "candidate-review:v1:";`
+line by hand -- same manual-sync idiom as `SCADA_ROW_LABEL_COL_PX`."""
+
 _ALARMS_COLUMNS = ["window", "t_utc_ns", "p_value", "role", "near_transition", "state_name"]
 
 
@@ -2473,10 +2481,12 @@ def build_all(
     `html_out_path`/`static_html_out_path`/`asset_prefix` default to `None`/`None`/
     `""` -- i.e. write `index.html`/`index_static.html` into `out_dir` itself with
     unprefixed relative asset paths, EXACTLY today's existing `results/
-    candidate-kit/` in-place build. Passing them (`scripts/publish_review_site.py`)
-    renders the SAME assets into `out_dir` as always, but the two HTML files
-    elsewhere (e.g. `docs/site/review.html`) with `asset_prefix`-qualified paths
-    pointing back at a COPY of `out_dir` published alongside them.
+    candidate-kit/` in-place build. This function itself is unaffected by
+    `render_candidates_fragment`'s existence (still (re)writes BOTH standalone
+    HTML files, unprefixed, exactly as before); `scripts/publish_audio_review.py`
+    additionally calls `render_candidates_fragment` directly, separately, with
+    the site's own `asset_prefix`, to embed as one tab of `docs/site/
+    audio_review.html` rather than calling this function a second time.
 
     `discover(cfg.data_root)` is no longer deferred (unlike before the SCADA
     context panel existed): every session's `SessionScada` (`load_session_scada`,
@@ -2591,7 +2601,7 @@ _SESSION_LABEL: dict[str, str] = {
     "010726-tu2": "01.07. – turbine operation (session 2, in-sample fit-pool day)",
 }
 
-_CANDIDATE_CSS = """
+_CANDIDATE_CHROME_CSS = """
 :root {
   color-scheme: light;
   --paper: #e9ecf0; --panel: #ffffff; --panel-2: #f7f9fb; --panel-3: #fbfcfd;
@@ -2622,6 +2632,24 @@ body { font-family: var(--font-ui); margin: 0; padding: 0; line-height: 1.5;
 .site-footer { max-width: 1320px; margin: 0 auto; padding: 24px 22px 46px; color: var(--dim);
   font-size: 12px; border-top: 1px solid var(--hair); }
 main.review-page { max-width: 1320px; margin: 0 auto; padding: 22px 22px 60px; }
+"""
+"""Page-chrome-only rules (`:root` tokens, base resets, `.app-bar`/`.group-label`/
+`.site-footer`/`main.review-page`) used ONLY by this standalone page's own header
+(`_review_page_head`) and its own `<main>`/`<body>` -- deliberately NOT part of
+`render_candidates_fragment`'s returned `css`, which `publish_audio_review.py`
+embeds into `docs/site/audio_review.html` ALONGSIDE `assets/design.css` (that
+stylesheet already defines `.app-bar`/`.group-label`/`.site-footer` with real,
+non-identical `:root` token values -- `--radius`/`--font-ui`/`--font-mono` differ
+from this module's own; `--radius-lg` design.css lacks entirely -- re-embedding
+this whole block would silently override those site-wide, e.g. widening every
+`.group-label`'s left margin to 0 and every `var(--radius)` corner across the
+WHOLE composed page, not just inside a candidate card). `render_index_html`
+reassembles the full, byte-identical original stylesheet as
+`_CANDIDATE_CHROME_CSS + <fragment's css>` for its own `<style>` tag;
+`render_index_static_html` keeps using the equivalent concatenated
+`_CANDIDATE_CSS` constant below, unaffected by this split."""
+
+_CANDIDATE_CARD_CSS = """
 h2 { font-size: 15px; margin-top: 2.2rem; border-bottom: 1px solid var(--hair);
      padding-bottom: 0.3rem; }
 code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em 0.3em;
@@ -2630,11 +2658,11 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .date-header { font-family: var(--font-mono); font-size: 12px; color: var(--dim);
                margin: 0 0 12px; }
 .instructions { background: var(--panel); border: 1px solid var(--hair);
-                border-radius: var(--radius-lg); box-shadow: var(--shadow);
+                border-radius: var(--radius-lg, 12px); box-shadow: var(--shadow);
                 padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .instructions p { margin: 0.4em 0; }
 .legend { background: var(--panel); border: 1px solid var(--hair);
-          border-radius: var(--radius-lg); box-shadow: var(--shadow);
+          border-radius: var(--radius-lg, 12px); box-shadow: var(--shadow);
           padding: 0.8rem 1.2rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
 .legend h2 { margin: 0 0 0.5rem; border: none; padding: 0; font-size: 14px; }
 .legend p { margin: 0.5em 0; }
@@ -2646,7 +2674,7 @@ code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.1em
 .session-status { color: var(--dim); font-size: 0.85rem; }
 
 .candidate-card { background: var(--panel); border: 1px solid var(--hair);
-                   border-radius: var(--radius-lg); box-shadow: var(--shadow);
+                   border-radius: var(--radius-lg, 12px); box-shadow: var(--shadow);
                    padding: 0.9rem 1.1rem; margin-bottom: 1.2rem; outline-offset: 2px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline;
              gap: 1rem; flex-wrap: wrap; }
@@ -2784,6 +2812,11 @@ button, input, select { font: inherit; }
        color: var(--ink); border-radius: 6px; padding: 7px 12px; }
 .btn:hover { background: var(--panel-2); }
 """
+
+_CANDIDATE_CSS = _CANDIDATE_CHROME_CSS + _CANDIDATE_CARD_CSS
+"""The full, original standalone-page stylesheet (byte-identical concatenation of
+the two pieces above) -- still used as-is by `render_index_static_html`, which
+this task does not touch."""
 
 _CANDIDATE_LEGEND_HTML = """<section class="legend">
 <h2>What do the categories mean?</h2>
@@ -3618,11 +3651,13 @@ def _prefixed_metas(
     """`_asset_result_to_meta` for every *results* entry, with *asset_prefix*
     prepended to every real on-disk asset path field (`_ASSET_PATH_META_KEYS`) --
     empty by default (the `results/candidate-kit/` in-place build, unchanged
-    behavior), non-empty when `render_index_html`/`render_index_static_html`
-    target a DIFFERENT directory than *out_dir* (`scripts/publish_review_site.py`,
-    which copies the rendered PNG/WAV tree under `docs/site/assets/review/` while
-    writing the HTML itself to `docs/site/review.html`, a sibling of `assets/`,
-    not inside it)."""
+    behavior for `render_index_html`/`render_index_static_html`), non-empty when
+    a caller targets a DIFFERENT directory than *out_dir*: `render_candidates_
+    fragment` takes the same parameter for exactly this reason --
+    `scripts/publish_audio_review.py` calls it with `asset_prefix="assets/
+    review/"`, since it copies the rendered PNG/WAV tree under `docs/site/
+    assets/review/` while composing `docs/site/audio_review.html` itself as a
+    sibling of `assets/`, not inside it."""
     metas = [_asset_result_to_meta(r) for r in results]
     if not asset_prefix:
         return metas
@@ -3644,12 +3679,11 @@ def _review_page_head(*, title: str, date_note: str) -> str:
     multi-tab nav): this kit build (`results/candidate-kit/index.html`) is
     opened standalone via `file://` with no sibling `index.html`/`sensors.
     html`/`live.html` to link to, so a nav bar here would just be four dead
-    links. `render_index_html`'s own docstring's `asset_prefix` parameter lets
-    the SAME function also render the site's still-unmerged review copy
-    today -- that copy inherits this same nav-less header until the
-    audio-review composer task (site redesign plan Task 11) replaces it with
-    the real `site_common.app_bar_html` shell around a fragment of this page's
-    own cards."""
+    links. Only `render_index_html`/`render_index_static_html` call this --
+    `scripts/publish_audio_review.py`'s composer builds `docs/site/
+    audio_review.html` around `render_candidates_fragment` instead, wrapped in
+    the real `site_common.app_bar_html`/`group_label_html` site shell, never
+    this function."""
     return (
         '<header class="app-bar"><div class="app-brand"><b>ROWII</b>'
         "<span>&thinsp;MONITOR</span></div></header>\n"
@@ -3660,22 +3694,39 @@ def _review_page_head(*, title: str, date_note: str) -> str:
     )
 
 
-def render_index_html(
-    results: Sequence[CandidateAssetResult],
-    out_dir: Path,
-    *,
-    html_out_path: Path | None = None,
-    asset_prefix: str = "",
-) -> Path:
-    """(Re)generate the interactive index.html (default: `<out_dir>/index.html`,
-    matching every existing caller unchanged; `html_out_path` overrides the
-    destination for the site-published copy, `asset_prefix` see `_prefixed_
-    metas`). Fully self-contained (inline CSS/JS, no external resources, no
-    `fetch()`): the candidate metadata is embedded as a `<script
-    type="application/json">` block and read via `JSON.parse` at load time --
-    same `file://` CORS rationale as `annotation_kit.render_interactive_index_
-    html`'s own docstring. Every card's spectrogram image/audio element
-    references the real PNG/WAV by a RELATIVE path (never base64).
+def render_candidates_fragment(
+    results: Sequence[CandidateAssetResult], asset_prefix: str = ""
+) -> tuple[str, str, str]:
+    """The reusable core of the interactive candidate review UI, factored out of
+    `render_index_html` (mechanical split -- computes the exact same `metas`/
+    `sessions`/`labels`/`legend_html`/`js` that function always has, `asset_prefix`
+    see `_prefixed_metas`) so `scripts/publish_audio_review.py`'s composer can
+    embed it as the merged `audio_review.html` page's "Flagged candidates" tab,
+    alongside `render_index_html` still using it to build the standalone kit page.
+
+    Returns `(css, body_html, js)`:
+
+    * `css` is `_CANDIDATE_CARD_CSS` -- CARD-internal rules only (badges, lanes,
+      SCADA rows, the state ribbon, marks, the assessment form, the legend/
+      instructions boxes, ...), deliberately EXCLUDING `_CANDIDATE_CHROME_CSS`
+      (`:root` tokens, `.app-bar`/`.group-label`/`.site-footer`/`main.review-
+      page`) -- seeing `_CANDIDATE_CHROME_CSS`'s own module comment for exactly
+      why embedding those into a page that already has `assets/design.css` (a
+      DIFFERENT, non-identical set of values for several of the same custom
+      properties/class names) would be a real, page-wide layout regression, not
+      mere duplication.
+    * `body_html` is every candidate-facing element BETWEEN the standalone page's
+      own header and its closing `</main>` tag -- the legend, the instructions,
+      the "export all sessions" toolbar, the (initially empty) `#app` mount
+      point, and the two embedded `<script type="application/json">` data
+      blocks `js` reads via `JSON.parse` -- EXCEPT the "a read-only listing is
+      also available at index_static.html" hint paragraph: that link is only
+      valid next to a real `index_static.html` sibling (true for the standalone
+      kit build, never true for `docs/site/audio_review.html`), so
+      `render_index_html` re-adds it itself rather than this function shipping
+      a dead link into the composed site page too.
+    * `js` is `_CANDIDATE_JS` with its usual token substitutions applied --
+      unchanged from what `render_index_html` has always embedded.
 
     The SCADA context panel is the ONE exception to "every real asset path
     survives into the embedded JSON": this page's own SCADA context is
@@ -3683,7 +3734,7 @@ def render_index_html(
     already in every meta dict (`buildScadaRows`/`scadaRowSvg` in
     `_CANDIDATE_JS`), not an `<img>` referencing `scada_png` -- so that key is
     dropped before embedding, making the field genuinely unreferenced by this
-    page rather than merely unused. `render_index_static_html`'s own call to
+    fragment rather than merely unused. `render_index_static_html`'s own call to
     `_prefixed_metas` is untouched by this and keeps `scada_png` (that page
     still embeds it as a plain `<img src>`, module docstring build/1's own
     PNG generation is unaffected either way)."""
@@ -3709,6 +3760,44 @@ def render_index_html(
         .replace("__ASSESSMENT_VALUES_JSON__", ak._json_script_safe(list(ASSESSMENT_VALUES)))
     )
 
+    body_html = (
+        f"{legend_html}\n"
+        f"{_CANDIDATE_INSTRUCTIONS_HTML}\n"
+        '<div class="top-toolbar"><button type="button" id="export-all-btn">Export all '
+        'sessions</button><span class="session-status" id="export-all-status"></span></div>\n'
+        '<div id="app">Loading candidates&hellip;</div>\n'
+        f'<script id="candidates-meta-data" type="application/json">{metas_json}</script>\n'
+        f'<script id="session-labels-data" type="application/json">{labels_json}</script>\n'
+    )
+    return _CANDIDATE_CARD_CSS, body_html, js
+
+
+def render_index_html(
+    results: Sequence[CandidateAssetResult],
+    out_dir: Path,
+    *,
+    html_out_path: Path | None = None,
+    asset_prefix: str = "",
+) -> Path:
+    """(Re)generate the interactive index.html (default: `<out_dir>/index.html`,
+    matching every existing caller unchanged; `html_out_path` overrides the
+    destination for the site-published copy, `asset_prefix` see `_prefixed_
+    metas`). Fully self-contained (inline CSS/JS, no external resources, no
+    `fetch()`): the candidate metadata is embedded as a `<script
+    type="application/json">` block and read via `JSON.parse` at load time --
+    same `file://` CORS rationale as `annotation_kit.render_interactive_index_
+    html`'s own docstring. Every card's spectrogram image/audio element
+    references the real PNG/WAV by a RELATIVE path (never base64).
+
+    Standalone head (`_review_page_head`) + `render_candidates_fragment`'s own
+    (css, body, js) -- the standalone-only "index_static.html" hint paragraph is
+    the one piece re-added here rather than carried inside the fragment (see
+    that function's own docstring); every other byte is unchanged from before
+    this function was factored to use it."""
+    css, body_html, js = render_candidates_fragment(results, asset_prefix)
+    metas = _prefixed_metas(results, asset_prefix)
+    sessions = sorted({str(m["session"]) for m in metas})
+
     date_note = (
         f"{len(metas)} candidate(s) across {len(sessions)} session(s) · generated "
         f"{datetime.now(UTC).strftime('%Y-%m-%d')}"
@@ -3720,17 +3809,11 @@ def render_index_html(
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         "<title>Candidate Review — ROWII Monitor</title>\n"
-        f"<style>{_CANDIDATE_CSS}</style>\n</head>\n<body>\n"
+        f"<style>{_CANDIDATE_CHROME_CSS}{css}</style>\n</head>\n<body>\n"
         f"{head}"
-        f"{legend_html}\n"
-        f"{_CANDIDATE_INSTRUCTIONS_HTML}\n"
         '<p class="hint">A read-only, JavaScript-free listing is also available: '
         '<a href="index_static.html">index_static.html</a>.</p>\n'
-        '<div class="top-toolbar"><button type="button" id="export-all-btn">Export all '
-        'sessions</button><span class="session-status" id="export-all-status"></span></div>\n'
-        '<div id="app">Loading candidates&hellip;</div>\n'
-        f'<script id="candidates-meta-data" type="application/json">{metas_json}</script>\n'
-        f'<script id="session-labels-data" type="application/json">{labels_json}</script>\n'
+        f"{body_html}"
         f"<script>{js}</script>\n"
         "</main>\n"
         f"{sc.FOOTER_HTML}\n"

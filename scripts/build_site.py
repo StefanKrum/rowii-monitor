@@ -1,7 +1,10 @@
 """Build the public-facing demo site under `docs/site/`: a landing page, an
-as-built sensor-geometry schematic, a thin navigation wrapper
-around the EXISTING `docs/demo/demo_dashboard.html` control room, and a listening
-library of hammer-strike / normal-operation / model-flagged-candidate audio clips.
+as-built sensor-geometry schematic, and (curation + card-rendering only --
+`scripts/publish_audio_review.py` owns the actual page) the hammer-strike and
+per-operating-mode halves of the merged `audio_review.html` listening/review
+page (`curate_strike_clips`/`curate_candidate_clips`/`build_site_manifest` for
+curation, `render_clip_cards` for markup; the model-flagged-candidate half is
+entirely `candidate_kit.py`'s own, never this module's).
 Nothing here re-extracts audio from raw data or re-runs any model -- every byte comes
 from already-computed local artifacts (`results/annotation-kit/080726`,
 `results/candidate-kit`, `docs/demo/assets`), matching this task's own instruction to
@@ -619,43 +622,6 @@ table.sensor-table th { color: var(--dim); font-weight: 700; text-transform: upp
 .plan-ring-cell svg { display: block; }
 """
 
-_SNIPPETS_CSS = """
-.clip-section { margin-top: 32px; }
-.clip-section h2 { font-size: 18px; }
-.clip-section > p { color: var(--dim); max-width: 76ch; font-size: 13.5px; }
-.clip-subhead { font-size: 12.5px; color: var(--dim); margin: 16px 0 4px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: .05em; }
-.clip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 14px; margin-top: 12px; }
-.clip-card { background: var(--panel); border: 1px solid var(--hair);
-  border-radius: var(--radius-lg);
-  padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; }
-.clip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
-  flex-wrap: wrap; }
-.clip-title { font-weight: 700; font-size: 13.5px; }
-.clip-tag { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  background: var(--panel-2); border: 1px solid var(--hair); color: var(--dim);
-  white-space: nowrap; }
-.clip-tag.sustained { color: var(--warn); border-color: var(--warn); }
-.clip-tag.transient { color: var(--alarm); border-color: var(--alarm); }
-.badge.unverified { font-size: 9.5px; font-weight: 800; color: var(--warn);
-  background: var(--panel-2);
-  border: 1px solid var(--warn); border-radius: 5px; padding: 3px 7px; white-space: nowrap; }
-.badge.in-sample { font-size: 9px; font-weight: 700; color: var(--dim); background: var(--panel-2);
-  border: 1px solid var(--hair); border-radius: 5px; padding: 2px 6px; }
-.clip-card audio { width: 100%; height: 32px; }
-.clip-audios { display: flex; flex-direction: column; gap: 6px; }
-.clip-audios label { font-size: 10.5px; color: var(--dim); text-transform: uppercase;
-  letter-spacing: .04em; }
-.clip-note { font-size: 12px; color: var(--dim); line-height: 1.45; margin: 0; }
-.clip-meta { font-size: 11px; color: var(--dim); margin: 0; font-variant-numeric: tabular-nums; }
-.clip-context { font-size: 12px; color: var(--ink); line-height: 1.5; margin: 2px 0 0;
-  background: var(--panel-2); border-left: 3px solid var(--live); border-radius: 4px;
-  padding: 7px 9px; }
-.clip-context strong { color: var(--live); }
-"""
-
-
 def _sensor_readout_script() -> str:
     return (
         "<script>"
@@ -878,150 +844,88 @@ stream/channel name; the full table is below for reference.</p>
     )
 
 
-_CANDIDATE_CONTEXT_NOTES: dict[str, str] = {
-    "290626-tu-11": (
-        "<strong>Context.</strong> Independently assessed by the author as “plausible "
-        "anomaly.” A window-level cross-match against the partner's own (undocumented, "
-        "never per-event-timestamped) Knack search on this same day places this candidate "
-        "16–23 s inside his search window under the evidence-backed timebase "
-        "correction — the two independent methods point at the same few seconds, "
-        "though the partner's own detection was never itself confirmed."
-    ),
-}
-"""Hand-picked follow-up notes shown under specific curated candidate cards --
-`_candidate_clip_card`'s only per-candidate special case, deliberately not a generic
-mechanism (there is exactly one candidate with an external cross-reference worth
-surfacing on the public listening library; see `research/notes/analysis_2026-08-15_
-knack_crossmatch.md` in the parent thesis workspace for the full derivation)."""
+def _format_clip_timestamp(iso_utc: str) -> str:
+    """`"2026-07-08T14:19:42.410000+00:00"` -> `"2026-07-08 14:19:42 UTC"` -- a
+    clip-card `.meta` line (v7 spec D7: units on every number, a timestamp's own
+    "unit" being its zone), not the raw ISO offset the source manifests carry."""
+    return datetime.fromisoformat(iso_utc).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
 
-def _strike_clip_card(clip: Mapping[str, Any]) -> str:
+def _strike_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
+    """v7 `.clip-card` (design.css: `.ct`/`.n2` title row, `<audio>`, `.meta` --
+    replaces the pre-v7 `.clip-head`/`.clip-title`/`.clip-tag`/`.clip-note`
+    markup `_SNIPPETS_CSS` used to style). `asset_prefix` mirrors `candidate_kit.
+    _prefixed_metas`'s convention (prepended to the already-relative `assets/...`
+    path); empty by default since `build_site_manifest` already writes strike
+    clips straight into `<site>/assets/strikes/`, needing no relocation for
+    `docs/site/audio_review.html` itself."""
     label = _KIND_LABELS.get(clip["kind"], clip["kind"])
+    n = int(clip["n_strikes"])
     strikes_note = (
-        f"{clip['n_strikes']} logged strike(s) in this clip"
-        if clip["n_strikes"]
-        else "no seconds-level strike timestamp compiled yet for this event — clip starts "
-        "at the top of the logged minute"
+        f"{n} strike{'s' if n != 1 else ''} logged"
+        if n
+        else "no strike timestamp yet (clip starts at the top of the logged minute)"
     )
-    side_label = "generator mic" if clip["side"] == "gen" else "turbine mic"
     return f"""<div class="clip-card">
-  <div class="clip-head"><span class="clip-title">{html.escape(label)}</span>
-  <span class="clip-tag">{clip['session'].upper()}</span></div>
-  <audio controls preload="none" src="assets/{html.escape(clip['wav'])}"></audio>
-  <p class="clip-note">Schonhammer strike, {html.escape(side_label)} recording, pump
-  operation. {strikes_note}.</p>
-  <p class="clip-meta">{html.escape(clip['clip_utc'])}</p>
+  <div class="ct"><span class="n2">{html.escape(label)}</span>
+  <span class="badge">{html.escape(clip['session'].upper())}</span></div>
+  <audio controls preload="none" src="{asset_prefix}assets/{html.escape(clip['wav'])}"></audio>
+  <p class="meta">{strikes_note} &middot; {_format_clip_timestamp(clip['clip_utc'])}</p>
 </div>"""
 
 
 def _demo_clip_card(clip: Mapping[str, Any]) -> str:
+    """v7 `.clip-card` for one `docs/demo/assets/manifest.json` `"state"`-kind
+    clip (ordinary per-operating-mode audio, `render_clip_cards(..., "modes")`'s
+    only source) -- always a fixed `../demo/assets/` sibling-directory path
+    (`docs/demo/`'s own committed clips are never relocated), so unlike
+    `_strike_clip_card` this takes no `asset_prefix`."""
     return f"""<div class="clip-card">
-  <div class="clip-head"><span class="clip-title">State {html.escape(str(clip['label']))}</span>
-  <span class="clip-tag">unsupervised cluster</span></div>
+  <div class="ct"><span class="n2">State {html.escape(str(clip['label']))}</span>
+  <span class="badge">unsupervised cluster</span></div>
   <audio controls preload="none" src="../demo/assets/{html.escape(clip['file'])}"></audio>
-  <p class="clip-note">{html.escape(clip['description'])}</p>
+  <p class="meta">{_format_clip_timestamp(clip['start_utc'])}
+  &middot; {html.escape(clip['source_run'])}</p>
 </div>"""
 
 
-def _demo_strike_clip_card(clip: Mapping[str, Any]) -> str:
-    return f"""<div class="clip-card">
-  <div class="clip-head"><span class="clip-title">{html.escape(str(clip['label']))}</span>
-  <span class="clip-tag">{html.escape(str(clip['source_run']))}</span></div>
-  <audio controls preload="none" src="../demo/assets/{html.escape(clip['file'])}"></audio>
-  <p class="clip-note">{html.escape(clip['description'])}</p>
-</div>"""
+def render_clip_cards(manifest: Mapping[str, Any], kind: str, asset_prefix: str = "") -> str:
+    """Concatenated v7 `.clip-card` markup for one of `publish_audio_review.py`'s
+    two non-candidate `audio_review.html` tabs -- `kind`:
 
+    * `"strikes"` (Hammer strikes tab): *manifest* is `site_manifest.json`
+      (`build_site_manifest`), mapped over its `"strikes"` list
+      (`curate_strike_clips`) via `_strike_clip_card`.
+    * `"modes"` (Per-mode audio tab): *manifest* is `docs/demo/assets/
+      manifest.json` (`make_demo_assets`'s own curated library), filtered to
+      `"kind": "state"` entries and mapped via `_demo_clip_card` -- ordinary
+      audio from each detected operating mode, distinct from (and never
+      touching) `manifest["candidates"]`/`candidates_meta.json`: that curated
+      top-N-per-class preview role (the old `_candidate_clip_card`) is fully
+      superseded by the FULL, interactive candidate register the "Flagged
+      candidates" tab renders via `candidate_kit.render_candidates_fragment`.
 
-def _candidate_clip_card(clip: Mapping[str, Any]) -> str:
-    in_sample_badge = (
-        ' <span class="badge in-sample">fit-pool day</span>' if clip["in_sample"] else ""
-    )
-    context_note = _CANDIDATE_CONTEXT_NOTES.get(str(clip["candidate_id"]))
-    context_html = f'\n  <p class="clip-context">{context_note}</p>' if context_note else ""
-    return f"""<div class="clip-card candidate">
-  <div class="clip-head">
-    <span class="clip-title">{clip['class'].capitalize()} · {html.escape(clip['session'])}
-    · <span class="mono">{html.escape(clip['candidate_id'])}</span></span>
-    <span class="clip-tag {html.escape(clip['class'])}">{html.escape(clip['class'])}</span>
-  </div>
-  <span class="badge unverified">model-flagged, unverified — expert review pending</span>
-  <div class="clip-audios">
-    <label>Generator mic<audio controls preload="none"
-      src="assets/{html.escape(clip['gen_wav'])}"></audio></label>
-    <label>Turbine mic<audio controls preload="none"
-      src="assets/{html.escape(clip['tur_wav'])}"></audio></label>
-  </div>
-  <p class="clip-note">{html.escape(clip['criterion_text'])}</p>
-  <p class="clip-meta">{html.escape(clip['start_utc'])} · detected state:
-  {html.escape(clip['state_name'])} · SCADA: {html.escape(clip['scada_state'])}{in_sample_badge}</p>
-  {context_html}
-</div>"""
-
-
-def render_snippets(manifest: Mapping[str, Any], demo_manifest: Mapping[str, Any]) -> str:
-    strike_cards = "".join(_strike_clip_card(c) for c in manifest["strikes"])
-    demo_strike_cards = "".join(
-        _demo_strike_clip_card(c) for c in demo_manifest["clips"] if c["kind"] == "strike"
-    )
-    demo_state_cards = "".join(
-        _demo_clip_card(c) for c in demo_manifest["clips"] if c["kind"] == "state"
-    )
-    sustained_cards = "".join(
-        _candidate_clip_card(c) for c in manifest["candidates"] if c["class"] == "sustained"
-    )
-    transient_cards = "".join(
-        _candidate_clip_card(c) for c in manifest["candidates"] if c["class"] == "transient"
-    )
-    body = f"""
-<section class="page-head">
-  <h1>Listening library</h1>
-  <p>Three kinds of audio, side by side: known hammer-strike tests (ground truth),
-  ordinary audio from each detected operating mode, and windows the model itself
-  flagged as unusual on days without any controlled acoustic event.</p>
-</section>
-
-<section class="clip-section">
-  <h2>Hammer-strike tests</h2>
-  <p>On 2026-07-08, a Schonhammer reference hammer was struck at each microphone
-  position (and three additional plant landmarks, plus a guide-vane cover sweep) during
-  both pump operation and standstill, to build seconds-level ground truth for detector
-  evaluation. One representative 10&nbsp;s clip per position/kind is shown below, all
-  from the pump-operation session for one consistent background condition; two
-  standstill-session clips are included for contrast.</p>
-  <div class="clip-grid">{strike_cards}{demo_strike_cards}</div>
-</section>
-
-<section class="clip-section">
-  <h2>Normal operation</h2>
-  <p>10&nbsp;s clips from the middle of the longest contiguous run of each
-  unsupervised-detected operating state on the same measurement day, checked against
-  the strike ground truth.</p>
-  <div class="clip-grid">{demo_state_cards}</div>
-</section>
-
-<section class="clip-section">
-  <h2>Model-flagged, unverified candidates</h2>
-  <p>On days WITHOUT any controlled acoustic event, the detector still occasionally scores a
-  window as anomalous against its own learned normal model. Every clip below is
-  <strong>model-flagged and unverified</strong> &mdash; a qualitative listening
-  candidate, not a confirmed fault. Alarms fire on two independent paths: a
-  <strong>sustained</strong> anomaly (at least 3 consecutive 1&nbsp;s windows with
-  p&nbsp;&lt;&nbsp;0.01 against the operating mode's normal model, fusion
-  representation) or a <strong>transient</strong> one (a single window with
-  p&nbsp;&lt;&nbsp;0.001, BEATs representation). The exact trigger reason is stated
-  under each clip. The {len(manifest['candidates'])} shown here are the
-  {CANDIDATES_PER_CLASS} strongest (lowest minimum p-value) of each class across every
-  measurement day.</p>
-  <h3 class="clip-subhead">Sustained</h3>
-  <div class="clip-grid">{sustained_cards}</div>
-  <h3 class="clip-subhead">Transient</h3>
-  <div class="clip-grid">{transient_cards}</div>
-</section>
-"""
-    return _page_shell(
-        title="Listening Library — ROWII Monitor", active_file="snippets.html", body_html=body,
-        extra_css=_SNIPPETS_CSS,
-    )
+    Supersedes the old `render_snippets`/`_candidate_clip_card`/
+    `_demo_strike_clip_card`/`_CANDIDATE_CONTEXT_NOTES` (deleted: zero other
+    callers, confirmed by repo-wide grep; the one candidate-specific research
+    cross-reference they carried, id `290626-tu-11`, is preserved -- more
+    precisely, since it is applied programmatically rather than hand-curated
+    per rendered page -- by `candidate_kit.CONTEXT_NOTES`/`apply_context_notes`,
+    which already flows into every candidate's own `context_note` field and is
+    rendered by `render_candidates_fragment`'s fragment for every card, this
+    one included). `_SNIPPETS_CSS` (their only stylesheet, with its own dangling
+    `--radius-lg`/`--warn` custom-property references -- design.css defines
+    neither) is deleted for the same reason: this function's markup uses only
+    design.css's own already-v7 `.clip-card`/`.ct`/`.n2`/`.badge`/`.meta`
+    classes, needing no page-specific CSS at all.
+    """
+    if kind == "strikes":
+        return "".join(_strike_clip_card(c, asset_prefix) for c in manifest["strikes"])
+    if kind == "modes":
+        return "".join(
+            _demo_clip_card(c) for c in manifest["clips"] if c["kind"] == "state"
+        )
+    raise ValueError(f"render_clip_cards: unknown kind {kind!r} (expected 'strikes' or 'modes')")
 
 
 def build_pages(
@@ -1036,23 +940,24 @@ def build_pages(
     the old Listening Library (`snippets.html`) and Candidate Review
     (`review.html`) pages into that one page, so old bookmarks to either
     former page still land somewhere useful. `audio_review.html` itself is
-    not one of this function's outputs (not yet built as of this function's
-    own v7 pass); `render_snippets` and its clip-card fragment functions
-    stay in this module unused by this function -- its eventual generator
-    imports them. `manifest_path`/`demo_manifest_path` are accepted (still
-    `curate-clips`'s own output paths) but no longer read here now that
-    nothing in this function's output needs manifest data.
+    not one of this function's outputs -- `scripts/publish_audio_review.py`
+    (which imports this module's `render_clip_cards` plus `candidate_kit.
+    render_candidates_fragment`) is its ONE writer. `manifest_path`/
+    `demo_manifest_path` are accepted (still `curate-clips`'s own output
+    paths) but no longer read here now that nothing in THIS function's own
+    output needs manifest data.
 
     `live.html` is deliberately NOT one of this function's outputs -- it is
     a full native control-room replay with its own real-data precompute
     step, owned by `scripts/build_live_replay.py` (this script's
     `curate-clips`/`build-pages` split, "touches no results/ data" contract,
     does not fit a per-window parquet/cache read). The `review.html` stub
-    written here is only a placeholder: `scripts/publish_review_site.py`
-    (wrapping `scripts/candidate_kit.py`) still writes the real,
-    non-stub `docs/site/review.html` (and `review_static.html`)
-    independently -- this function never produced `review_static.html` and
-    still does not.
+    written here IS the real, final content at that path (unlike an earlier
+    site-redesign stage, `scripts/publish_audio_review.py` no longer writes
+    `docs/site/review.html`/`review_static.html` at all -- this function is
+    now their only writer anywhere in `scripts/`); `review_static.html`
+    itself has no writer left after that removal and is simply never
+    produced again.
     """
     pages = {
         "index.html": render_index(),
