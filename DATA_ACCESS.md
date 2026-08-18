@@ -4,10 +4,13 @@
 
 This repository never commits sensor data. The full pipeline was developed
 and evaluated against audio, vibration, and SCADA recordings from the
-Rodundwerk II pump-turbine, collected across five measurement days
-(`illwerke-250526`, `illwerke-270626`, `illwerke-290626`, `illwerke-010726`,
-`illwerke-080726`) — roughly 400 GB of raw microphone, accelerometer, and
-SCADA (Betriebsdaten) data in total.
+Rodundwerk II pump-turbine, collected across six measurement days
+(`illwerke-250526`, `illwerke-270626`, `illwerke-290626`, `illwerke-300626`,
+`illwerke-010726`, `illwerke-080726`) — roughly 450 GB of raw microphone,
+accelerometer, and SCADA (Betriebsdaten) data in total. The `illwerke-300626`
+day was delivered on 2026-08-17/18, after the analysis was frozen, and is
+replayed as a held-out post-freeze day (see `data/illwerke-300626/MANIFEST.md`
+in the thesis workspace for its packaging and gap notes).
 
 This dataset is **proprietary plant data owned by illwerke vkw AG** and is
 **not redistributable**. It is not included in this repository, in its

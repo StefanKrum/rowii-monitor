@@ -134,6 +134,7 @@ system"'s own commissioning pool; module docstring)."""
 
 _EVAL_RUNS: tuple[str, ...] = (
     "250526-tu", "250526-pu-morning", "290626-tu", "290626-pu",
+    "300626-tu", "300626-pu",
     "010726-tu_ph_tu", "010726-pu", "080726-pu_strikes", "080726-st_strikes",
 )
 """Experiment 1's 8 sessions -- the SAME held-out run set
@@ -148,7 +149,8 @@ by construction (the SAME two runs `run_once_calibrated.py` tags
 `"in-sample"`), never held-out evidence."""
 
 _ERA_BY_DAY: dict[str, str] = {
-    "250526": "A", "270626": "A", "290626": "B", "010726": "B", "080726": "C",
+    "250526": "A", "270626": "A", "290626": "B", "300626": "B", "010726": "B",
+    "080726": "C",
 }
 """DAQ-configuration era per day-root (README "Data layout" table /
 `scripts/run_once_calibrated.py`'s `_ReplayEntry.era` tags)."""
