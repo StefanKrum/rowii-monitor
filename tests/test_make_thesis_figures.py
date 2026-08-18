@@ -374,8 +374,9 @@ def test_load_own_day_cell_aggregates_alarms_over_scored(tmp_path: Path) -> None
 def test_transfer_matrix_puts_own_day_values_on_the_diagonal(tmp_path: Path) -> None:
     results_dir = _write_transfer_tree(tmp_path / "results")
     far, scored = m.transfer_matrix(results_dir)
-    assert far.shape == (3, 3)
-    for k in range(3):
+    n = len(m.TRANSFER_DAYS)  # 4 since the 30 June extension (2026-08-18)
+    assert far.shape == (n, n)
+    for k in range(n):
         assert far[k, k] == pytest.approx((10 + k + 20 + k) / 400)
         assert scored[k, k] == 400
     assert far[0, 1] == pytest.approx(0.12)

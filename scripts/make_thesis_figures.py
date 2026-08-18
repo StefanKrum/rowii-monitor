@@ -140,6 +140,8 @@ SESSIONS: tuple[SessionMeta, ...] = (
     SessionMeta("270626-pu_ph_pu_ph_pu_ph-1", "A", "27 Jun\nPU+PS"),
     SessionMeta("290626-tu", "B", "29 Jun\nTU"),
     SessionMeta("290626-pu", "B", "29 Jun\nPU"),
+    SessionMeta("300626-tu", "B", "30 Jun\nTU"),
+    SessionMeta("300626-pu", "B", "30 Jun\nPU"),
     SessionMeta("010726-tu_ph_tu", "B", "1 Jul\nTU+PS", in_sample=True),
     SessionMeta("010726-pu", "B", "1 Jul\nPU", in_sample=True),
     SessionMeta("080726-pu_strikes", "C", "8 Jul\nPU, strikes"),
@@ -248,7 +250,11 @@ def make_f1_era_far(results_dir: Path, out_dir: Path) -> Path:
                 style="italic",
                 color="#555555",
             )
-        if s.run in trigger.index and bool(trigger.loc[s.run, "s1_fired"]):
+        # A triangle marks "a label-free sentinel fired and triggered the
+        # once-per-era recalibration" -- read off the decision column (any of
+        # s1/s2/s3), not s1_fired alone: since the s3 alarm-rate watchdog,
+        # 30 June turbine recalibrates with s1 AND s2 quiet.
+        if s.run in trigger.index and str(trigger.loc[s.run, "decision"]) == "recalibrate":
             fired_x.append(float(xpos[i]))
 
     ax.set_yscale("log")
@@ -636,6 +642,7 @@ def make_f4_latency(results_dir: Path, out_dir: Path) -> Path:
 TRANSFER_DAYS: tuple[SessionMeta, ...] = (
     SessionMeta("250526-tu", "A", "25 Jun\nTU"),
     SessionMeta("290626-tu", "B", "29 Jun\nTU"),
+    SessionMeta("300626-tu", "B", "30 Jun\nTU"),
     SessionMeta("010726-tu_ph_tu", "B", "1 Jul\nTU+PS"),
 )
 _TRANSFER_ALPHA = 0.05
