@@ -1567,3 +1567,20 @@ def test_render_candidates_fragment_badge_css_scoped_to_candidate_card() -> None
     for variant in ("", ".sustained", ".transient", ".impulse", ".warn", ".neutral"):
         assert f".candidate-card .badge{variant} {{" in css, variant
         assert f"\n.badge{variant} {{" not in css, variant
+
+
+def test_in_sample_sessions_covers_entire_snapshot_fit_pool() -> None:
+    """Audit fix 2026-08-18: `IN_SAMPLE_SESSIONS` must flag EVERY mined session that
+    is a literal member of the scoring snapshots' own fit pool
+    (`monitor_pool_b1_{fusion,audio_beats}_named.npz`, `fit_run` =
+    `"pool:010726-tu_ph_tu,010726-pu,010726-tu1-morning,010726-tu2"`). The set
+    previously listed only the two monitor-ext sessions, so `010726-pu` and
+    `010726-tu_ph_tu` candidates carried `in_sample=False` despite coming from
+    fit-pool data -- contradicting the constant's own docstring. Pinned as a plain
+    constant equality: the snapshot JSON lives under `models/adapted/`, which is not
+    present in data-free test environments, so the pool membership is restated here
+    verbatim rather than re-read from disk."""
+    assert ck.IN_SAMPLE_SESSIONS == frozenset(
+        {"010726-tu_ph_tu", "010726-pu", "010726-tu1-morning", "010726-tu2"}
+    )
+    assert ck.IN_SAMPLE_SESSIONS <= set(ck.SESSIONS)

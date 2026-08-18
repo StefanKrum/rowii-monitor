@@ -99,8 +99,8 @@ Three subcommands:
                the same once-calibrated fusion/audio-beats snapshots, since none of
                the three was ever a monitored day in `run_once_calibrated.py`'s own
                `_REPLAY` set) -- the once-calibrated tree itself is untouched.
-               `010726-tu1-morning`/`010726-tu2` are additionally tagged
-               `in_sample=True` (`IN_SAMPLE_SESSIONS`): both are literal members of
+               All four `010726-*` sessions are additionally tagged
+               `in_sample=True` (`IN_SAMPLE_SESSIONS`): each is a literal member of
                the scoring snapshot's own fit pool (`models/adapted/monitor_pool_b1_
                {fusion,audio_beats}_named.npz`'s `fit_run`), so their candidates carry
                that caveat; `270626-pu_ph_pu_ph_pu_ph-1` is genuinely held-out despite
@@ -266,6 +266,13 @@ REGIME_BY_SESSION: dict[str, str] = {
     "250526-pu-morning": "recalibrate",
     "290626-tu": "frozen",
     "290626-pu": "recalibrate",
+    # 300626 (era-B held-out day, _REPLAY addition 2026-08-18): regimes read off
+    # `fusion_trigger_log.csv`'s own `decision` column like every row above --
+    # tu stayed fully quiet (lowest s1 rate of the replay, 0.013 -> frozen), pu
+    # tripped s1 mildly (0.107 -> recalibrate), mirroring 290626-pu's held-out
+    # era-B pump-day pattern at lower amplitude.
+    "300626-tu": "frozen",
+    "300626-pu": "recalibrate",
     "010726-tu_ph_tu": "frozen",
     "010726-pu": "frozen",
     "080726-pu_strikes": "recalibrate",
@@ -304,15 +311,21 @@ were produced by this coverage extension instead, into a SEPARATE output tree th
 never touches (or requires re-running) the existing once-calibrated trees. See
 `_alarms_path_for`."""
 
-IN_SAMPLE_SESSIONS: frozenset[str] = frozenset({"010726-tu1-morning", "010726-tu2"})
+IN_SAMPLE_SESSIONS: frozenset[str] = frozenset(
+    {"010726-tu_ph_tu", "010726-pu", "010726-tu1-morning", "010726-tu2"}
+)
 """Sessions whose candidates carry the `in_sample=True` caveat (`Candidate.
-in_sample`): both are literal members of the fusion/audio-beats scoring snapshot's
-OWN fit pool (`models/adapted/monitor_pool_b1_{fusion,audio_beats}_named.npz`'s
-`fit_run` = `"pool:010726-tu_ph_tu,010726-pu,010726-tu1-morning,010726-tu2"`), so a
-candidate flagged here comes from data the detector was itself fit on -- a genuinely
-different evidentiary status than a held-out day. `270626-pu_ph_pu_ph_pu_ph-1` is
-NOT in this set: it has no SCADA either, but it is not part of the snapshot's fit
-pool, so it stays held-out."""
+in_sample`): all four are literal members of the fusion/audio-beats scoring
+snapshot's OWN fit pool (`models/adapted/monitor_pool_b1_{fusion,audio_beats}_
+named.npz`'s `fit_run` =
+`"pool:010726-tu_ph_tu,010726-pu,010726-tu1-morning,010726-tu2"`), so a candidate
+flagged here comes from data the detector was itself fit on -- a genuinely
+different evidentiary status than a held-out day. (Audit fix 2026-08-18: this set
+previously named only the two monitor-ext sessions, leaving `010726-pu`/
+`010726-tu_ph_tu` candidates mislabelled `in_sample=False` in contradiction of
+this docstring's own fit-pool listing.) `270626-pu_ph_pu_ph_pu_ph-1` is NOT in
+this set: it has no SCADA either, but it is not part of the snapshot's fit pool,
+so it stays held-out."""
 
 _STRIKE_EXCLUSION_FILES: dict[str, tuple[Path, Path]] = {
     "080726-pu_strikes": (
