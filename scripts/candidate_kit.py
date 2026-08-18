@@ -267,14 +267,20 @@ REGIME_BY_SESSION: dict[str, str] = {
     "290626-tu": "frozen",
     "290626-pu": "recalibrate",
     # 300626 (era-B held-out day, _REPLAY addition 2026-08-18): regimes read off
-    # `fusion_trigger_log.csv`'s own `decision` column like every row above --
-    # tu stayed fully quiet (lowest s1 rate of the replay, 0.013 -> frozen), pu
-    # tripped s1 mildly (0.107 -> recalibrate), mirroring 290626-pu's held-out
-    # era-B pump-day pattern at lower amplitude.
-    "300626-tu": "frozen",
+    # `fusion_trigger_log.csv`'s own `decision` column like every row above.
+    # tu: s1/s2 stayed fully quiet (lowest s1 rate of the replay, 0.013) but
+    # the frozen thresholds broke (raw rate 0.387) -- caught by the s3
+    # alarm-rate watchdog added the same day (run_once_calibrated._S3_FACTOR),
+    # so its decision is recalibrate via s3. pu tripped s1 mildly (0.107 ->
+    # recalibrate), mirroring 290626-pu's held-out era-B pump-day pattern at
+    # lower amplitude.
+    "300626-tu": "recalibrate",
     "300626-pu": "recalibrate",
     "010726-tu_ph_tu": "frozen",
-    "010726-pu": "frozen",
+    # 010726-pu: frozen decision pre-s3; its raw frozen rate (0.127) trips the
+    # s3 watchdog, so the replayed decision is now recalibrate (in-sample day;
+    # once-arm improves 0.192 -> 0.096).
+    "010726-pu": "recalibrate",
     "080726-pu_strikes": "recalibrate",
     "080726-st_strikes": "recalibrate",
     # --- Coverage extension (Stefan's decision 2026-08-16): the handover register
