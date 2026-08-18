@@ -1683,17 +1683,34 @@ def _read_summary_csv_or_none(summary_path: Path) -> pd.DataFrame | None:
     return existing
 
 
+_SUMMARY_KEY_COLUMNS: tuple[str, ...] = (
+    "run", "protocol", "variant", "labels", "conditioning", "scorer", "alpha", "notes"
+)
+"""Identity of one `summary.csv` row: every configuration axis, no metric column.
+`_append_summary_row` REPLACES the existing row with the same identity instead of
+blindly appending -- re-running a protocol combo (crash recovery, audit re-runs)
+must update its row in place. Mirrors `run_step1._SUMMARY_KEY_COLUMNS` (the
+2026-08-18 completeness audit traced duplicated Step-1 overview rows to exactly
+such a rerun; this accumulator had the same blind-append shape)."""
+
+
 def _append_summary_row(results_root: Path, row: _SummaryRow) -> None:
-    """Append one row to `summary.csv`, recovering from a corrupt prior write
-    (`_read_summary_csv_or_none`) and writing crash-safely itself: the combined frame
-    goes to a `summary.csv.tmp` sibling first, then `os.replace`s the real path, so a
-    crash mid-write of THIS call can never leave a partially-written `summary.csv`
-    behind either."""
+    """Upsert one row into `summary.csv` (identity: `_SUMMARY_KEY_COLUMNS`),
+    recovering from a corrupt prior write (`_read_summary_csv_or_none`) and writing
+    crash-safely itself: the combined frame goes to a `summary.csv.tmp` sibling
+    first, then `os.replace`s the real path, so a crash mid-write of THIS call can
+    never leave a partially-written `summary.csv` behind either."""
     summary_path = results_root / "step2" / "summary.csv"
     row_df = pd.DataFrame([vars(row)], columns=_SUMMARY_COLUMNS)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     existing = _read_summary_csv_or_none(summary_path)
-    combined = pd.concat([existing, row_df], ignore_index=True) if existing is not None else row_df
+    if existing is not None:
+        key_cols = list(_SUMMARY_KEY_COLUMNS)
+        new_key = tuple(row_df[key_cols].fillna("").astype(str).iloc[0])
+        old_keys = existing[key_cols].fillna("").astype(str).apply(tuple, axis=1)
+        combined = pd.concat([existing[old_keys != new_key], row_df], ignore_index=True)
+    else:
+        combined = row_df
     tmp_path = summary_path.with_name(summary_path.name + ".tmp")
     combined.to_csv(tmp_path, index=False)
     os.replace(tmp_path, summary_path)

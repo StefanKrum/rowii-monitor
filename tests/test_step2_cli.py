@@ -579,13 +579,18 @@ def test_within_day_summary_deterministic_across_invocations(tmp_path, monkeypat
         "--scorer", "knn",
     ]
     assert run_step2.main(argv) == 0
+    after_first = pd.read_csv(tmp_path / "results" / "step2" / "summary.csv")
+    assert len(after_first) == 1
     assert run_step2.main(argv) == 0
 
     summary = pd.read_csv(tmp_path / "results" / "step2" / "summary.csv")
-    # Append-only: two invocations of one combo -> two rows, not deduplicated.
-    assert len(summary) == 2
+    # Upsert semantics (2026-08-18): rerunning one combo REPLACES its row
+    # (`_SUMMARY_KEY_COLUMNS` identity) -- still exactly one row, whose values
+    # must be identical across invocations (the original determinism claim,
+    # now expressed through the upsert instead of two appended twin rows).
+    assert len(summary) == 1
 
-    first, second = summary.iloc[0], summary.iloc[1]
+    first, second = after_first.iloc[0], summary.iloc[0]
     for col in summary.columns:
         v1, v2 = first[col], second[col]
         if isinstance(v1, float) and math.isnan(v1):
@@ -697,6 +702,36 @@ def test_append_summary_row_recovers_from_unbalanced_quote(tmp_path, monkeypatch
 
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any(str(summary_path) in w for w in warnings), warnings
+
+
+def test_append_summary_row_upserts_same_identity(tmp_path, monkeypatch) -> None:
+    """Re-running the same protocol combo must REPLACE its `summary.csv` row
+    (identity: `_SUMMARY_KEY_COLUMNS` -- every config axis, no metric column),
+    never append a duplicate; a row differing in any config axis stays separate.
+    Mirrors `run_step1`'s upsert (2026-08-18 audit: blind append duplicated
+    overview rows after a crash-recovery rerun)."""
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    import run_step2
+
+    def _row(**overrides):
+        base = dict(
+            run="300626-tu", protocol="within-day", variant="fusion",
+            labels="detected", conditioning="pooled", scorer="knn", alpha=0.05,
+            per_label_count=1, pooled_realized_far=0.5, mean_per_state_far=0.5,
+            n_low_confidence=0, notes="",
+        )
+        base.update(overrides)
+        return run_step2._SummaryRow(**base)
+
+    root = tmp_path / "results"
+    run_step2._append_summary_row(root, _row(pooled_realized_far=0.9))
+    run_step2._append_summary_row(root, _row(pooled_realized_far=0.1))
+    run_step2._append_summary_row(root, _row(scorer="mahalanobis"))
+
+    df = pd.read_csv(root / "step2" / "summary.csv")
+    assert len(df) == 2, "rerun upserted, distinct scorer kept separate"
+    knn_row = df[df.scorer == "knn"].iloc[0]
+    assert knn_row["pooled_realized_far"] == 0.1, "the LATEST rerun's row must win"
 
 
 def test_append_summary_row_recovers_from_truncated_header(tmp_path, monkeypatch, caplog) -> None:

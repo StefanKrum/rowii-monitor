@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -608,16 +609,34 @@ _SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 
+_SUMMARY_KEY_COLUMNS: tuple[str, ...] = ("run", "variant", "clusterer", "k", "notes")
+"""Identity of one `summary.csv` row: a (run, variant, clusterer) combo's default-k
+row carries empty `notes`; its k-sweep rows carry `notes="k-sweep"` with one row per
+swept k. `_append_summary_row` REPLACES the existing row with the same identity
+instead of blindly appending -- re-running a combo (crash recovery, audit re-grids)
+must update its row in place. The 2026-08-18 completeness audit traced duplicated
+`overview.md` rows to exactly such a rerun (300626-pu's audio combos ran twice
+after a mid-grid abort), so plain append is a correctness bug, not a style choice."""
+
+
 def _append_summary_row(results_root: Path, result: ComboResult) -> None:
+    """Upsert *result*'s row into `results/summary.csv` (identity:
+    `_SUMMARY_KEY_COLUMNS`), writing crash-safely via a `.tmp` sibling +
+    `os.replace` (mirrors `run_step2._append_summary_row`'s own write pattern)."""
     summary_path = results_root / "summary.csv"
     row_df = pd.DataFrame([vars(result)], columns=_SUMMARY_COLUMNS)
     results_root.mkdir(parents=True, exist_ok=True)
     if summary_path.exists():
         existing = pd.read_csv(summary_path)
-        combined = pd.concat([existing, row_df], ignore_index=True)
+        key_cols = list(_SUMMARY_KEY_COLUMNS)
+        new_key = tuple(row_df[key_cols].fillna("").astype(str).iloc[0])
+        old_keys = existing[key_cols].fillna("").astype(str).apply(tuple, axis=1)
+        combined = pd.concat([existing[old_keys != new_key], row_df], ignore_index=True)
     else:
         combined = row_df
-    combined.to_csv(summary_path, index=False)
+    tmp_path = summary_path.with_name(summary_path.name + ".tmp")
+    combined.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, summary_path)
 
 
 def main(argv: list[str] | None = None) -> int:
