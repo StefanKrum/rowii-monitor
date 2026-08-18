@@ -281,6 +281,8 @@ _REPLAY: tuple[_ReplayEntry, ...] = (
     ),
     _ReplayEntry(day="290626", era="B", run="290626-tu", tags=()),
     _ReplayEntry(day="290626", era="B", run="290626-pu", tags=()),
+    _ReplayEntry(day="300626", era="B", run="300626-tu", tags=()),
+    _ReplayEntry(day="300626", era="B", run="300626-pu", tags=()),
     _ReplayEntry(day="010726", era="B", run="010726-tu_ph_tu", tags=(_TAG_IN_SAMPLE,)),
     _ReplayEntry(day="010726", era="B", run="010726-pu", tags=(_TAG_IN_SAMPLE,)),
     _ReplayEntry(
@@ -290,9 +292,15 @@ _REPLAY: tuple[_ReplayEntry, ...] = (
 )
 """The pinned replay set, in true chronological order: 250526 (era
 A) -> 270626 (era A, sentinel-only, its true position between 250526 and
-290626) -> 290626 (era B) -> 010726 (era B, in-sample) -> 080726 (era C,
-event-free FAR). `250526-pu-afternoon` is deliberately absent (only its
-fusion cache exists on disk)."""
+290626) -> 290626 (era B) -> 300626 (era B) -> 010726 (era B, in-sample) ->
+080726 (era C, event-free FAR). `250526-pu-afternoon` is deliberately absent
+(only its fusion cache exists on disk). `300626-tu`/`300626-pu` (delivery
+received 2026-08-17/18) are genuinely held-out era-B days: neither is a B1
+fit-pool member, both carry full-day Betriebsdaten; era membership is
+evidence-backed by the era-step level chain (`results/analysis-days/era-step/`,
+all three matched stream families sit inside the 290626/010726 era-B envelope,
+clearly separated from 080726's era-C step) -- see
+`data/illwerke-300626/MANIFEST.md` for the delivery's packaging/gap notes."""
 
 
 # ---------------------------------------------------------------------------

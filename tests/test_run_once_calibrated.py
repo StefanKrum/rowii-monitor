@@ -264,7 +264,13 @@ _AUDIO_NAMES = [
 _VIB_NAMES = ["RAWGeneratorVib__2::ch0_log_rms", "RAWGeneratorVib__2::ch0_spectral_centroid"]
 
 _B1_RUNS = ("010726-pu", "010726-tu1-morning", "010726-tu2", "010726-tu_ph_tu")
-_NORMAL_RUNS = ("250526-tu", "250526-pu-morning", "290626-tu", "290626-pu")
+_NORMAL_RUNS = (
+    "250526-tu", "250526-pu-morning", "290626-tu", "290626-pu",
+    # 300626 (era B, held-out; _REPLAY addition 2026-08-18): same fixture profile
+    # as the other in-era normal days -- bank recognizes every window, sentinels
+    # stay quiet.
+    "300626-tu", "300626-pu",
+)
 _DRIFTED_RUNS = ("270626-pu_ph_pu_ph_pu_ph-1", "080726-pu_strikes")
 _OTHER_RUNS = ("080726-st_strikes",)  # pillar-3 only, not a _REPLAY entry
 
@@ -553,7 +559,7 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     sidecar = json.loads((out_dir / "fusion.json").read_text())
 
     trigger_log = sidecar["trigger_log"]
-    assert len(trigger_log) == 8  # every _REPLAY entry, sentinel-only included
+    assert len(trigger_log) == 10  # every _REPLAY entry, sentinel-only included
     by_run = {row["run"]: row for row in trigger_log}
 
     # Normal-blob days never fire either sentinel -> frozen.
@@ -584,7 +590,7 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert list(by_run["010726-tu_ph_tu"]["tags"]) == ["in-sample"]
 
     regimes = sidecar["regimes"]
-    assert len(regimes) == 7  # every _REPLAY entry EXCEPT the sentinel-only one
+    assert len(regimes) == 9  # every _REPLAY entry EXCEPT the sentinel-only one
     regimes_by_run = {row["run"]: row for row in regimes}
     normal = regimes_by_run["290626-tu"]
     # Fixed fake alarm rates (module-level _fake_run_monitor): frozen 12/20 =
@@ -645,9 +651,9 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # CSV artifacts exist alongside the JSON sidecar.
     trigger_csv = pd.read_csv(out_dir / "fusion_trigger_log.csv")
-    assert len(trigger_csv) == 8
+    assert len(trigger_csv) == 10
     regimes_csv = pd.read_csv(out_dir / "fusion_regimes.csv")
-    assert len(regimes_csv) == 7
+    assert len(regimes_csv) == 9
 
 
 def test_representation_mismatch_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
