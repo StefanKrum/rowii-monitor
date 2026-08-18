@@ -90,6 +90,14 @@ class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     gt: GtRules = field(default_factory=GtRules)
     detect: DetectConfig = field(default_factory=DetectConfig)
+    max_invalid_fraction: float = 0.05
+    """Hard-fail ceiling for `rowii.pipeline.compute_validity_mask`'s invalid-window
+    fraction (`ROWII_MAX_INVALID_FRACTION`). 0.05 is the spec rule; raise it only
+    per-invocation for a delivery with documented stream gaps (e.g. `300626-tu`,
+    two partner-side 12-min single-chunk gaps -- see that delivery's MANIFEST.md).
+    Invalid windows stay masked out of every downstream stage regardless of this
+    ceiling; deliberately NOT part of `_cache_fingerprint`'s payload (it changes
+    which runs are accepted, never what a featurizer computes)."""
     beats_checkpoint: Path | None = None
     tfc_audio_checkpoint: Path | None = None
     """Frozen TF-C audio-branch checkpoint (`ROWII_TFC_AUDIO_CHECKPOINT`)
@@ -145,9 +153,11 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     student_ckpt = merged.get("ROWII_STUDENT_CHECKPOINT") or None
     beats_int8_ckpt = merged.get("ROWII_BEATS_INT8_CHECKPOINT") or None
     xattn_ckpt = merged.get("ROWII_XATTN_CHECKPOINT") or None
+    max_invalid = merged.get("ROWII_MAX_INVALID_FRACTION") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
+        max_invalid_fraction=float(max_invalid) if max_invalid else 0.05,
         beats_checkpoint=Path(ckpt).expanduser() if ckpt else None,
         tfc_audio_checkpoint=Path(tfc_audio_ckpt).expanduser() if tfc_audio_ckpt else None,
         tfc_vib_checkpoint=Path(tfc_vib_ckpt).expanduser() if tfc_vib_ckpt else None,

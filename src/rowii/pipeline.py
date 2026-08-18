@@ -519,12 +519,26 @@ def _extract_stream_features(
 
 def compute_validity_mask(
     stream_results: list[_StreamFeatureResult],
+    *,
+    max_invalid_fraction: float | None = None,
 ) -> np.ndarray:
     """A window is valid iff every used stream has coverage >= 0.8 and no NaN feature.
 
+    Args:
+        stream_results: Per-stream feature/coverage results for the run's grid.
+        max_invalid_fraction: Hard-fail ceiling for the invalid-window fraction;
+            `None` (the default) means the 5% spec rule (`_MAX_INVALID_FRACTION`).
+            `prepare_run` threads `cfg.max_invalid_fraction` through here, so a
+            delivery with documented stream gaps can be run with an explicit
+            per-invocation `ROWII_MAX_INVALID_FRACTION` override (e.g. `300626-tu`,
+            two partner-side 12-min single-chunk gaps) without loosening the guard
+            for every other run. The ceiling changes only when this function
+            raises -- invalid windows are excluded from the returned mask either way.
+
     Raises:
-        RuntimeError: if more than 5% of grid windows are invalid (spec rule).
+        RuntimeError: if more than *max_invalid_fraction* of grid windows are invalid.
     """
+    limit = _MAX_INVALID_FRACTION if max_invalid_fraction is None else max_invalid_fraction
     n_windows = stream_results[0].features.shape[0]
     valid = np.ones(n_windows, dtype=bool)
     for sr in stream_results:
@@ -532,11 +546,11 @@ def compute_validity_mask(
         valid &= ~np.isnan(sr.features).any(axis=1)
 
     invalid_fraction = 1.0 - valid.mean() if n_windows else 0.0
-    if invalid_fraction > _MAX_INVALID_FRACTION:
+    if invalid_fraction > limit:
         raise RuntimeError(
             f"{invalid_fraction:.1%} of {n_windows} grid windows are invalid "
             f"(coverage < {_COVERAGE_THRESHOLD} or NaN features in some used stream), "
-            f"exceeding the {_MAX_INVALID_FRACTION:.0%} hard-fail threshold"
+            f"exceeding the {limit:.0%} hard-fail threshold"
         )
     return valid
 
@@ -872,7 +886,8 @@ def prepare_run(
         for the exact convention).
 
     Raises:
-        RuntimeError: if > 5% of grid windows are invalid (`compute_validity_mask`).
+        RuntimeError: if more than `cfg.max_invalid_fraction` (default: the 5% spec
+            rule) of grid windows are invalid (`compute_validity_mask`).
         ValueError: if *variant* is not a recognised variant string.
     """
     streams = _streams_for_variant(variant)
@@ -902,7 +917,9 @@ def prepare_run(
             run.files[stream], grid, featurizer, offset_ns
         )
 
-    valid_mask = compute_validity_mask(list(stream_results.values()))
+    valid_mask = compute_validity_mask(
+        list(stream_results.values()), max_invalid_fraction=cfg.max_invalid_fraction
+    )
     features = assemble_variant_features(variant, stream_results)
     feature_names = _assemble_feature_names(variant, stream_results)
     # streams[0] is the PRIMARY stream for every variant (see _streams_for_variant's own

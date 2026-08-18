@@ -132,6 +132,29 @@ def test_extract_stream_features_segment_ids_track_files_in_time_order_with_gap(
     )
 
 
+def test_compute_validity_mask_max_invalid_fraction_override() -> None:
+    """`max_invalid_fraction` override: one dead window out of 8 (12.5% invalid)
+    hard-fails at the default 5% spec threshold but passes with an explicit,
+    caller-documented ceiling (delivery-specific single-chunk stream gaps, e.g.
+    `300626-tu` -- see that delivery's MANIFEST.md). The returned mask must still
+    exclude the invalid window itself: the override loosens only the tripwire,
+    never the per-window masking.
+    """
+    coverage = np.array([1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0])
+    sr = pipeline._StreamFeatureResult(
+        features=np.zeros((8, 2)),
+        coverage=coverage,
+        feature_names=["a", "b"],
+        segment_ids=np.zeros(8, dtype=np.int64),
+    )
+
+    with pytest.raises(RuntimeError, match="hard-fail threshold"):
+        pipeline.compute_validity_mask([sr])
+
+    mask = pipeline.compute_validity_mask([sr], max_invalid_fraction=0.20)
+    np.testing.assert_array_equal(mask, coverage >= 0.8)
+
+
 # ---------------------------------------------------------------------------
 # 2. Cache round-trip: second call with an unchanged run/variant/cfg is a cache HIT
 # ---------------------------------------------------------------------------
