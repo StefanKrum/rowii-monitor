@@ -89,10 +89,12 @@ def test_sentinel_only_day_has_no_far_row(tmp_path: Path, monkeypatch: pytest.Mo
         day="270626", era="A", tags=("sentinel-only",),
         s1_rate=0.4, s1_threshold=0.1, low_confidence_modes=(),
         s2_mic=-30.0, s2_vib=-50.0, anchor=-40.0, mad=0.5,
-        attribution="instrumentation", decision="recalibrate",
+        attribution="instrumentation", s3_rate=None, s3_threshold=None,
+        decision="recalibrate",
     )
     assert row["day"] == "270626" and "sentinel-only" in row["tags"]
     assert "far" not in row  # sentinel-only: no FAR/GT
+    assert row["s3_fired"] is None  # no monitor run -> s3 not evaluable
 
 
 # ---------------------------------------------------------------------------
@@ -402,29 +404,42 @@ def _install(
     )
 
 
+_HIGH_FROZEN_RUNS = frozenset({"300626-tu", "080726-pu_strikes"})
+"""Runs whose fake FROZEN arm alarms at the original high rate (12/20 = 0.6).
+Run-aware since s3 (the alarm-rate watchdog): a uniform 0.6 raw frozen rate
+would trip s3 on EVERY monitored day and no frozen decision could survive the
+fixture. `300626-tu` is the deliberate s3 scenario (quiet s1/s2 normal blobs +
+broken frozen arm -- exactly the real 30 June turbine finding this sentinel
+was designed for); `080726-pu_strikes` keeps its high pattern because its
+`frozen_far_full_population = 0.6` secondary is pinned by the event-bearing
+assertions (and s1 fires there anyway, so s3 changes nothing)."""
+
+
 def _fake_run_monitor(
     snapshot_path: Path, run: str, mode: str, out_dir: Path, *, alpha=None, event_free=None
 ) -> Path:
-    """Deterministic fake alarms.parquet: FROZEN alarms at a HIGH rate over its
-    FULL 20-window population (12/20 = 0.6), RECALIBRATE at a LOW rate over a
-    STRICT SUBSET of scored windows -- windows 0-3 are `consumed_for_
-    calibration` (NOT scored), windows 4-19 are `scored` with exactly 1 alarm
-    (1/16 = 0.0625) -- mirrors the central finding (frozen cross-day FAR
-    does not hold) so the 3-regime arithmetic is meaningfully checkable, not
-    merely plumbing, AND exercises the common-window subsetting for real
-    (regression coverage): the OLD fixture marked every window `role="scored"` on
-    BOTH arms, making `_far_on_windows` a no-op end-to-end (window sets
-    always matched) -- a real subsetting bug would have gone uncaught by this
-    test. Applies uniformly to every run name (including `080726-pu_strikes`,
-    an EVENT-BEARING entry) since this fixture never varies by run; the
-    event-bearing regime FAR no longer reads this parquet directly
-    (`_fake_run_eval_events` below), so the subset change is invisible to
-    it except via the UNCHANGED frozen-arm secondary reading."""
+    """Deterministic fake alarms.parquet, RUN-AWARE since s3: for
+    `_HIGH_FROZEN_RUNS`, FROZEN alarms at a HIGH rate over the FULL 20-window
+    population (12/20 = 0.6) -- mirrors the central finding (frozen cross-day
+    FAR does not hold) so the 3-regime arithmetic is meaningfully checkable --
+    while every other run's frozen arm is fully QUIET (0/20), keeping its
+    decision driven by s1/s2 alone under the s3 watchdog. RECALIBRATE is the
+    same for every run: a LOW rate over a STRICT SUBSET of scored windows --
+    windows 0-3 are `consumed_for_calibration` (NOT scored), windows 4-19 are
+    `scored` with exactly 1 alarm (1/16 = 0.0625). The common-window
+    subsetting regression (the OLD all-scored fixture made `_far_on_windows` a
+    no-op end-to-end; a real subsetting bug would have gone uncaught) now
+    lives on the HIGH-frozen `300626-tu` row: subsetting its frozen arm onto
+    the recalibrate arm's scoring split {4..19} keeps 8/16 = 0.5, genuinely
+    DIFFERENT from its full-population 0.6. The event-bearing regime FAR never
+    reads this parquet directly (`_fake_run_eval_events` below) except via the
+    UNCHANGED frozen-arm secondary reading."""
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 20
     if mode == "frozen":
         role = np.array(["scored"] * n, dtype=object)
-        alarm = np.array([True] * 12 + [False] * (n - 12), dtype=bool)
+        n_alarms = 12 if run in _HIGH_FROZEN_RUNS else 0
+        alarm = np.array([True] * n_alarms + [False] * (n - n_alarms), dtype=bool)
     else:
         role = np.array(
             ["consumed_for_calibration"] * 4 + ["scored"] * (n - 4), dtype=object
@@ -562,10 +577,24 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert len(trigger_log) == 10  # every _REPLAY entry, sentinel-only included
     by_run = {row["run"]: row for row in trigger_log}
 
-    # Normal-blob days never fire either sentinel -> frozen.
+    # Normal-blob days never fire any sentinel -> frozen (their fake frozen
+    # arm is fully quiet, 0/20, so s3 stays quiet too).
     assert by_run["290626-tu"]["decision"] == "frozen"
     assert by_run["290626-tu"]["s1_fired"] is False
     assert by_run["290626-tu"]["s2_fired"] is False
+    assert by_run["290626-tu"]["s3_fired"] is False
+    assert by_run["290626-tu"]["s3_rate"] == pytest.approx(0.0)
+
+    # The s3 scenario (the real 30 June turbine finding): quiet s1/s2 normal
+    # blobs, but the frozen arm alarms at 0.6 raw >= 2 * alpha(0.01) = 0.02 ->
+    # the alarm-rate watchdog alone flips the decision to recalibrate.
+    s3_row = by_run["300626-tu"]
+    assert s3_row["s1_fired"] is False
+    assert s3_row["s2_fired"] is False
+    assert s3_row["s3_fired"] is True
+    assert s3_row["s3_rate"] == pytest.approx(0.6)
+    assert s3_row["s3_threshold"] == pytest.approx(0.02)
+    assert s3_row["decision"] == "recalibrate"
 
     # 270626 (sentinel-only, drifted) fires s1 (drifted audio-beats blob) AND
     # s2 (drifted mic) -> recalibrate decision, "instrumentation" attribution
@@ -576,13 +605,20 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert sentinel_row["s2_fired"] is True
     assert sentinel_row["s2_attribution"] == "instrumentation"
     assert "far" not in sentinel_row
+    # Sentinel-only: no monitor run -> no frozen rate -> s3 not evaluable,
+    # persisted as None (never a fabricated quiet reading).
+    assert sentinel_row["s3_rate"] is None
+    assert sentinel_row["s3_fired"] is None
 
     # era-A boundary caught: at least one era-A row triggered.
     assert sidecar["boundary_caught_era_a"] is True
 
-    # era C (080726-pu_strikes, drifted) triggers too.
+    # era C (080726-pu_strikes, drifted) triggers too; its high fake frozen
+    # arm additionally trips s3 (0.6 >= 0.02) -- s1 fires first, s3 changes
+    # nothing about the decision, both firings stay visible in the log.
     assert sidecar["era_c_triggered"] is True
     assert by_run["080726-pu_strikes"]["decision"] == "recalibrate"
+    assert by_run["080726-pu_strikes"]["s3_fired"] is True
 
     # 010726 rows are tagged in-sample and STILL get a full FAR row (normal
     # blob, same distribution as the B1 commissioning pool itself).
@@ -593,23 +629,32 @@ def test_run_once_calibrated_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert len(regimes) == 9  # every _REPLAY entry EXCEPT the sentinel-only one
     regimes_by_run = {row["run"]: row for row in regimes}
     normal = regimes_by_run["290626-tu"]
-    # Fixed fake alarm rates (module-level _fake_run_monitor): frozen 12/20 =
-    # 0.6 over its full population; recalibrate marks windows 0-3 consumed
-    # (NOT scored) and 1/16 scored windows alarming = 0.0625 -- a STRICT
-    # SUBSET, so the common-window subsetting is exercised for real
-    # (regression coverage): subsetting the frozen arm onto the recalibrate arm's own
-    # scoring split {4..19} keeps only frozen's windows 4-11 alarming (8/16 =
-    # 0.5), genuinely DIFFERENT from the frozen arm's own full-population
-    # reading (0.6) -- the OLD all-scored fixture made these equal by
-    # construction and could not have caught a subsetting bug.
+    # Quiet-frozen fake for normal runs (run-aware _fake_run_monitor): frozen
+    # 0/20; recalibrate marks windows 0-3 consumed and 1/16 scored windows
+    # alarming = 0.0625.
     assert normal["far_basis"] == roc._FAR_BASIS_COMMON_WINDOW
-    assert normal["always_frozen_far"] == pytest.approx(0.5)
+    assert normal["always_frozen_far"] == pytest.approx(0.0)
     assert normal["always_recalibrate_far"] == pytest.approx(0.0625)
-    assert normal["frozen_far_full_population"] == pytest.approx(0.6)
-    assert normal["always_frozen_far"] != normal["frozen_far_full_population"]
+    assert normal["frozen_far_full_population"] == pytest.approx(0.0)
     # Untriggered -> once+triggered reads the FROZEN (common-window) arm (NOT
     # sticky recalibrate).
-    assert normal["once_triggered_far"] == pytest.approx(0.5)
+    assert normal["once_triggered_far"] == pytest.approx(0.0)
+
+    # The s3 run carries the HIGH frozen pattern, so the common-window
+    # subsetting regression lives here: subsetting its frozen arm onto the
+    # recalibrate arm's own scoring split {4..19} keeps only frozen's windows
+    # 4-11 alarming (8/16 = 0.5), genuinely DIFFERENT from the frozen arm's
+    # own full-population reading (0.6) -- the OLD all-scored fixture made
+    # these equal by construction and could not have caught a subsetting bug.
+    s3_regime = regimes_by_run["300626-tu"]
+    assert s3_regime["far_basis"] == roc._FAR_BASIS_COMMON_WINDOW
+    assert s3_regime["always_frozen_far"] == pytest.approx(0.5)
+    assert s3_regime["always_recalibrate_far"] == pytest.approx(0.0625)
+    assert s3_regime["frozen_far_full_population"] == pytest.approx(0.6)
+    assert s3_regime["always_frozen_far"] != s3_regime["frozen_far_full_population"]
+    # s3-triggered -> once+triggered reads the RECALIBRATE arm: the watchdog
+    # recovers the broken-frozen day without s1/s2 ever firing.
+    assert s3_regime["once_triggered_far"] == pytest.approx(0.0625)
 
     strikes = regimes_by_run["080726-pu_strikes"]
     # 080726 is EVENT-BEARING -- its regime FAR must be sourced

@@ -599,11 +599,47 @@ def _far_on_windows(alarms_path: Path, window_set: np.ndarray) -> float:
     return float(sub["alarm"].mean()) if len(sub) else float("nan")
 
 
-def _trigger_verdict(*, s1_fired: bool, s2_fired: bool) -> bool:
-    """The day-level once+triggered decision: recalibrate iff EITHER sentinel
-    fired ("the SAME day-level trigger verdict (s1 or s2) gates the
-    frozen/recalibrate choice for all three FAR arms")."""
-    return bool(s1_fired or s2_fired)
+_S3_FACTOR = 2.0
+"""s3 alarm-rate-watchdog materiality factor: s3 fires when the day's RAW
+frozen-arm scored-window alarm rate reaches `_S3_FACTOR * alpha`. Added
+2026-08-18 as a deliberately POST-HOC third sentinel, designed in response to
+the first post-freeze replay day (`300626-tu`): both s1 and s2 stayed quiet
+(s1 rate 0.013, the lowest of the whole replay) while the frozen thresholds
+broke (raw rate 0.376 at alpha=0.05, driven by one recognized state flagging
+44% of its windows) -- conditional score drift WITHIN a recognized mode is
+structurally invisible to s1 (mode membership) and s2 (broadband level), but
+it is exactly what the frozen arm's own realized alarm rate measures, label-
+free, from quantities the monitor already computes. Design rules: (1) the
+watched rate is the RAW event-INCLUSIVE scored-window mean
+(`frozen_far_full_population`) -- the event-free basis would smuggle ground
+truth into a label-free trigger; (2) the factor is a fixed materiality rule,
+not a fitted threshold -- a pure binomial significance bound at replay window
+counts would fire on nearly every day (real conformal miscoverage exceeds
+binomial noise here; healthy 290626-tu reads 0.075 at alpha=0.05), while 2x
+separates every broken frozen day from every healthy one in the replay;
+(3) on a day bearing true events a sustained 2x-nominal FULL-SESSION rate is
+still evidence of threshold breakage risk (transient event bursts do not
+dominate a session mean), s1 fires first on both strike days anyway, and the
+trigger log records which sentinel(s) fired so the two causes stay
+distinguishable."""
+
+
+def _s3_fires(raw_frozen_rate: float, threshold: float) -> bool:
+    """s3 predicate (alarm-rate watchdog): the day's raw frozen-arm scored-
+    window alarm rate reaches the materiality threshold (`_S3_FACTOR * alpha`
+    at the call site). Driver-local by design: unlike `s1_fires`/`s2_fires`
+    (shared with monitor.py via `rowii.anomaly.sentinels`), s3 exists only in
+    this replay driver -- see `_S3_FACTOR` for the full design rationale."""
+    return bool(raw_frozen_rate >= threshold)
+
+
+def _trigger_verdict(*, s1_fired: bool, s2_fired: bool, s3_fired: bool = False) -> bool:
+    """The day-level once+triggered decision: recalibrate iff ANY sentinel
+    fired ("the SAME day-level trigger verdict gates the frozen/recalibrate
+    choice for all three FAR arms"). s3 defaults False so sentinel-only days
+    (no Betriebsdaten -> no monitor run -> no frozen rate to watch) keep the
+    two-sentinel verdict unchanged."""
+    return bool(s1_fired or s2_fired or s3_fired)
 
 
 def _regime_far(frozen_far: float, recal_far: float, *, triggered: bool) -> float:
@@ -626,6 +662,8 @@ def _trigger_log_row(
     anchor: float,
     mad: float,
     attribution: str,
+    s3_rate: float | None,
+    s3_threshold: float | None,
     decision: str,
 ) -> dict[str, object]:
     """One trigger-log row: every sentinel diagnostic for one monitored day/run,
@@ -639,6 +677,14 @@ def _trigger_log_row(
     function."""
     s1_fired = s1_fires(s1_rate, s1_threshold)
     s2_fired = s2_fires(s2_mic, anchor, mad)
+    # s3 is None-able: a sentinel-only day has no monitor run, hence no frozen
+    # rate to watch -- its s3 fields stay None (JSON null / CSV NaN) rather
+    # than pretending a quiet reading existed.
+    s3_fired = (
+        _s3_fires(s3_rate, s3_threshold)
+        if s3_rate is not None and s3_threshold is not None
+        else None
+    )
     return {
         "day": day,
         "era": era,
@@ -653,6 +699,9 @@ def _trigger_log_row(
         "s2_mad": mad,
         "s2_fired": s2_fired,
         "s2_attribution": attribution,
+        "s3_rate": s3_rate,
+        "s3_threshold": s3_threshold,
+        "s3_fired": s3_fired,
         "decision": decision,
     }
 
@@ -767,20 +816,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "D1: replay the pinned P9 run set chronologically against a B1 "
-            "(era-B) snapshot, evaluate two label-free drift sentinels per day "
-            "(s1 audio-beats mode-bank rejection, s2 raw mic/vibration level-"
-            "step), and report three FAR regimes -- always-frozen, always-"
-            "recalibrate, once+triggered -- on the common recalibrate scoring-"
-            "split population (A1.6), plus a trigger log and the 080726 "
-            "pillar-3 TPR-retained readout (spec §3.D1)."
+            "(era-B) snapshot, evaluate three label-free drift sentinels per "
+            "day (s1 audio-beats mode-bank rejection, s2 raw mic/vibration "
+            "level-step, s3 frozen-arm alarm-rate watchdog), and report three "
+            "FAR regimes -- always-frozen, always-recalibrate, once+triggered "
+            "-- on the common recalibrate scoring-split population (A1.6), "
+            "plus a trigger log and the 080726 pillar-3 TPR-retained readout "
+            "(spec §3.D1)."
         )
     )
     parser.add_argument(
         "--representation", required=True, choices=_REPRESENTATION_CHOICES,
         help="The ONE FAR-scored variant this invocation replays (the "
              "run_step2 one-arm rule) -- must match --snapshot's own fitted "
-             "variant. The two sentinels are representation-INDEPENDENT "
-             "(module docstring) and are evaluated regardless of this choice.",
+             "variant. s1/s2 are representation-INDEPENDENT (module "
+             "docstring) and are evaluated regardless of this choice; s3 "
+             "watches THIS representation's own frozen-arm alarm rate, so it "
+             "is scoped to the replayed arm by construction.",
     )
     parser.add_argument(
         "--snapshot", type=Path, required=True,
@@ -938,23 +990,28 @@ def main(argv: list[str] | None = None) -> int:
         vib_fired = s2_fires(s2_vib_median, s2_vib.anchor, s2_vib.mad)
         attribution = s2_attribution(mic_fires=mic_fired, vib_fires=vib_fired)
         s1_fired = s1_fires(s1_rate, s1.threshold)
-        triggered = _trigger_verdict(s1_fired=s1_fired, s2_fired=mic_fired)
-        decision = "recalibrate" if triggered else "frozen"
-
-        row = _trigger_log_row(
-            day=entry.day, era=entry.era, tags=entry.tags,
-            s1_rate=s1_rate, s1_threshold=s1.threshold,
-            low_confidence_modes=s1.bank.low_confidence_modes,
-            s2_mic=s2_mic_median, s2_vib=s2_vib_median,
-            anchor=s2_mic.anchor, mad=s2_mic.mad,
-            attribution=attribution, decision=decision,
-        )
-        row["run"] = entry.run
-        trigger_log.append(row)
 
         if _TAG_SENTINEL_ONLY in entry.tags:
-            continue  # no Betriebsdaten -> no monitor.py/FAR row
+            # No Betriebsdaten -> no monitor.py run -> no frozen rate for s3:
+            # the verdict stays two-sentinel and the s3 fields stay None.
+            triggered = _trigger_verdict(s1_fired=s1_fired, s2_fired=mic_fired)
+            decision = "recalibrate" if triggered else "frozen"
+            row = _trigger_log_row(
+                day=entry.day, era=entry.era, tags=entry.tags,
+                s1_rate=s1_rate, s1_threshold=s1.threshold,
+                low_confidence_modes=s1.bank.low_confidence_modes,
+                s2_mic=s2_mic_median, s2_vib=s2_vib_median,
+                anchor=s2_mic.anchor, mad=s2_mic.mad,
+                attribution=attribution, s3_rate=None, s3_threshold=None,
+                decision=decision,
+            )
+            row["run"] = entry.run
+            trigger_log.append(row)
+            continue  # no FAR row either
 
+        # Monitor runs come BEFORE the trigger verdict: s3 (alarm-rate
+        # watchdog, `_S3_FACTOR`) watches the frozen arm's own raw
+        # scored-window rate, which only exists once the frozen arm ran.
         run_out = out_dir / "monitor" / entry.run
         try:
             frozen_alarms = _run_monitor(
@@ -978,7 +1035,28 @@ def main(argv: list[str] | None = None) -> int:
         # full-population secondary; for the EVENT-BEARING day the
         # "raw scored-window FAR" must stay visible too,
         # labeled and distinct from the event-free headline computed below.
+        # Doubles as s3's watched quantity: RAW and event-INCLUSIVE by design
+        # (the event-free basis would smuggle ground truth into a label-free
+        # trigger -- `_S3_FACTOR`'s design rules).
         frozen_far_secondary = _read_realized_far(frozen_alarms)
+
+        s3_threshold = _S3_FACTOR * float(args.alpha)
+        s3_fired = _s3_fires(frozen_far_secondary, s3_threshold)
+        triggered = _trigger_verdict(
+            s1_fired=s1_fired, s2_fired=mic_fired, s3_fired=s3_fired
+        )
+        decision = "recalibrate" if triggered else "frozen"
+        row = _trigger_log_row(
+            day=entry.day, era=entry.era, tags=entry.tags,
+            s1_rate=s1_rate, s1_threshold=s1.threshold,
+            low_confidence_modes=s1.bank.low_confidence_modes,
+            s2_mic=s2_mic_median, s2_vib=s2_vib_median,
+            anchor=s2_mic.anchor, mad=s2_mic.mad,
+            attribution=attribution, s3_rate=frozen_far_secondary,
+            s3_threshold=s3_threshold, decision=decision,
+        )
+        row["run"] = entry.run
+        trigger_log.append(row)
 
         if entry.events_csv is not None:
             # EVENT-BEARING entry: the raw alarms.parquet
