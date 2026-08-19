@@ -704,6 +704,27 @@ def test_append_summary_row_recovers_from_unbalanced_quote(tmp_path, monkeypatch
     assert any(str(summary_path) in w for w in warnings), warnings
 
 
+def test_cross_day_pooled_out_dir_suffixes_non_default_alpha_and_k(tmp_path) -> None:
+    """Audit fix 2026-08-19: a non-default alpha appends `-a<alpha>` and a
+    non-default pooled k appends `-k<K>`, so sweep runs never silently overwrite
+    the standard leaf (a refactor had dropped the alpha suffix; an alpha-0.10/k-5
+    run then replaced a 0.05/k-4 leaf in place). Defaults (0.05, k=4 or k=None)
+    keep the plain leaf name, so every existing standard leaf stays addressable."""
+    import run_step2
+
+    root = tmp_path
+    base = root / "step2" / "cross-day-pooled" / "300626-tu"
+    f = run_step2._cross_day_pooled_out_dir
+    assert f(root, "300626-tu", "fusion") == base / "fusion-pooled"
+    assert f(root, "300626-tu", "fusion", alpha=0.05, k=4) == base / "fusion-pooled"
+    assert f(root, "300626-tu", "fusion", alpha=0.01) == base / "fusion-pooled-a0.01"
+    assert f(root, "300626-tu", "fusion", alpha=0.1, k=5) == base / "fusion-pooled-a0.1-k5"
+    assert (
+        f(root, "300626-tu", "fusion", alpha=0.01, norm_minutes=20.0)
+        == base / "fusion-pooled-a0.01-snorm20"
+    )
+
+
 def test_append_summary_row_upserts_same_identity(tmp_path, monkeypatch) -> None:
     """Re-running the same protocol combo must REPLACE its `summary.csv` row
     (identity: `_SUMMARY_KEY_COLUMNS` -- every config axis, no metric column),
