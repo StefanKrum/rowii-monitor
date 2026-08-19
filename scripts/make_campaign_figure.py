@@ -67,6 +67,10 @@ ROLE_STYLE = {
     "events": dict(color="#cc3311", label="controlled events"),
     "excluded": dict(color="#bbbbbb", label="excluded"),
 }
+CAL_COLOR = "#228833"   # windows used for calibration (pool, or on-day recal block)
+SCORED_COLOR = "#111111"  # windows scored (tested), held out
+TRIGGER_LOG = Path("results/step2/once-calibrated/fusion/fusion_trigger_log.csv")
+MONITOR_ROOT = Path("results/step2/once-calibrated/fusion/monitor")
 STATE_COLOR = {
     "standstill": "#e6e6e6",
     "turbine": "#88bbdd",
@@ -148,6 +152,47 @@ def session_extents(day: str):
     return sorted(out, key=lambda t: t[1])
 
 
+import pandas as pd  # noqa: E402
+
+_decisions = (
+    pd.read_csv(TRIGGER_LOG).set_index("run")["decision"].to_dict()
+    if TRIGGER_LOG.exists() else {}
+)
+
+
+def usage_segments(name: str, day: str, h0: float, h1: float):
+    """Per-window usage of one session as (start_h, end_h, color) segments,
+    read off the replayed once-per-era arm's own alarms.parquet role column:
+    green = the window's data went into calibration (the whole commissioning
+    pool, or a recalibrate-decision day's consumed on-day block), black/red =
+    the window was scored (tested). Falls back to one full-extent segment
+    where no replay artifact exists (excluded / sentinel-only sessions)."""
+    role = ROLE[name]
+    if role == "pool":
+        return [(h0, h1, CAL_COLOR)]
+    if role in ("excluded", "sentinel-only"):
+        return [(h0, h1, ROLE_STYLE[role]["color"])]
+    scored_color = ROLE_STYLE["events"]["color"] if role == "events" else SCORED_COLOR
+    arm = "frozen" if _decisions.get(name) == "frozen" else "recalibrate"
+    path = MONITOR_ROOT / name / arm / "alarms.parquet"
+    if not path.exists():
+        return [(h0, h1, scored_color)]
+    df = pd.read_parquet(path)[["t_utc_ns", "role"]]
+    df = df[df["role"].isin(["consumed_for_calibration", "scored"])]
+    mid_ns = int(day_midnight_utc(day).timestamp() * 1e9)
+    hours = (df["t_utc_ns"].to_numpy() - mid_ns) / 3.6e12
+    colors = np.where(
+        df["role"].to_numpy() == "consumed_for_calibration", CAL_COLOR, scored_color
+    )
+    segs = []
+    start = 0
+    for i in range(1, len(colors) + 1):
+        if i == len(colors) or colors[i] != colors[start] or hours[i] - hours[i - 1] > 0.05:
+            segs.append((hours[start], hours[i - 1] + 1 / 3600, colors[start]))
+            start = i
+    return segs
+
+
 plt.rcParams.update({
     "font.family": "sans-serif", "font.size": 7.5, "axes.linewidth": 0.6,
     "xtick.labelsize": 7, "ytick.labelsize": 6.5,
@@ -169,28 +214,35 @@ for ax, (day, label, era) in zip(axes, DAYS):
     for name, h0, h1 in session_extents(day):
         style = ROLE_STYLE[ROLE[name]]
         ls = ":" if ROLE[name] == "excluded" else "-"
-        ax.plot([h0, h1], [352, 352], color=style["color"], lw=2.4,
-                linestyle=ls, solid_capstyle="butt", zorder=4, clip_on=False)
+        for s0, s1, col in usage_segments(name, day, h0, h1):
+            ax.plot([s0, s1], [352, 352], color=col, lw=3.2, linestyle=ls,
+                    solid_capstyle="butt", zorder=4, clip_on=False)
         ax.text((h0 + h1) / 2, 385, SHORT[name], ha="center", va="bottom",
                 fontsize=6.2, color=style["color"], clip_on=False)
     ax.set_ylim(-320, 340)
-    ax.set_yticks([-280, 0, 280])
+    ax.set_yticks([-280, 280])
     ax.axhline(0, color="#cccccc", lw=0.4, zorder=1)
-    ax.text(-0.012, 0.5, f"{label}\n(era {era})", transform=ax.transAxes,
+    ax.text(-0.075, 0.5, f"{label}\n(era {era})", transform=ax.transAxes,
             ha="right", va="center", fontsize=7.5)
     ax.spines[["top", "right"]].set_visible(False)
 
 axes[-1].set_xlim(0, 24)
 axes[-1].set_xticks(range(0, 25, 2))
 axes[-1].set_xlabel("hour of day (UTC)")
-fig.text(0.045, 0.5, "active power (MW; negative = pump)", rotation=90,
+fig.text(0.006, 0.5, "active power (MW; negative = pump)", rotation=90,
          va="center", fontsize=7.5)
 
 state_handles = [Patch(color=c, label=s) for s, c in STATE_COLOR.items()]
 role_handles = [
-    Line2D([], [], color=v["color"], lw=2.4,
-           linestyle=":" if k == "excluded" else "-", label=v["label"])
-    for k, v in ROLE_STYLE.items()
+    Line2D([], [], color=CAL_COLOR, lw=3.2,
+           label="used for calibration (pool / on-day block)"),
+    Line2D([], [], color=SCORED_COLOR, lw=3.2, label="scored (tested), held out"),
+    Line2D([], [], color=ROLE_STYLE["events"]["color"], lw=3.2,
+           label="scored, controlled events"),
+    Line2D([], [], color=ROLE_STYLE["sentinel-only"]["color"], lw=3.2,
+           label="sentinel-only (no process data)"),
+    Line2D([], [], color=ROLE_STYLE["excluded"]["color"], lw=3.2, linestyle=":",
+           label="excluded"),
 ]
 fig.legend(handles=state_handles + role_handles, loc="lower center",
            ncol=4, fontsize=6.4, frameon=False, bbox_to_anchor=(0.53, -0.005))
