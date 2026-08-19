@@ -1729,7 +1729,7 @@ def test_ensemble_alarms_never_exceed_the_most_alarm_prone_member(monkeypatch) -
         run_step2._ENSEMBLE_SEED
     )
 
-    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns, _trimmed = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
 
@@ -1770,7 +1770,7 @@ def test_ensemble_disjoint_member_alarms_never_reach_majority(monkeypatch) -> No
         },
     )
 
-    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns, _trimmed = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1804,7 +1804,7 @@ def test_ensemble_two_member_agreement_equals_shared_alarm_set(monkeypatch) -> N
         },
     )
 
-    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns, _trimmed = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1843,7 +1843,7 @@ def test_ensemble_deciding_pair_includes_lstmae_vote(monkeypatch) -> None:
         },
     )
 
-    far_table, _t0_offset_ns = run_step2._run_ensemble_view(
+    far_table, _t0_offset_ns, _trimmed = run_step2._run_ensemble_view(
         prepared_variant, prepared_logmel, labels, alpha=0.05, run_name="test",
     )
     ensemble_row = far_table[far_table["member"] == "ENSEMBLE"].iloc[0]
@@ -1934,7 +1934,7 @@ def _monkeypatch_logmel_grid(monkeypatch, run_step2, mutate_grid) -> None:
     [
         pytest.param("t0-shift-one-window", "misaligned by >= one window",
                      id="t0-shift-ge-one-window"),
-        pytest.param("n-windows-off-by-one", "grid mismatch",
+        pytest.param("n-windows-off-by-two", "grid mismatch",
                      id="structural-n-windows"),
     ],
 )
@@ -1967,9 +1967,12 @@ def test_ensemble_grid_misalignment_guard_exits_2(
             )
     else:
         def _mutate(grid: WindowGrid) -> WindowGrid:
+            # off by TWO: off-by-one is tolerated-with-trim since the 300626-tu
+            # real-data follow-up (see
+            # test_ensemble_off_by_one_window_count_trimmed_and_documented).
             return WindowGrid(
                 t0_ns=grid.t0_ns, window_ns=grid.window_ns,
-                n_windows=grid.n_windows - 1,
+                n_windows=grid.n_windows - 2,
             )
 
     _monkeypatch_logmel_grid(monkeypatch, run_step2, _mutate)
@@ -2046,6 +2049,61 @@ def test_ensemble_sub_window_grid_offset_tolerated_and_documented(
     assert len(offset_warnings) == 1, offset_warnings  # ONE warning, not per member/combo
     assert "26.0" in offset_warnings[0]
     assert "97.4" in offset_warnings[0]
+
+
+def test_ensemble_off_by_one_window_count_trimmed_and_documented(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """(real-data follow-up 2, 2026-08-19, `300626-tu`) The same stream-start physics
+    behind the tolerated sub-window offset can tip the window COUNT by one: on
+    30 June the mic-only logmel grid starts 21 ms earlier than the fusion grid AND
+    gains one extra trailing window (9184 vs 9183), which the original guard treated
+    as a fatal structural mismatch, blocking the ensemble on that day. An off-by-one
+    count is now tolerated: the longer grid's tail window -- which has no partner
+    index at all -- is trimmed, the guard's single warning names the trim, and
+    ensemble_notes.md states it next to the alignment line. Off-by-two stays fatal
+    (`test_ensemble_grid_misalignment_guard_exits_2`)."""
+    monkeypatch.setenv("ROWII_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("ROWII_RESULTS_ROOT", str(tmp_path / "results"))
+    _build_one_day_root(tmp_path / "data")
+
+    import run_step2
+
+    def _mutate(grid: WindowGrid) -> WindowGrid:
+        # the real 300626-tu shape: logmel starts 21 ms EARLIER and is one window
+        # LONGER than the sweep variant's intersection grid
+        return WindowGrid(
+            t0_ns=grid.t0_ns - 21_000_000, window_ns=grid.window_ns,
+            n_windows=grid.n_windows + 1,
+        )
+
+    _monkeypatch_logmel_grid(monkeypatch, run_step2, _mutate)
+    _patch_ensemble_members_ocsvm_iforest_stub_lstmae(monkeypatch, run_step2)
+
+    with caplog.at_level(logging.WARNING):
+        exit_code = run_step2.main(
+            [
+                "--protocol", "within-day", "--variant", "fusion", "--labels", "detected",
+                "--conditioning", "pooled", "--scorer", "knn", "--ensemble",
+            ]
+        )
+    assert exit_code == 0
+
+    ensemble_dir = (
+        tmp_path / "results" / "step2" / "within-day" / "tu" / "fusion-detected"
+        / "ensemble"
+    )
+    assert (ensemble_dir / "far_table_ensemble.csv").is_file()
+    notes_text = (ensemble_dir / "ensemble_notes.md").read_text()
+    assert "were trimmed before evaluation" in notes_text
+    assert "21.0 ms" in notes_text
+
+    guard_warnings = [
+        r.message for r in caplog.records
+        if r.levelno == logging.WARNING and "--ensemble grids" in r.message
+    ]
+    assert len(guard_warnings) == 1, guard_warnings
+    assert "trimmed 1 trailing window" in guard_warnings[0]
 
 
 # ---------------------------------------------------------------------------

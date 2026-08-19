@@ -2156,9 +2156,24 @@ def _ensemble_member_features(
     return prepared_variant.features
 
 
+def _trim_prepared_tail(prepared: PreparedRun, n: int) -> PreparedRun:
+    """Drop trailing windows so *prepared* carries exactly *n* -- used by the
+    ensemble grid guard's off-by-one tolerance: the longer grid's extra TRAILING
+    window has no partner index on the other grid, and trimming the tail leaves
+    t0 (hence the sub-window index correspondence) untouched."""
+    g = prepared.grid
+    return dataclasses.replace(
+        prepared,
+        features=prepared.features[:n],
+        valid_mask=prepared.valid_mask[:n],
+        segment_ids=prepared.segment_ids[:n],
+        grid=WindowGrid(t0_ns=g.t0_ns, window_ns=g.window_ns, n_windows=n),
+    )
+
+
 def _check_ensemble_grid_alignment(
     run_name: str, prepared_variant: PreparedRun, prepared_logmel: PreparedRun
-) -> int:
+) -> tuple[int, PreparedRun, PreparedRun, int]:
     """`--ensemble`'s grid-alignment guard (task brief binding detail 3, tolerance
     semantics per the real-data follow-up): the sweep variant's and the `logmel`
     variant's `PreparedRun`s must be STRUCTURALLY identical (`window_ns`,
@@ -2196,32 +2211,51 @@ def _check_ensemble_grid_alignment(
     rejected up front by `main`'s `_ENSEMBLE_VARIANTS` guard instead of being left
     to this check.
 
+    A window-COUNT difference of exactly one is tolerated the same way (real-data
+    follow-up 2, 2026-08-19, `300626-tu`): the same stream-start physics that
+    produces the sub-window t0 offset can tip the window count by one when the
+    earlier-starting mic-only grid gains an extra trailing window (measured: logmel
+    9184 vs fusion 9183 on a 21 ms offset). The longer side's tail window has no
+    partner index at all, so it is TRIMMED off (`_trim_prepared_tail`), logged, and
+    stated in `ensemble_notes.md`; a count difference of two or more still
+    hard-aborts.
+
     Returns:
-        The absolute t0 offset in ns between the two grids (`0` when exactly
-        aligned; always `< window_ns`) -- threaded by the caller into
-        `ensemble_notes.md`'s alignment line.
+        `(t0_offset_ns, prepared_variant, prepared_logmel, trimmed_windows)` -- the
+        absolute t0 offset in ns (`0` when exactly aligned; always `< window_ns`),
+        the two prepared runs (tail-trimmed copies when the off-by-one tolerance
+        fired, the originals otherwise), and how many windows were trimmed (0 or
+        1) -- threaded by the caller into `ensemble_notes.md`'s alignment line.
 
     Raises:
         SystemExit: code 2, with a clear message on stderr (parser.error-style; the
             argparse `parser` object itself is out of scope this deep in the call
             stack, so this raises directly rather than routing back through it), if
-            `window_ns`/`n_windows` differ at all, or the t0 offset is one full
-            window or more -- either signals a structural inconsistency this view
-            cannot safely paper over, not a per-run/per-combo condition to
-            log-and-skip.
+            `window_ns` differs, `n_windows` differ by two or more, or the t0
+            offset is one full window or more -- each signals a structural
+            inconsistency this view cannot safely paper over, not a
+            per-run/per-combo condition to log-and-skip.
     """
     va, la = prepared_variant.grid, prepared_logmel.grid
-    if va.window_ns != la.window_ns or va.n_windows != la.n_windows:
+    if va.window_ns != la.window_ns or abs(va.n_windows - la.n_windows) > 1:
         print(
             f"run_step2: --ensemble grid mismatch for run {run_name!r}: sweep-variant "
             f"grid (t0_ns={va.t0_ns}, window_ns={va.window_ns}, "
             f"n_windows={va.n_windows}) != logmel grid (t0_ns={la.t0_ns}, "
-            f"window_ns={la.window_ns}, n_windows={la.n_windows}) -- window_ns and "
-            "n_windows must be identical for the ensemble view to index both "
-            "PreparedRuns at the same window positions",
+            f"window_ns={la.window_ns}, n_windows={la.n_windows}) -- window_ns must "
+            "be identical and n_windows within one for the ensemble view to index "
+            "both PreparedRuns at the same window positions",
             file=sys.stderr,
         )
         raise SystemExit(2)
+    trimmed_windows = abs(va.n_windows - la.n_windows)
+    if trimmed_windows:
+        n = min(va.n_windows, la.n_windows)
+        if va.n_windows > n:
+            prepared_variant = _trim_prepared_tail(prepared_variant, n)
+        else:
+            prepared_logmel = _trim_prepared_tail(prepared_logmel, n)
+        va, la = prepared_variant.grid, prepared_logmel.grid
     t0_offset_ns = abs(va.t0_ns - la.t0_ns)
     if t0_offset_ns >= va.window_ns:
         print(
@@ -2233,17 +2267,22 @@ def _check_ensemble_grid_alignment(
             file=sys.stderr,
         )
         raise SystemExit(2)
-    if t0_offset_ns > 0:
+    if t0_offset_ns > 0 or trimmed_windows:
         logger.warning(
             "run_step2: --ensemble grids for run %r are offset by %.1f ms on a "
-            "%.0f ms window (minimum per-window overlap %.1f%%) -- proceeding: the "
+            "%.0f ms window (minimum per-window overlap %.1f%%)%s -- proceeding: the "
             "LSTM-AE member votes on a window shifted by this sub-window DAQ "
             "stream-start offset relative to the classical members' window "
             "(documented in ensemble_notes.md)",
             run_name, t0_offset_ns / 1e6, va.window_ns / 1e6,
             (1.0 - t0_offset_ns / va.window_ns) * 100.0,
+            (
+                f"; trimmed {trimmed_windows} trailing window(s) off the longer "
+                f"grid so both index the same {va.n_windows} windows"
+                if trimmed_windows else ""
+            ),
         )
-    return t0_offset_ns
+    return t0_offset_ns, prepared_variant, prepared_logmel, trimmed_windows
 
 
 def _ensemble_low_confidence_rows(label: int | str) -> list[_EnsembleRow]:
@@ -2384,12 +2423,13 @@ def _run_ensemble_view(
         run_name: Named run, for the grid guard's messages only.
 
     Returns:
-        `(far_table, t0_offset_ns)`: a DataFrame with columns `member, label,
-        n_calibration, n_scored, n_alarms, realized_far, low_confidence` -- one row
-        per (label, member) seen in the calibration or scoring windows, plus one
-        `member="ENSEMBLE"` row per label -- and the guard's measured absolute t0
-        offset between the two grids in ns (0 = exactly aligned; always <
-        `window_ns`), for `_write_ensemble_outputs`' notes line.
+        `(far_table, t0_offset_ns, trimmed_windows)`: a DataFrame with columns
+        `member, label, n_calibration, n_scored, n_alarms, realized_far,
+        low_confidence` -- one row per (label, member) seen in the calibration or
+        scoring windows, plus one `member="ENSEMBLE"` row per label -- the guard's
+        measured absolute t0 offset between the two grids in ns (0 = exactly
+        aligned; always < `window_ns`), and the guard's trailing-window trim count
+        (0 or 1), both for `_write_ensemble_outputs`' notes line.
 
     Raises:
         SystemExit: code 2, if the two grids differ structurally (`window_ns`/
@@ -2399,7 +2439,9 @@ def _run_ensemble_view(
             be formed (too few segments -- identical failure mode to `run_sweep`/
             `_run_score_fusion_view`).
     """
-    t0_offset_ns = _check_ensemble_grid_alignment(run_name, prepared_variant, prepared_logmel)
+    t0_offset_ns, prepared_variant, prepared_logmel, trimmed_windows = (
+        _check_ensemble_grid_alignment(run_name, prepared_variant, prepared_logmel)
+    )
 
     top_split = split_by_segments(
         prepared_variant.segment_ids, prepared_variant.valid_mask, 0.5, _ENSEMBLE_SEED
@@ -2428,7 +2470,7 @@ def _run_ensemble_view(
         ))
 
     far_table = pd.DataFrame([asdict(r) for r in rows], columns=list(_ENSEMBLE_COLUMNS))
-    return far_table, t0_offset_ns
+    return far_table, t0_offset_ns, trimmed_windows
 
 
 _ENSEMBLE_NOTES = """# Majority-ensemble notes
@@ -2482,7 +2524,9 @@ finite-sample guarantee attached to the vote rule itself.
 """
 
 
-def _ensemble_alignment_note(t0_offset_ns: int, window_ns: int) -> str:
+def _ensemble_alignment_note(
+    t0_offset_ns: int, window_ns: int, trimmed_windows: int = 0
+) -> str:
     """The run-specific "Grid alignment" section appended to `_ENSEMBLE_NOTES` (the
     one run-dependent datum in an otherwise static notes file) -- real-data follow-up:
     a tolerated sub-window t0 offset between the sweep variant's and logmel's grids
@@ -2508,11 +2552,18 @@ def _ensemble_alignment_note(t0_offset_ns: int, window_ns: int) -> str:
         "vibration-bearing sweep variant's intersection grid anchors later than "
         "logmel's mic-only grid), acceptable for a decision-level evaluation view and "
         "stated openly here.\n"
+        + (
+            f"The same stream-start physics tipped the window count by one here: "
+            f"{trimmed_windows} trailing window(s) of the longer grid, which have no "
+            "partner index on the other grid, were trimmed before evaluation.\n"
+            if trimmed_windows else ""
+        )
     )
 
 
 def _write_ensemble_outputs(
-    out_dir: Path, far_table: pd.DataFrame, *, t0_offset_ns: int, window_ns: int
+    out_dir: Path, far_table: pd.DataFrame, *, t0_offset_ns: int, window_ns: int,
+    trimmed_windows: int = 0,
 ) -> None:
     """Write `far_table_ensemble.csv` + `ensemble_notes.md` into *out_dir* -- mirrors
     `_write_score_fusion_outputs`'s own label-dtype coercion (detected cluster ids are
@@ -2526,7 +2577,8 @@ def _write_ensemble_outputs(
     table["label"] = table["label"].astype(str)
     table.to_csv(out_dir / "far_table_ensemble.csv", index=False)
     (out_dir / "ensemble_notes.md").write_text(
-        _ENSEMBLE_NOTES + _ensemble_alignment_note(t0_offset_ns, window_ns)
+        _ENSEMBLE_NOTES
+        + _ensemble_alignment_note(t0_offset_ns, window_ns, trimmed_windows)
     )
 
 
@@ -2595,7 +2647,7 @@ def _run_and_write_ensemble_view(
         return
 
     try:
-        far_table_ensemble, t0_offset_ns = _run_ensemble_view(
+        far_table_ensemble, t0_offset_ns, trimmed_windows = _run_ensemble_view(
             sweep_prepared, prepared_logmel, labels, alpha, run_name=run.name,
         )
     except ValueError as exc:
@@ -2612,6 +2664,7 @@ def _run_and_write_ensemble_view(
     _write_ensemble_outputs(
         ensemble_dir, far_table_ensemble,
         t0_offset_ns=t0_offset_ns, window_ns=sweep_prepared.grid.window_ns,
+        trimmed_windows=trimmed_windows,
     )
 
 
@@ -2689,8 +2742,8 @@ def _run_xattn_view(
     """
     from rowii.fusionx.wrapper import joint_embeddings
 
-    t0_offset_ns = _check_ensemble_grid_alignment(
-        run_name, sweep_prepared, prepared_audio
+    t0_offset_ns, sweep_prepared, prepared_audio, _trimmed = (
+        _check_ensemble_grid_alignment(run_name, sweep_prepared, prepared_audio)
     )
 
     audio_idx, vib_idx = split_branch_columns(sweep_prepared.feature_names)
