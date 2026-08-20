@@ -122,6 +122,66 @@
   ],
   "candidates": [
     {
+      "candidate_id": "010726-tu2-05",
+      "class": "impulse",
+      "session": "010726-tu2",
+      "start_utc": "2026-07-01T08:02:49.571480+00:00",
+      "criterion_text": "Triggered by a band-energy impulse (5-20 kHz search, band-energy path): a peak with z = 23.9 (register threshold z >= 6) on both microphones, coincident within 0.15 s -- p (normal-tail equivalent of the weaker mic's own z) = 8.175e-127.",
+      "state_name": "n/a",
+      "scada_state": "standstill",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu2-05_gen.wav",
+      "tur_wav": "candidates/010726-tu2-05_tur.wav"
+    },
+    {
+      "candidate_id": "300626-pu-01",
+      "class": "impulse",
+      "session": "300626-pu",
+      "start_utc": "2026-06-30T11:34:09.958000+00:00",
+      "criterion_text": "Triggered by a band-energy impulse (5-20 kHz search, band-energy path): a peak with z = 17.3 (register threshold z >= 6) on both microphones, coincident within 0.15 s -- p (normal-tail equivalent of the weaker mic's own z) = 2.245e-67.",
+      "state_name": "n/a",
+      "scada_state": "standstill",
+      "in_sample": false,
+      "gen_wav": "candidates/300626-pu-01_gen.wav",
+      "tur_wav": "candidates/300626-pu-01_tur.wav"
+    },
+    {
+      "candidate_id": "300626-tu-01",
+      "class": "impulse",
+      "session": "300626-tu",
+      "start_utc": "2026-06-30T04:32:39.402000+00:00",
+      "criterion_text": "Triggered by a band-energy impulse (5-20 kHz search, band-energy path): a peak with z = 17.3 (register threshold z >= 6) on both microphones, coincident within 0.15 s -- p (normal-tail equivalent of the weaker mic's own z) = 4.873e-67.",
+      "state_name": "n/a",
+      "scada_state": "standstill",
+      "in_sample": false,
+      "gen_wav": "candidates/300626-tu-01_gen.wav",
+      "tur_wav": "candidates/300626-tu-01_tur.wav"
+    },
+    {
+      "candidate_id": "010726-pu-01",
+      "class": "impulse",
+      "session": "010726-pu",
+      "start_utc": "2026-07-01T12:10:46.421500+00:00",
+      "criterion_text": "Triggered by a band-energy impulse (5-20 kHz search, band-energy path): a peak with z = 16.4 (register threshold z >= 6) on both microphones, coincident within 0.15 s -- p (normal-tail equivalent of the weaker mic's own z) = 1.979e-60.",
+      "state_name": "n/a",
+      "scada_state": "standstill",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-pu-01_gen.wav",
+      "tur_wav": "candidates/010726-pu-01_tur.wav"
+    },
+    {
+      "candidate_id": "010726-tu1-morning-26",
+      "class": "impulse",
+      "session": "010726-tu1-morning",
+      "start_utc": "2026-07-01T05:17:49.728500+00:00",
+      "criterion_text": "Triggered by a band-energy impulse (5-20 kHz search, band-energy path): a peak with z = 16.3 (register threshold z >= 6) on both microphones, coincident within 0.15 s -- p (normal-tail equivalent of the weaker mic's own z) = 4.758e-60.",
+      "state_name": "n/a",
+      "scada_state": "standstill",
+      "in_sample": true,
+      "gen_wav": "candidates/010726-tu1-morning-26_gen.wav",
+      "tur_wav": "candidates/010726-tu1-morning-26_tur.wav"
+    },
+    {
       "candidate_id": "010726-tu1-morning-01",
       "class": "sustained",
       "session": "010726-tu1-morning",
@@ -218,16 +278,16 @@
       "tur_wav": "candidates/270626-pu_ph_pu_ph_pu_ph-1-02_tur.wav"
     },
     {
-      "candidate_id": "010726-tu1-morning-02",
+      "candidate_id": "300626-tu-26",
       "class": "transient",
-      "session": "010726-tu1-morning",
-      "start_utc": "2026-07-01T03:07:51.731000+00:00",
-      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 3.610e-04).",
+      "session": "300626-tu",
+      "start_utc": "2026-06-30T02:30:57.477000+00:00",
+      "criterion_text": "Triggered by a single short impulse (BEATs path): one window with p < 0.001 against the normal model (p = 2.930e-04).",
       "state_name": "turbine",
       "scada_state": "turbine",
-      "in_sample": true,
-      "gen_wav": "candidates/010726-tu1-morning-02_gen.wav",
-      "tur_wav": "candidates/010726-tu1-morning-02_tur.wav"
+      "in_sample": false,
+      "gen_wav": "candidates/300626-tu-26_gen.wav",
+      "tur_wav": "candidates/300626-tu-26_tur.wav"
     },
     {
       "candidate_id": "290626-tu-11",
