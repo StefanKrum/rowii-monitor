@@ -1,0 +1,102 @@
+# strikes_register_pu.csv -- PU-session (pump, -279 MW) verification register: 90 protocol slots (12 positions x3 + 18 guide-vane covers x3), one row per intended Schonhammer strike.
+# Provenance: reproduction of the measurement partner's strike-detection method (attributed external reference, sensing-group/hydropower-anomaly, cloned 2026-08-18) on our own raw audio; NOT the partner's own output.
+# Method: 5-20 kHz Butterworth-4 bandpass -> 2 ms energy envelope -> per-channel MAD z-score over the 9 mics -> max across channels -> threshold k>30, frames <0.25 s merged into one impulse group; slot filled by pairing each mark/detector timestamp against the protocol slot within +/-0.3 s.
+# Run: 2026-08-18/19, results/strike-repro/{repro_bruno_strikes.py,build_strike_register.py}, on data/illwerke-080726/20260708 Messung/. Timebase: Gantner epoch-2000 wall clock -> true UTC (wall - 2h).
+# EDGE-ARTIFACT CORRECTION: causal-filter ring-in at each read-chunk start produced fake impulses -- 10/94 raw PU detections were such artifacts (one per position minute under pump noise; the partner's own per-minute scan carries the same artifact: his "4th impulses" at PU positions and his lone under-pump landmark detections are the same ring-in transient, not real strikes). Fixed with EDGE_GUARD_S=0.05 (first 50 ms of each chunk excluded). Validation: guard disabled reproduces the partner's published per-minute table exactly, 30/30 reference values.
+# Columns: slot,strike_no,t_utc,source,det_k,gt_mark_no. source: both (annotator mark + detector agree <=0.3 s) / annotated-only / detector-only / unresolved (no timestamp recovered) / rhythm-inferred (matched-filter scan below the null, see last_six_verdicts.csv; t_utc left blank).
+# TALLY AS SHIPPED (counted directly from this file, 2026-08-19): 80 both + 4 annotated-only = 84 measured, 4 rhythm-inferred (landmark-A_kugelschieber#2/#3, landmark-C_EG#2/#3), 2 unresolved (landmark-A_kugelschieber#1, landmark-C_EG#1) = 90.
+# CAVEAT: the analysis trail documents two template-confirmed single strikes recovered for the 2 unresolved slots above (A_kugelschieber 2026-07-08T12:49:46.216+00:00, C_EG 2026-07-08T13:01:19.670+00:00, via confirm_missing_strikes.py) -- that resolution was never written back into this register. See ../README.md and research/notes/analysis_2026-08-18_bruno_180_hits_reproduction.md (master-thesis repo) for the full derivation.
+# This is an independent verification track; the canonical per-strike ground truth for evaluation remains ../080726_strikes_seconds_pu.csv (annotator marks).
+# CONSOLIDATED 2026-08-19 (consolidate_register.py): bearing-based ST vane assignment and the two template-confirmed PU landmark singles merged in; tally now 174/180 measured + 6 rhythm-inferred across both sessions.
+# DOWNGRADE 2026-08-19 (post listening review): the two under-pump landmark template finds are kept only as source=candidate-statistical (score barely above the point-test null, NOT audible to the annotator, NOT visually distinguishable from background in fine-resolution spectrograms; zoom_check_*.png). Measured tally is 172/180 (ST 88, PU 84); the 6 PU landmark slots count as unresolved under pump noise.
+slot,strike_no,t_utc,source,det_k,gt_mark_no
+plate-gen_0,1,2026-07-08T12:43:01.568+00:00,both,1897,1
+plate-gen_0,2,2026-07-08T12:43:02.248+00:00,both,3860,2
+plate-gen_0,3,2026-07-08T12:43:03.023+00:00,both,4580,3
+plate-gen_90,1,2026-07-08T12:44:01.822+00:00,both,7104,1
+plate-gen_90,2,2026-07-08T12:44:02.654+00:00,both,13652,2
+plate-gen_90,3,2026-07-08T12:44:03.391+00:00,both,11519,3
+plate-gen_180,1,2026-07-08T12:45:03.051+00:00,both,1596,1
+plate-gen_180,2,2026-07-08T12:45:03.869+00:00,both,1465,2
+plate-gen_180,3,2026-07-08T12:45:04.590+00:00,both,3415,3
+plate-gen_270,1,2026-07-08T12:46:02.120+00:00,both,928,1
+plate-gen_270,2,2026-07-08T12:46:02.833+00:00,both,1444,2
+plate-gen_270,3,2026-07-08T12:46:03.636+00:00,both,578,3
+plate-tur_bottom,1,2026-07-08T12:47:02.454+00:00,both,2156,1
+plate-tur_bottom,2,2026-07-08T12:47:03.241+00:00,both,4816,2
+plate-tur_bottom,3,2026-07-08T12:47:04.090+00:00,both,10674,3
+landmark-B_11TG,1,2026-07-08T12:48:03.190+00:00,both,245,1
+landmark-B_11TG,2,2026-07-08T12:48:03.843+00:00,both,167,2
+landmark-B_11TG,3,2026-07-08T12:48:04.657+00:00,both,117,3
+landmark-A_kugelschieber,1,2026-07-08T12:49:46.216+00:00,candidate-statistical,,
+landmark-A_kugelschieber,2,,rhythm-inferred,,
+landmark-A_kugelschieber,3,,rhythm-inferred,,
+plate-tur_0,1,2026-07-08T12:54:02.531+00:00,both,3158,1
+plate-tur_0,2,2026-07-08T12:54:03.124+00:00,both,5751,2
+plate-tur_0,3,2026-07-08T12:54:03.827+00:00,both,2768,3
+plate-tur_90,1,2026-07-08T12:55:01.795+00:00,both,681,1
+plate-tur_90,2,2026-07-08T12:55:02.473+00:00,both,2152,2
+plate-tur_90,3,2026-07-08T12:55:03.006+00:00,both,971,3
+plate-tur_180,1,2026-07-08T12:56:02.339+00:00,both,2566,1
+plate-tur_180,2,2026-07-08T12:56:02.977+00:00,both,1219,2
+plate-tur_180,3,2026-07-08T12:56:03.555+00:00,both,2357,3
+plate-tur_270,1,2026-07-08T12:57:02.221+00:00,both,1809,1
+plate-tur_270,2,2026-07-08T12:57:02.819+00:00,both,3449,2
+plate-tur_270,3,2026-07-08T12:57:03.437+00:00,both,11776,3
+landmark-C_EG,1,2026-07-08T13:01:19.670+00:00,candidate-statistical,,
+landmark-C_EG,2,,rhythm-inferred,,
+landmark-C_EG,3,,rhythm-inferred,,
+vane_01,1,2026-07-08T12:50:29.216+00:00,both,1069,1
+vane_01,2,2026-07-08T12:50:29.877+00:00,both,702,2
+vane_01,3,2026-07-08T12:50:30.445+00:00,both,532,3
+vane_02,1,2026-07-08T12:50:33.233+00:00,both,1506,4
+vane_02,2,2026-07-08T12:50:33.867+00:00,both,785,5
+vane_02,3,2026-07-08T12:50:34.446+00:00,both,999,6
+vane_03,1,2026-07-08T12:50:37.297+00:00,both,324,7
+vane_03,2,2026-07-08T12:50:37.995+00:00,both,412,8
+vane_03,3,2026-07-08T12:50:38.553+00:00,both,353,9
+vane_04,1,2026-07-08T12:50:41.130+00:00,both,38,10
+vane_04,2,2026-07-08T12:50:41.756+00:00,annotated-only,,11
+vane_04,3,2026-07-08T12:50:42.297+00:00,both,113,12
+vane_05,1,2026-07-08T12:50:47.152+00:00,both,1944,14
+vane_05,2,2026-07-08T12:50:47.814+00:00,both,1672,15
+vane_05,3,2026-07-08T12:50:50.870+00:00,both,914,18
+vane_06,1,2026-07-08T12:50:56.969+00:00,both,178,19
+vane_06,2,2026-07-08T12:50:57.459+00:00,both,560,20
+vane_06,3,2026-07-08T12:50:58.000+00:00,both,1911,21
+vane_07,1,2026-07-08T12:51:00.549+00:00,both,1070,22
+vane_07,2,2026-07-08T12:51:01.197+00:00,both,566,23
+vane_07,3,2026-07-08T12:51:01.728+00:00,both,1463,24
+vane_08,1,2026-07-08T12:51:03.845+00:00,both,561,25
+vane_08,2,2026-07-08T12:51:04.414+00:00,both,498,26
+vane_08,3,2026-07-08T12:51:05.085+00:00,both,550,27
+vane_09,1,2026-07-08T12:51:07.064+00:00,annotated-only,,28
+vane_09,2,2026-07-08T12:51:07.654+00:00,both,73,29
+vane_09,3,2026-07-08T12:51:08.212+00:00,both,455,30
+vane_10,1,2026-07-08T12:51:10.116+00:00,both,506,31
+vane_10,2,2026-07-08T12:51:10.756+00:00,both,1389,32
+vane_10,3,2026-07-08T12:51:11.439+00:00,both,246,33
+vane_11,1,2026-07-08T12:51:14.039+00:00,both,943,34
+vane_11,2,2026-07-08T12:51:14.446+00:00,both,1101,35
+vane_11,3,2026-07-08T12:51:14.943+00:00,both,543,36
+vane_12,1,2026-07-08T12:51:19.921+00:00,both,1984,37
+vane_12,2,2026-07-08T12:51:20.603+00:00,both,2602,38
+vane_12,3,2026-07-08T12:51:21.088+00:00,both,3011,39
+vane_13,1,2026-07-08T12:51:23.116+00:00,both,367,40
+vane_13,2,2026-07-08T12:51:23.700+00:00,both,188,41
+vane_13,3,2026-07-08T12:51:24.283+00:00,both,1130,42
+vane_14,1,2026-07-08T12:51:26.640+00:00,both,2509,43
+vane_14,2,2026-07-08T12:51:27.319+00:00,both,1566,44
+vane_14,3,2026-07-08T12:51:27.787+00:00,both,2684,45
+vane_15,1,2026-07-08T12:51:59.648+00:00,both,2278,46
+vane_15,2,2026-07-08T12:52:00.164+00:00,both,2450,47
+vane_15,3,2026-07-08T12:52:00.543+00:00,both,4370,48
+vane_16,1,2026-07-08T12:52:04.103+00:00,annotated-only,,49
+vane_16,2,2026-07-08T12:52:04.605+00:00,both,33,50
+vane_16,3,2026-07-08T12:52:05.232+00:00,annotated-only,,51
+vane_17,1,2026-07-08T12:52:07.829+00:00,both,831,52
+vane_17,2,2026-07-08T12:52:08.381+00:00,both,1178,53
+vane_17,3,2026-07-08T12:52:08.810+00:00,both,1572,54
+vane_18,1,2026-07-08T12:52:12.357+00:00,both,639,55
+vane_18,2,2026-07-08T12:52:12.984+00:00,both,434,56
+vane_18,3,2026-07-08T12:52:13.507+00:00,both,395,57

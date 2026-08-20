@@ -1,0 +1,82 @@
+# bearing_st_sweep.csv -- ST guide-vane sweep: amplitude-bearing azimuth per detected impulse and the resulting 18-vane grouping (level bearing only; ST session has no PU counterpart -- the PU vane sweep already resolves cleanly by mark/detector timing, no bearing pass needed).
+# Provenance: reproduction of the measurement partner's beamforming target (attributed external reference, sensing-group/hydropower-anomaly, cloned 2026-08-18) on our own raw audio; NOT the partner's own output. His SRP-PHAT phase bearing was tried and rejected here (fails in this near field: the struck plate sits AT a mic position; worst pooled error 161 deg, twice confirmed on mark onsets and detector peaks).
+# Method: amplitude bearing -- 5-20 kHz band energy per mic over an 80 ms window, energy^0.5-weighted circular mean over the ring mics; calibrated to +/-7 deg on 6 of 8 ring plates (worst case 25 deg). Sweep grouping: loud impulses (k>=500) clustered into 1.5 s time bursts, consecutive bursts merged within 11 deg of azimuth -> exactly 18 vane groups, monotone ~20 deg clockwise progression starting near 350 deg (mic 0 deg), matching the protocol.
+# Run: 2026-08-19, results/strike-repro/bearing_vane_assignment.py, on data/illwerke-080726/20260708 Messung/. Timebase: Gantner epoch-2000 wall clock -> true UTC (wall - 2h).
+# Columns: vane_group,gt_mark_no,t_utc,azimuth_deg,method. gt_mark_no is blank for impulses not matched to an annotator mark (bounces/extra impulses within a group). This grouping is the best data-supported assignment, not exact per-vane ground truth (see analysis note Addendum 3 caveats, e.g. group 14).
+# NOT merged back into strikes_register_st.csv: this file resolves most of the slots the register still marks "unresolved" for ST vanes (assignment-ambiguous, not missing -- 71 sweep impulses exist for only 54 slots), but that merge was never written back. See ../README.md.
+# Independent verification track; canonical per-strike ground truth remains ../080726_strikes_seconds_st.csv. Full trail: research/notes/analysis_2026-08-18_bruno_180_hits_reproduction.md (master-thesis repo).
+vane_group,gt_mark_no,t_utc,azimuth_deg,method
+1,1,2026-07-08T10:24:16.860+00:00,344.2,level
+1,2,2026-07-08T10:24:23.546+00:00,284.4,level
+1,3,2026-07-08T10:24:25.974+00:00,300.8,level
+1,4,2026-07-08T10:24:27.151+00:00,292.1,level
+1,5,2026-07-08T10:24:29.062+00:00,288.2,level
+1,6,2026-07-08T10:24:31.001+00:00,285.6,level
+1,7,2026-07-08T10:24:33.490+00:00,357.8,level
+2,8,2026-07-08T10:24:36.026+00:00,340.5,level
+2,9,2026-07-08T10:24:36.846+00:00,348.1,level
+2,10,2026-07-08T10:24:37.626+00:00,348.0,level
+3,11,2026-07-08T10:24:41.466+00:00,1.7,level
+3,12,2026-07-08T10:24:42.272+00:00,0.1,level
+3,13,2026-07-08T10:24:43.060+00:00,359.8,level
+4,14,2026-07-08T10:24:46.408+00:00,15.4,level
+4,15,2026-07-08T10:24:47.182+00:00,13.7,level
+4,16,2026-07-08T10:24:48.022+00:00,14.0,level
+5,17,2026-07-08T10:24:51.434+00:00,55.8,level
+5,18,2026-07-08T10:24:52.238+00:00,55.2,level
+5,19,2026-07-08T10:24:53.076+00:00,58.9,level
+6,20,2026-07-08T10:24:56.846+00:00,71.6,level
+6,21,2026-07-08T10:24:57.632+00:00,70.3,level
+6,22,2026-07-08T10:24:58.434+00:00,73.8,level
+7,23,2026-07-08T10:25:00.976+00:00,88.7,level
+7,24,2026-07-08T10:25:01.748+00:00,90.5,level
+7,25,2026-07-08T10:25:02.522+00:00,92.4,level
+7,26,2026-07-08T10:25:05.240+00:00,98.8,level
+7,27,2026-07-08T10:25:06.054+00:00,95.7,level
+7,28,2026-07-08T10:25:06.834+00:00,96.8,level
+7,29,2026-07-08T10:25:09.204+00:00,104.1,level
+7,30,2026-07-08T10:25:09.950+00:00,101.7,level
+7,31,2026-07-08T10:25:10.722+00:00,102.0,level
+8,32,2026-07-08T10:25:13.118+00:00,138.8,level
+8,33,2026-07-08T10:25:13.942+00:00,139.5,level
+8,34,2026-07-08T10:25:14.724+00:00,137.8,level
+9,35,2026-07-08T10:25:16.818+00:00,157.5,level
+9,36,2026-07-08T10:25:17.594+00:00,160.6,level
+9,37,2026-07-08T10:25:18.396+00:00,162.5,level
+10,38,2026-07-08T10:25:20.396+00:00,173.2,level
+10,39,2026-07-08T10:25:21.194+00:00,170.4,level
+10,40,2026-07-08T10:25:21.968+00:00,172.1,level
+11,41,2026-07-08T10:25:24.386+00:00,186.4,level
+11,42,2026-07-08T10:25:25.204+00:00,187.6,level
+11,43,2026-07-08T10:25:25.990+00:00,187.6,level
+11,44,2026-07-08T10:25:30.459+00:00,102.1,level
+11,45,2026-07-08T10:25:31.077+00:00,193.2,level
+11,46,2026-07-08T10:25:31.812+00:00,192.9,level
+12,47,2026-07-08T10:25:33.814+00:00,216.9,level
+12,48,2026-07-08T10:25:34.596+00:00,220.5,level
+12,49,2026-07-08T10:25:35.376+00:00,223.2,level
+13,50,2026-07-08T10:25:37.636+00:00,237.4,level
+13,51,2026-07-08T10:25:38.426+00:00,242.4,level
+13,52,2026-07-08T10:25:39.184+00:00,239.8,level
+14,53,2026-07-08T10:25:53.496+00:00,74.1,level
+14,,2026-07-08T10:25:54.886+00:00,111.8,level
+14,,2026-07-08T10:25:55.756+00:00,85.1,level
+14,54,2026-07-08T10:26:00.424+00:00,156.5,level
+14,,2026-07-08T10:26:01.080+00:00,155.6,level
+14,55,2026-07-08T10:26:05.813+00:00,267.6,level
+14,56,2026-07-08T10:26:10.150+00:00,295.7,level
+15,57,2026-07-08T10:26:14.640+00:00,287.0,level
+15,58,2026-07-08T10:26:16.108+00:00,287.7,level
+15,59,2026-07-08T10:26:18.572+00:00,282.8,level
+15,60,2026-07-08T10:26:19.302+00:00,283.2,level
+15,61,2026-07-08T10:26:20.012+00:00,282.2,level
+16,62,2026-07-08T10:26:23.178+00:00,316.4,level
+16,63,2026-07-08T10:26:23.920+00:00,317.2,level
+16,64,2026-07-08T10:26:24.670+00:00,315.7,level
+17,65,2026-07-08T10:26:27.428+00:00,349.8,level
+17,66,2026-07-08T10:26:28.098+00:00,350.3,level
+17,67,2026-07-08T10:26:28.782+00:00,349.3,level
+17,68,2026-07-08T10:26:32.068+00:00,346.5,level
+17,69,2026-07-08T10:26:32.754+00:00,345.5,level
+17,70,2026-07-08T10:26:33.476+00:00,347.0,level
+18,71,2026-07-08T10:26:41.144+00:00,275.1,level

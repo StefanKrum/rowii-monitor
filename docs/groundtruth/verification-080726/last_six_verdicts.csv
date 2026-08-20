@@ -1,0 +1,13 @@
+# last_six_verdicts.csv -- pre-registered matched-filter scan for the 6 protocol slots that stayed unresolved after mark/detector pairing and template confirmation: PU landmark-A_kugelschieber#2/#3, PU landmark-C_EG#2/#3, ST vane_18#2/#3.
+# Provenance: subagent run, 2026-08-19, results/strike-repro/last_six_scan.py, on our own raw audio (data/illwerke-080726/20260708 Messung/); pre-registered search windows, not post-hoc.
+# Method: 25 ms template-score scan (per-session median 5-20 kHz envelope shape + median log band spectrum from the 'both' strikes, loudest channel; score = min of the two cosines) against a look-elsewhere-calibrated null (distribution of scan MAXIMA over 150 equal-width strike-free windows from the same session, per null_max/null_p99 columns).
+# Result: ALL 6 slots verdict NOT FOUND -- every candidate peak sat below even null p99 (PU scan_peak_score 0.663-0.679 vs null_p99 0.750; ST 0.556-0.558 vs null_p99 0.814). predicted_t_utc is a rhythm-based estimate only (+/-0.4 s), not a measured timestamp -- t_utc in the register is left blank for these 6 slots and source is set to "rhythm-inferred".
+# Timebase: Gantner epoch-2000 wall clock -> true UTC (wall - 2h). Reading note: "no evidence" is not "did not happen" -- background transients in this data can score up to ~0.75, so a genuinely quiet strike could still hide below the ceiling.
+# Independent verification track; canonical per-strike ground truth remains ../080726_strikes_seconds_{st,pu}.csv. Full trail: research/notes/analysis_2026-08-18_bruno_180_hits_reproduction.md (master-thesis repo).
+slot,verdict,predicted_t_utc,scan_peak_score,null_max,null_p99,energy_z,bearing_deg,rhythm_offset_s
+landmark-A_kugelschieber#2,NOT FOUND,2026-07-08T12:49:45.466+00:00,0.670,0.751,0.750,2.1,,-0.866
+landmark-A_kugelschieber#3,NOT FOUND,2026-07-08T12:49:47.716+00:00,0.667,0.751,0.750,1.8,,+2.084
+landmark-C_EG#2,NOT FOUND,2026-07-08T13:01:18.170+00:00,0.663,0.751,0.750,2.9,,-2.145
+landmark-C_EG#3,NOT FOUND,2026-07-08T13:01:21.170+00:00,0.679,0.751,0.750,8.3,,+2.330
+vane_18#2,NOT FOUND,2026-07-08T10:26:39.644+00:00,0.556,0.868,0.814,1.0,288.6,-1.219
+vane_18#3,NOT FOUND,2026-07-08T10:26:40.394+00:00,0.558,0.868,0.814,2.0,289.0,-0.744
