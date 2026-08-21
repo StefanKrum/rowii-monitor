@@ -1771,7 +1771,9 @@ pump noise for annotator and detector alike), which no representation detects.
 On the measured-only split audio-beats is 88/88 (ST) and 84/84 (PU). The
 0.8 MB distilled student holds 86/90 (ST) / 79/90 (PU); handcrafted audio,
 vibration, and fusion sit far lower (fusion 17/90 ST, 3/90 PU). First-alarm
-latency (detected physical strikes, 1.5 s folding): median 0.65 s ST / 0.35 s
-PU on the 1 s hop, 0.12 s / 0.09 s on the 0.25 s fine grid. The fixed-threshold
+latency (per protocol slot, first alarm within a 5 s horizon — the thesis-figure
+basis): median 0.52 s ST / 0.57 s PU on the 1 s hop, 0.11 s on the 0.25 s fine
+grid; on the physical-strike basis (1.5 s folding, REPORT.md (c)) the medians
+read 0.65 s / 0.35 s. The fixed-threshold
 MAD baseline at its k=2.409 operating point reaches 36/90 in both sessions
 (0/90 at k=5) — far below every learned representation that works at all.
