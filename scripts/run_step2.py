@@ -3363,19 +3363,20 @@ def _cross_day_pooled_out_dir(
     variant: str,
     *,
     alpha: float = 0.05,
-    k: int | None = None,
     norm_minutes: float | None = None,
     level_recal: bool = False,
 ) -> Path:
     """`results/step2/cross-day-pooled/<test_run>/<variant>-pooled/` -- the plan's
     literal layout (module docstring's "Output layout" section has the full
-    rationale: keyed by the HELD-OUT run, no scorer segment). Non-default
-    *alpha* appends `-a<alpha>` and a non-default pooled *k* appends `-k<K>`
-    (defaults: 0.05 and `DetectConfig.n_states` = 4): a sweep and the standard
-    run must never overwrite each other -- the 2026-08-19 audit traced a
-    contaminated leaf (an alpha-0.10/k-5 run silently replacing the 0.05/k-4
-    standard) to a refactor that had dropped exactly these suffixes while the
-    historical `-a0.0X` leaves still relied on them. A `--session-norm`
+    rationale: keyed by the HELD-OUT run, no scorer segment). A non-default
+    *alpha* appends `-a<alpha>` (default 0.05, the CLI's own default): an
+    alpha sweep and the standard run must never overwrite each other -- the
+    2026-08-19 audit traced a contaminated leaf (an alpha-0.10 run silently
+    replacing the 0.05 standard) to a refactor that had dropped exactly this
+    suffix while the historical `-a0.0X` leaves still relied on it. The pooled
+    k deliberately carries NO suffix (matching every historical leaf): it has
+    no canonical constant default, and the alpha suffix already separates the
+    sweep axis the contamination came from. A `--session-norm`
     run (*norm_minutes* not None) appends `-snorm<N>` (the `--states`/`-k<K>`
     suffix precedent) so an N-sweep and the raw baseline never overwrite
     each other. A `--level-recal` run (*level_recal* True)
@@ -3385,8 +3386,6 @@ def _cross_day_pooled_out_dir(
     leaf = f"{variant}-pooled"
     if alpha != 0.05:
         leaf += f"-a{alpha:g}"
-    if k is not None and k != 4:
-        leaf += f"-k{k}"
     if norm_minutes is not None:
         leaf += f"-snorm{norm_minutes:g}"
     if level_recal:
@@ -3903,7 +3902,7 @@ def _run_cross_day_pooled(
 
     out_dir = _cross_day_pooled_out_dir(
         cfg.results_root, test_run.name, variant,
-        alpha=alpha, k=k,
+        alpha=alpha,
         norm_minutes=norm_minutes if session_norm else None,
         level_recal=level_recal,
     )

@@ -583,7 +583,9 @@ def test_alpha_override_flows_into_both_tables(tmp_path, monkeypatch) -> None:
 
     hand = _hand_pipeline(prepared)
     frozen, recal, _ = _expected_mode_thresholds(hand, prepared, alpha=0.1)
-    out_dir = _out_dir(tmp_path)
+    # Non-default alpha lands in a suffixed leaf since the 2026-08-19 audit fix
+    # (alpha sweeps must never overwrite the standard leaf).
+    out_dir = _out_dir(tmp_path).with_name("fusion-pooled-a0.1")
     for filename, expected in (
         ("far_table_frozen.csv", frozen),
         ("far_table_recalibrate.csv", recal),
