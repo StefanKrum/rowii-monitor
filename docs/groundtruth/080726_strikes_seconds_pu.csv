@@ -1,6 +1,6 @@
 # 080726_strikes_seconds_pu.csv -- seconds-level per-strike ground truth for the 08.07.2026 controlled-event campaign (upgrades docs/groundtruth/080726_events_{st,pu}.csv from minute-level to per-strike UTC timestamps).
 # Provenance: interactive per-strike annotation (scripts/annotation_kit.py build's index.html) by the author.
-# Source: /Users/stefankrummenacher/Downloads/annotation_marks_pu.csv
+# Source: annotation_marks_pu.csv (author's machine)
 # Compiled: 2026-08-15 (scripts/annotation_kit.py compile-marks --csv <marks csv>, --date kept explicit for reproducibility).
 # CORRECTION 2026-08-15: cross-event snippet-overlap duplicates removed by the
 # minute-containment rule (mark kept only if event_start <= t <= event_end + 1.0s);
