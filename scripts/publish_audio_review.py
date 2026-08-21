@@ -22,10 +22,13 @@ Steps:
        audio). This also (re)writes the standalone `results/candidate-kit/
        index.html`/`index_static.html`, exactly as `candidate_kit.py build`
        always has.
-    2. Copy every candidate's per-session asset directory from `results/
+    2. Mirror every candidate's per-session asset directory from `results/
        candidate-kit/<session>/` into `docs/site/assets/review/<session>/` (a
        TRACKED, committed location -- `results/` itself is gitignored, so the
-       site's own copy is the only one that ever reaches git).
+       site's own copy is the only one that ever reaches git). PNGs are byte
+       copies; every WAV is transcoded to an AAC `.m4a` excerpt
+       (`REVIEW_AAC_BITRATE_BPS`) so the committed site stays under the 1 GB
+       GitHub Pages limit -- the canonical WAVs under `results/` are untouched.
     3. Copy the 3 real `"state"`-kind demo clip WAVs from `docs/demo/assets/`
        into `docs/site/assets/modes/` -- also site-LOCAL, not a `../demo/
        assets/` sibling-directory reference: the real local dev setup serves
@@ -62,6 +65,7 @@ import build_site as bs  # noqa: E402
 import candidate_kit as ck  # noqa: E402
 import make_demo_assets as mda  # noqa: E402
 import site_common as sc  # noqa: E402
+from build_live_audio import encode_to_m4a  # noqa: E402
 
 from rowii.config import load_config  # noqa: E402
 
@@ -72,6 +76,18 @@ SITE_DIR = REPO_ROOT / "docs" / "site"
 SITE_ASSETS_DIR = SITE_DIR / "assets" / "review"
 SITE_MODES_ASSETS_DIR = SITE_DIR / "assets" / "modes"
 ASSET_PREFIX = "assets/review/"
+
+REVIEW_AAC_BITRATE_BPS = 48_000
+"""AAC bitrate for the SITE copies of the review clips. The site publishes
+AAC-compressed excerpts of the canonical `results/candidate-kit/` WAVs (which
+stay untouched, and which the local kit pages keep playing directly): WAV at
+16 kHz/16-bit mono is 256 kbps, and the review tree's ~370 clips pushed
+`docs/` past the 1 GB GitHub Pages limit. 48 kbps is the HIGHEST rate macOS's
+`afconvert` accepts for 16 kHz mono AAC-LC (96/64/56 kbps are rejected for
+this format), above the live-session assets' own 40 kbps
+(`build_live_audio.AAC_BITRATE_BPS`) -- same encoder, codec, and container as
+those assets (`encode_to_m4a`), so range requests behave identically."""
+REVIEW_AUDIO_SUFFIX = ".m4a"
 
 
 _TABS_JS = r"""
@@ -233,13 +249,34 @@ def publish(
         shutil.rmtree(SITE_ASSETS_DIR)
     SITE_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     total_bytes = 0
+    n_encoded = 0
     for session in sessions:
         src = out_dir / session
         dst = SITE_ASSETS_DIR / session
-        shutil.copytree(src, dst)
+        dst.mkdir(parents=True, exist_ok=True)
+        # PNGs (and any other sidecar) are byte copies; every WAV is transcoded
+        # to an AAC .m4a excerpt for the site (see REVIEW_AAC_BITRATE_BPS) --
+        # the canonical results/candidate-kit WAVs are never modified.
+        for f in sorted(src.iterdir()):
+            if not f.is_file():
+                continue
+            if f.suffix == ".wav":
+                encode_to_m4a(
+                    f, dst / (f.stem + REVIEW_AUDIO_SUFFIX),
+                    bitrate_bps=REVIEW_AAC_BITRATE_BPS,
+                )
+                n_encoded += 1
+            else:
+                shutil.copy2(f, dst / f.name)
         total_bytes += sum(f.stat().st_size for f in dst.rglob("*") if f.is_file())
+    logger.info(
+        "publish_audio_review: %d review WAV(s) transcoded to AAC %d bps (.m4a site copies)",
+        n_encoded, REVIEW_AAC_BITRATE_BPS,
+    )
 
-    candidates_fragment = ck.render_candidates_fragment(results, asset_prefix=ASSET_PREFIX)
+    candidates_fragment = ck.render_candidates_fragment(
+        results, asset_prefix=ASSET_PREFIX, audio_suffix=REVIEW_AUDIO_SUFFIX
+    )
 
     site_manifest = json.loads(site_manifest_path.read_text(encoding="utf-8"))
     demo_manifest = json.loads(demo_manifest_path.read_text(encoding="utf-8"))

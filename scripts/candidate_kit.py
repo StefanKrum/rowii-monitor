@@ -3712,9 +3712,14 @@ window.CandidateKit = {
 
 _ASSET_PATH_META_KEYS = ("gen_wav", "tur_wav", "gen_flat_png", "tur_flat_png", "scada_png")
 
+_AUDIO_META_KEYS = ("gen_wav", "tur_wav")
+"""The `_ASSET_PATH_META_KEYS` members that point at audio clips -- the ones an
+`audio_suffix` override rewrites (the meta KEY names stay `*_wav`: they are the
+embedded-JSON contract `_CANDIDATE_JS` reads, regardless of the on-disk codec)."""
+
 
 def _prefixed_metas(
-    results: Sequence[CandidateAssetResult], asset_prefix: str
+    results: Sequence[CandidateAssetResult], asset_prefix: str, audio_suffix: str = ".wav"
 ) -> list[dict[str, object]]:
     """`_asset_result_to_meta` for every *results* entry, with *asset_prefix*
     prepended to every real on-disk asset path field (`_ASSET_PATH_META_KEYS`) --
@@ -3723,15 +3728,26 @@ def _prefixed_metas(
     a caller targets a DIFFERENT directory than *out_dir*: `render_candidates_
     fragment` takes the same parameter for exactly this reason --
     `scripts/publish_audio_review.py` calls it with `asset_prefix="assets/
-    review/"`, since it copies the rendered PNG/WAV tree under `docs/site/
+    review/"`, since it copies the rendered PNG tree under `docs/site/
     assets/review/` while composing `docs/site/audio_review.html` itself as a
-    sibling of `assets/`, not inside it."""
+    sibling of `assets/`, not inside it.
+
+    *audio_suffix* rewrites the `.wav` extension of the audio fields
+    (`_AUDIO_META_KEYS`) -- `.wav` by default (the local kit plays the canonical
+    `results/candidate-kit/` WAVs unchanged); `publish_audio_review.py` passes
+    `".m4a"` because the SITE copy of each review clip is an AAC-compressed
+    excerpt (`build_live_audio.encode_to_m4a`, the same codec/container the
+    live-session assets already use) rather than a byte copy of the WAV."""
     metas = [_asset_result_to_meta(r) for r in results]
-    if not asset_prefix:
-        return metas
     for m in metas:
-        for key in _ASSET_PATH_META_KEYS:
-            m[key] = asset_prefix + str(m[key])
+        if asset_prefix:
+            for key in _ASSET_PATH_META_KEYS:
+                m[key] = asset_prefix + str(m[key])
+        if audio_suffix != ".wav":
+            for key in _AUDIO_META_KEYS:
+                path = str(m[key])
+                if path.endswith(".wav"):
+                    m[key] = path[: -len(".wav")] + audio_suffix
     return metas
 
 
@@ -3763,7 +3779,7 @@ def _review_page_head(*, title: str, date_note: str) -> str:
 
 
 def render_candidates_fragment(
-    results: Sequence[CandidateAssetResult], asset_prefix: str = ""
+    results: Sequence[CandidateAssetResult], asset_prefix: str = "", audio_suffix: str = ".wav"
 ) -> tuple[str, str, str]:
     """The reusable core of the interactive candidate review UI, factored out of
     `render_index_html` (mechanical split -- computes the exact same `metas`/
@@ -3805,8 +3821,10 @@ def render_candidates_fragment(
     fragment rather than merely unused. `render_index_static_html`'s own call to
     `_prefixed_metas` is untouched by this and keeps `scada_png` (that page
     still embeds it as a plain `<img src>`, module docstring build/1's own
-    PNG generation is unaffected either way)."""
-    metas = _prefixed_metas(results, asset_prefix)
+    PNG generation is unaffected either way). *audio_suffix* (default `.wav`,
+    see `_prefixed_metas`): the published site passes `".m4a"` because its
+    review-clip copies are AAC-compressed excerpts."""
+    metas = _prefixed_metas(results, asset_prefix, audio_suffix)
     sessions = sorted({str(m["session"]) for m in metas})
     labels = {s: _SESSION_LABEL.get(s, s) for s in sessions}
     metas_for_js = [{k: v for k, v in m.items() if k != "scada_png"} for m in metas]

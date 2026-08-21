@@ -1551,6 +1551,20 @@ def test_render_candidates_fragment_returns_scoped_reusable_pieces(tmp_path: Pat
     html_text = out.read_text()
     assert css0 in html_text and body0 in html_text and js0 in html_text
 
+    # audio_suffix=".m4a" (publish_audio_review's site call): ONLY the audio
+    # fields switch extension -- the site copies are AAC excerpts, while PNG
+    # paths, meta KEY names (gen_wav/tur_wav: the embedded-JSON contract the
+    # JS reads), and the default-.wav local-kit render all stay unchanged.
+    _, body_m4a, _ = ck.render_candidates_fragment(
+        [result], asset_prefix="assets/review/", audio_suffix=".m4a"
+    )
+    assert "assets/review/290626-tu/290626-tu-02_gen.m4a" in body_m4a
+    assert "assets/review/290626-tu/290626-tu-02_tur.m4a" in body_m4a
+    assert "290626-tu-02_gen.wav" not in body_m4a
+    assert "assets/review/290626-tu/290626-tu-02_gen_flat.png" in body_m4a
+    assert '"gen_wav"' in body_m4a  # key name survives the extension rewrite
+    assert "290626-tu-02_gen.wav" in body_html  # default render still WAV
+
 
 def test_render_candidates_fragment_badge_css_scoped_to_candidate_card() -> None:
     """Fix round 1 (reviewer FIX 2): `_CANDIDATE_CARD_CSS`'s `.badge` rules must
