@@ -9,6 +9,7 @@
 # This is an independent verification track; the canonical per-strike ground truth for evaluation remains ../080726_strikes_seconds_pu.csv (annotator marks).
 # CONSOLIDATED 2026-08-19 (consolidate_register.py): bearing-based ST vane assignment and the two template-confirmed PU landmark singles merged in; tally now 174/180 measured + 6 rhythm-inferred across both sessions.
 # DOWNGRADE 2026-08-19 (post listening review): the two under-pump landmark template finds are kept only as source=candidate-statistical (score barely above the point-test null, NOT audible to the annotator, NOT visually distinguishable from background in fine-resolution spectrograms; zoom_check_*.png). Measured tally is 172/180 (ST 88, PU 84); the 6 PU landmark slots count as unresolved under pump noise.
+# EAR-CUED PASS 2026-08-19: in a final listening pass WITH the rhythm predictions displayed (channel-switchable viewer, SNR-best mics, loop/half-speed), the annotator marked times for all 8 previously open slots (source=ear-cued; +statistical where coinciding with the template candidate). These are cued annotations, NOT measurements: the measured tally stays 172/180; all 180 slots now carry a timestamp.
 slot,strike_no,t_utc,source,det_k,gt_mark_no
 plate-gen_0,1,2026-07-08T12:43:01.568+00:00,both,1897,1
 plate-gen_0,2,2026-07-08T12:43:02.248+00:00,both,3860,2
@@ -28,9 +29,9 @@ plate-tur_bottom,3,2026-07-08T12:47:04.090+00:00,both,10674,3
 landmark-B_11TG,1,2026-07-08T12:48:03.190+00:00,both,245,1
 landmark-B_11TG,2,2026-07-08T12:48:03.843+00:00,both,167,2
 landmark-B_11TG,3,2026-07-08T12:48:04.657+00:00,both,117,3
-landmark-A_kugelschieber,1,2026-07-08T12:49:46.216+00:00,candidate-statistical,,
-landmark-A_kugelschieber,2,,rhythm-inferred,,
-landmark-A_kugelschieber,3,,rhythm-inferred,,
+landmark-A_kugelschieber,1,2026-07-08T12:49:45.431+00:00,ear-cued,,
+landmark-A_kugelschieber,2,2026-07-08T12:49:46.175+00:00,ear-cued+statistical,,
+landmark-A_kugelschieber,3,2026-07-08T12:49:47.319+00:00,ear-cued,,
 plate-tur_0,1,2026-07-08T12:54:02.531+00:00,both,3158,1
 plate-tur_0,2,2026-07-08T12:54:03.124+00:00,both,5751,2
 plate-tur_0,3,2026-07-08T12:54:03.827+00:00,both,2768,3
@@ -43,9 +44,9 @@ plate-tur_180,3,2026-07-08T12:56:03.555+00:00,both,2357,3
 plate-tur_270,1,2026-07-08T12:57:02.221+00:00,both,1809,1
 plate-tur_270,2,2026-07-08T12:57:02.819+00:00,both,3449,2
 plate-tur_270,3,2026-07-08T12:57:03.437+00:00,both,11776,3
-landmark-C_EG,1,2026-07-08T13:01:19.670+00:00,candidate-statistical,,
-landmark-C_EG,2,,rhythm-inferred,,
-landmark-C_EG,3,,rhythm-inferred,,
+landmark-C_EG,1,2026-07-08T13:01:18.127+00:00,ear-cued,,
+landmark-C_EG,2,2026-07-08T13:01:19.596+00:00,ear-cued+statistical,,
+landmark-C_EG,3,2026-07-08T13:01:20.897+00:00,ear-cued,,
 vane_01,1,2026-07-08T12:50:29.216+00:00,both,1069,1
 vane_01,2,2026-07-08T12:50:29.877+00:00,both,702,2
 vane_01,3,2026-07-08T12:50:30.445+00:00,both,532,3

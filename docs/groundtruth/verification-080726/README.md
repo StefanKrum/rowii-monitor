@@ -42,10 +42,10 @@ values (24/24 position-minute counts, 6/6 sweep-minute counts).
 | source | ST | PU | total |
 |---|---:|---:|---:|
 | both (mark + detector agree, <=0.3 s) | 82 | 80 | 162 |
-| candidate-statistical (template score above point null, but not audible and not visually distinctive — see zoom_check PNGs; NOT counted as measured) | 0 | 2 | 2 |
+| (statistical candidates merged into the ear-cued rows above) | – | – | – |
 | annotated-only (5 of the 10 additionally template-hardened) | 6 | 4 | 10 |
 | **measured subtotal** | **88** | **84** | **172** |
-| rhythm-inferred (predicted time only, see last_six_verdicts.csv) | 2 | 4 | 6 |
+| ear-cued (final cued listening pass 2026-08-19; 2 also coincide with the statistical candidates) | 2 | 6 | 8 |
 | slots | 90 | 90 | 180 |
 
 Earlier packaging note (resolved): the registers initially shipped without the bearing-based

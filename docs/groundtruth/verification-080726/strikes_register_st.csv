@@ -8,6 +8,7 @@
 # CAVEAT: the analysis trail documents a further-refined "ST 88/90 measured" state once the bearing-based vane assignment (bearing_st_sweep.csv, resolves all but 2 of the 54 sweep slots) is folded in -- that merge was never written back into this register. See ../README.md and research/notes/analysis_2026-08-18_bruno_180_hits_reproduction.md (master-thesis repo) for the full derivation.
 # This is an independent verification track; the canonical per-strike ground truth for evaluation remains ../080726_strikes_seconds_st.csv (annotator marks).
 # CONSOLIDATED 2026-08-19 (consolidate_register.py): bearing-based ST vane assignment and the two template-confirmed PU landmark singles merged in; tally now 174/180 measured + 6 rhythm-inferred across both sessions.
+# EAR-CUED PASS 2026-08-19: in a final listening pass WITH the rhythm predictions displayed (channel-switchable viewer, SNR-best mics, loop/half-speed), the annotator marked times for all 8 previously open slots (source=ear-cued; +statistical where coinciding with the template candidate). These are cued annotations, NOT measurements: the measured tally stays 172/180; all 180 slots now carry a timestamp.
 slot,strike_no,t_utc,source,det_k,gt_mark_no
 landmark-C_EG,1,2026-07-08T10:15:02.243+00:00,both,31,1
 landmark-C_EG,2,2026-07-08T10:15:03.041+00:00,both,80,2
@@ -97,5 +98,5 @@ vane_17,1,2026-07-08T10:26:28.098+00:00,both,224340,66
 vane_17,2,2026-07-08T10:26:28.782+00:00,both,241493,67
 vane_17,3,2026-07-08T10:26:33.476+00:00,both,220123,70
 vane_18,1,2026-07-08T10:26:41.144+00:00,both,2825,71
-vane_18,2,,rhythm-inferred,,
-vane_18,3,,rhythm-inferred,,
+vane_18,2,2026-07-08T10:26:39.567+00:00,ear-cued,,
+vane_18,3,2026-07-08T10:26:40.344+00:00,ear-cued,,
