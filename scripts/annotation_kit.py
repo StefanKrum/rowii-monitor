@@ -784,7 +784,7 @@ def render_static_index_html(out_dir: Path) -> Path:
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         "<title>080726 Strike Annotation Kit (static)</title>\n"
         f"<style>{_INDEX_CSS}</style>\n</head>\n<body>\n"
-        "<h1>08.07.2026 &ndash; Schonhammer strike annotation (static overview)</h1>\n"
+        "<h1>08.07.2026 &ndash; Hammer-strike annotation (static overview)</h1>\n"
         '<p class="hint">Interactive annotation tool: <code>index.html</code> in '
         "this folder. This page is a read-only overview only.</p>\n"
         f"{_INSTRUCTIONS_HTML}\n{''.join(sections)}\n</body>\n</html>\n"
@@ -1658,7 +1658,7 @@ def render_interactive_index_html(out_dir: Path) -> Path:
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         "<title>080726 Strike Annotation (interactive)</title>\n"
         f"<style>{_INTERACTIVE_CSS}</style>\n</head>\n<body>\n"
-        "<h1>08.07.2026 &ndash; Schonhammer strike annotation (interactive)</h1>\n"
+        "<h1>08.07.2026 &ndash; Hammer-strike annotation (interactive)</h1>\n"
         f"{_INTERACTIVE_INSTRUCTIONS_HTML}\n"
         '<div id="app">Loading events&hellip;</div>\n'
         f'<script id="events-meta-data" type="application/json">{events_json}</script>\n'

@@ -418,7 +418,7 @@ def _demo_manifest(**overrides: object) -> dict[str, object]:
     strike_clip = {
         "file": "strike_pump_plate_tur_0.wav", "kind": "strike", "label": "plate-tur_0",
         "start_utc": "2026-07-08T12:54:00+00:00", "duration_s": 10.0,
-        "source_run": "080726-pu_strikes", "description": "Schonhammer strike ...",
+        "source_run": "080726-pu_strikes", "description": "Hammer strike ...",
     }
     return {"clips": [state_clip, strike_clip]}
 

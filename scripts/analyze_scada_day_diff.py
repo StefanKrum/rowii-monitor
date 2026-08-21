@@ -55,13 +55,13 @@ for name in RUNS:
     frames[name] = df[df["state"] == "turbine"]
 
 cols = [c for c in CHANNELS if c != "power"] + ["power"]
-print("=== Turbinen-Fenster: Median pro Tag (alle Lasten) ===")
+print("=== Turbine windows: median per day (all loads) ===")
 rows = []
 for name, df in frames.items():
     rows.append({"run": name, "n": len(df), **{c: round(float(df[c].median()), 2) for c in cols}})
 print(pd.DataFrame(rows).to_string(index=False))
 
-print("\n=== Bei GLEICHER Leistung (220-245 MW): Median pro Tag ===")
+print("\n=== At the SAME power (220-245 MW): median per day ===")
 rows = []
 for name, df in frames.items():
     m = df[(df.power >= 220) & (df.power < 245)]
@@ -71,7 +71,7 @@ for name, df in frames.items():
     rows.append({"run": name, "n": len(m), **{c: round(float(m[c].median()), 2) for c in cols}})
 print(pd.DataFrame(rows).to_string(index=False))
 
-print("\n=== Leistungsverteilung Turbine (Perzentile) ===")
+print("\n=== Turbine power distribution (percentiles) ===")
 for name, df in frames.items():
     q = np.percentile(df.power.dropna(), [5, 25, 50, 75, 95])
     print(

@@ -14,7 +14,7 @@ stylesheet/script/audio/image is inline or a same-repo relative path.
 Two subcommands:
 
     curate-clips   Trim short (`CLIP_DURATION_S` = 10 s) WAV clips from the
-                   already-extracted `results/annotation-kit/080726` (Schonhammer
+                   already-extracted `results/annotation-kit/080726` (hammer-strike
                    strikes, one representative clip per PU-session
                    event -- `curate_strike_clips`) and `results/candidate-kit`
                    (the top `CANDIDATES_PER_CLASS` model-flagged candidates per

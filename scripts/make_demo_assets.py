@@ -166,8 +166,8 @@ DASHBOARD_EVENT_TOLERANCE_S = 5.0
 the EXACT SAME pad the event-level evaluation already scored these runs against,
 not a dashboard-invented number."""
 _SESSION_LABEL = {
-    ST_RUN_NAME: "080726 – standstill, with Schonhammer strikes",
-    PU_RUN_NAME: "080726 – pump trial, with Schonhammer strikes",
+    ST_RUN_NAME: "080726 – standstill, with hammer strikes",
+    PU_RUN_NAME: "080726 – pump trial, with hammer strikes",
 }
 DASHBOARD_DEFAULT_SESSION = ST_RUN_NAME
 """`080726-st_strikes` opens first: a compact ~24 min session whose own two demo
@@ -953,7 +953,7 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=pu_events,
             gt_kind="plate-tur_0",
             description=(
-                'Schonhammer strike "plate-tur_0" (reference plate, '
+                'Hammer strike "plate-tur_0" (reference plate, '
                 "turbine side, 0°) during pump operation – SCADA-confirmed at "
                 "approx. −279 MW / −377.8 rpm."
             ),
@@ -965,7 +965,7 @@ def _build_strike_clips(pu_run: Run, st_run: Run, out_dir: Path) -> list[ClipMet
             events=st_events,
             gt_kind="plate-gen_0",
             description=(
-                'Schonhammer strike "plate-gen_0" (reference plate, '
+                'Hammer strike "plate-gen_0" (reference plate, '
                 "generator side, 0°) at standstill (calibration session)."
             ),
         ),

@@ -92,15 +92,15 @@ FLOOR = 19
 test_tu["covered"] = test_tu["bin"].map(lambda b: pool_n[int(b)] >= FLOOR if pd.notna(b) else False)
 cov = test_tu[test_tu["covered"]]
 unc = test_tu[~test_tu["covered"]]
-print(f"\n30.06-tu Turbinenfenster (scored): {len(test_tu)}")
+print(f"\n30.06-tu turbine windows (scored): {len(test_tu)}")
 print(
-    f"  in Pool-abgedeckten Lastbaendern (>= {FLOOR} Pool-Fenster): {len(cov)}"
-    f"  -> Flag-Rate {cov['alarm'].mean():.3f}"
+    f"  in pool-covered load bands (>= {FLOOR} pool windows): {len(cov)}"
+    f"  -> flag rate {cov['alarm'].mean():.3f}"
 )
-print(f"  in NICHT abgedeckten Baendern: {len(unc)}  -> Flag-Rate {unc['alarm'].mean():.3f}")
+print(f"  in bands NOT covered: {len(unc)}  -> flag rate {unc['alarm'].mean():.3f}")
 unc_bins = sorted(test_tu[~test_tu['covered']]['bin'].dropna().unique())
 alt_could = sum(alt_n[int(b)] >= FLOOR for b in unc_bins)
 print(
-    f"  nicht abgedeckte Baender: {len(unc_bins)},"
-    f" davon durch 29.06-tu abdeckbar (>= {FLOOR}): {alt_could}"
+    f"  uncovered bands: {len(unc_bins)},"
+    f" of which coverable by 29.06-tu (>= {FLOOR}): {alt_could}"
 )

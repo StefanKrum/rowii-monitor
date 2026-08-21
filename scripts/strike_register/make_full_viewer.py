@@ -81,30 +81,30 @@ SWEEP = [("st", "vane", "12:24", ["TurMic270", "TurMic90"], 210.0),
 
 BRIEFS = {
     "pu_extA_landmarkA_kugelsch": (
-        "GESUCHT: 3 Schonhammer-Schläge auf Blech, 13. TG neben dem Kugelschieber — unter "
-        "Pumpenlärm, HP-Modus nutzen! Muster: 3er-Gruppe im ~0,75-s-Takt (Gesamtspanne "
-        "~1,5–2,3 s). Beste Schätzung: um Clip-Sekunde 100,5 / 101,2 / 102,7 (K1 = "
-        "statistischer Kandidat, unbestätigt). Die Karte deckt jetzt die GESAMTE Zeit ab, "
-        "in der die Schläge physisch möglich sind (Ende B-Schläge bis Sweep-Beginn) — auch "
-        "frei durchhören. Referenzklang ohne Lärm: Karte 'landmark-A_kugelschieber' in "
-        "Session ST. Jeden gehörten Schlag mit M markieren."),
+        "WANTED: 3 soft-faced hammer strikes on sheet metal, 13th TG next to the spherical "
+        "valve — under pump noise, use HP mode! Pattern: group of 3 at a ~0.75 s rhythm "
+        "(total span ~1.5–2.3 s). Best estimate: around clip second 100.5 / 101.2 / 102.7 "
+        "(K1 = statistical candidate, unconfirmed). The card now covers the ENTIRE time in "
+        "which the strikes are physically possible (end of the B strikes to sweep start) — "
+        "also listen through freely. Reference sound without noise: card "
+        "'landmark-A_kugelschieber' in session ST. Mark every strike you hear with M."),
     "pu_extC_landmarkC_EG": (
-        "GESUCHT: 3 Schonhammer-Schläge auf Blech im Erdgeschoss (weitester Weg, leiseste "
-        "Station) — unter Pumpenlärm, HP-Modus! Muster: 3er-Gruppe im ~0,75-s-Takt. Beste "
-        "Schätzung: um Clip-Sekunde 78,2 / 79,7 / 81,2 (K1 unbestätigt). Auch ±3 s drumherum "
-        "und den Rest der Minute freihören. Referenzklang: Karte 'landmark-C_EG' in Session "
-        "ST. Mit M markieren."),
+        "WANTED: 3 soft-faced hammer strikes on sheet metal on the ground floor (longest "
+        "path, quietest station) — under pump noise, HP mode! Pattern: group of 3 at a "
+        "~0.75 s rhythm. Best estimate: around clip second 78.2 / 79.7 / 81.2 (K1 "
+        "unconfirmed). Also listen freely ±3 s around it and through the rest of the "
+        "minute. Reference sound: card 'landmark-C_EG' in session ST. Mark with M."),
     "st_focus_vane_18": (
-        "GESUCHT: 2 der 3 Schläge auf die Blechabdeckung der 18. (letzten) Leitschaufel — "
-        "Stillstand, gute Hörbarkeit. 1 Schlag ist gesichert (grün bei ~17,1 s). Muster: "
-        "3er-Gruppe im ~0,75-s-Takt — die 2 fehlenden direkt davor (orange Zonen ~15,6/16,4 s) "
-        "ODER bis ~3 s danach. NEU: der Rand-Scan fand 2 unbestätigte Nachzügler-Kandidaten "
-        "K-a? (~37,1 s, schwach) und K-b? (~61,8 s, deutlich, z=30) — bitte beide anhören: "
-        "Schlag, Hammer ablegen, oder anderes Geräusch? Klang-Referenz: die blauen "
-        "Schaufel-17-Schläge links. Mit M markieren."),
+        "WANTED: 2 of the 3 strikes on the sheet-metal cover of the 18th (last) guide "
+        "vane — standstill, good audibility. 1 strike is confirmed (green at ~17.1 s). "
+        "Pattern: group of 3 at a ~0.75 s rhythm — the 2 missing ones directly before it "
+        "(orange zones ~15.6/16.4 s) OR up to ~3 s after. NEW: the edge scan found 2 "
+        "unconfirmed straggler candidates K-a? (~37.1 s, weak) and K-b? (~61.8 s, clear, "
+        "z=30) — please listen to both: a strike, the hammer being set down, or some other "
+        "sound? Sound reference: the blue vane-17 strikes on the left. Mark with M."),
     "st_1224_vane": (
-        "Hier ist alles grün ausser GANZ AM ENDE (~Sekunde 164–167): die 2 fehlenden "
-        "vane_18-Schläge. Bequemer suchen auf der Karte 'FOKUS: vane_18' weiter unten."),
+        "Everything here is green except AT THE VERY END (~second 164–167): the 2 missing "
+        "vane_18 strikes. Easier to search on the 'FOCUS: vane_18' card further down."),
 }
 
 #: edge-scan candidates (2026-08-19) outside all previous scan windows
@@ -247,13 +247,14 @@ def main():
                     neigh.append(trel)   # a measured slot of ANOTHER card
                 else:
                     thin.append(trel)
-        title = ("Leitschaufel-Sweep (18 Schaufeln × 3)" if is_sweep
-                 else "FOKUS: vane_18 — letzte Schaufel (mit Schaufel 17 als Referenz links)"
+        title = ("Guide-vane sweep (18 vanes × 3)" if is_sweep
+                 else "FOCUS: vane_18 — last vane (with vane 17 as reference on the left)"
                  if wall_min == "focus"
-                 else "landmark-A_kugelschieber — VOLLE plausible Spanne "
-                      "(Ende B-Schläge bis Sweep-Beginn)"
+                 else "landmark-A_kugelschieber — FULL plausible span "
+                      "(end of B strikes to sweep start)"
                  if wall_min == "extA"
-                 else "landmark-C_EG — VOLLE plausible Spanne (Abstieg bis nach Protokollminute)"
+                 else "landmark-C_EG — FULL plausible span "
+                      "(descent until after the protocol minute)"
                  if wall_min == "extC" else slot_prefix)
         cards.append(dict(cid=cid, ses=ses_key.upper(), title=title, chs=chs,
                           dur=dur, is_sweep=is_sweep, t0=t0,
@@ -266,7 +267,7 @@ def main():
 
     # ---- html ----------------------------------------------------------
     head = """<!doctype html><html><head><meta charset="utf-8">
-<title>Full Strike Viewer — alle Events 08.07.2026</title><style>
+<title>Full Strike Viewer — all events 08.07.2026</title><style>
 body{background:#14161a;color:#e8e8e8;font:14px/1.45 -apple-system,Helvetica,Arial;
 margin:24px auto;max-width:1280px}
 h1{font-size:19px} h2.ses{font-size:16px;color:#9fc1ff;margin-top:30px}
@@ -302,27 +303,27 @@ button:hover{background:#39404e} button.on{background:#3d5a3f;border-color:#2ecc
 button.chb.on{background:#3a4a63;border-color:#6aa1ff}
 audio{width:250px;height:30px} .lg{color:#9aa3b0;font-size:12px;margin:4px 0 10px}
 </style></head><body>
-<h1>Full Strike Viewer — alle Events, 08.07.2026</h1>
-<div class="lg"><b style="color:#2ecc71">grün</b> = gemessener Schlag ·
-<b style="color:#f5a623">orange K?</b> = unbestätigter statistischer Kandidat ·
-<b style="color:#f5a623">orange gestrichelt + Zone</b> = fehlender Schlag,
-rhythmisch vorhergesagter Suchbereich ·
-<b style="color:rgba(46,204,113,.7)">dünn grün</b> = Zusatzimpulse/Preller
-(echt, aber ohne Protokoll-Slot) ·
-<b style="color:rgba(120,160,255,.9)">dünn blau</b> = Schlag der NACHBAR-Position
-(bereits im Register, eigene Karte) ·
-Klick ins Bild = springen · ⟲ = Loop ±1.25 s · Sweep-Karten sind horizontal scrollbar</div>
-<div id="exportbar"><b style="color:#ffd84d">Deine Marken:</b>
-Taste <b>M</b> = Marke am roten Cursor der zuletzt bedienten Karte ·
-<b>X</b> = letzte Marke dieser Karte löschen ·
-<button id="exp">Marken exportieren</button> <button id="clr">alle löschen</button>
+<h1>Full Strike Viewer — all events, 08.07.2026</h1>
+<div class="lg"><b style="color:#2ecc71">green</b> = measured strike ·
+<b style="color:#f5a623">orange K?</b> = unconfirmed statistical candidate ·
+<b style="color:#f5a623">orange dashed + zone</b> = missing strike,
+rhythm-predicted search range ·
+<b style="color:rgba(46,204,113,.7)">thin green</b> = extra impulses/bounces
+(real, but without a protocol slot) ·
+<b style="color:rgba(120,160,255,.9)">thin blue</b> = strike of the NEIGHBORING position
+(already in the register, own card) ·
+click in the image = jump · ⟲ = loop ±1.25 s · sweep cards scroll horizontally</div>
+<div id="exportbar"><b style="color:#ffd84d">Your marks:</b>
+Key <b>M</b> = set a mark at the red cursor of the last-used card ·
+<b>X</b> = delete this card's last mark ·
+<button id="exp">Export marks</button> <button id="clr">Clear all</button>
 <span id="mcount"></span><textarea id="exportbox" readonly></textarea></div>
 """
     body, last_ses = [], None
     for c in cards:
         if c["ses"] != last_ses:
             body.append(f'<h2 class="ses">Session {c["ses"]} '
-                        f'({"Stillstand" if c["ses"] == "ST" else "Pumpbetrieb"})</h2>')
+                        f'({"Standstill" if c["ses"] == "ST" else "Pump operation"})</h2>')
             last_ses = c["ses"]
         pw = 100.0 / c["dur"]
         marks = []
@@ -355,11 +356,11 @@ Taste <b>M</b> = Marke am roten Cursor der zuletzt bedienten Karte ·
             for i, ch in enumerate(c["chs"]))
         sweep_cls = " sweep" if c["is_sweep"] else ""
         brief = BRIEFS.get(c["cid"])
-        brief_html = f'<div class="brief"><b>🔍 Suchauftrag:</b> {brief}</div>' if brief else ""
+        brief_html = f'<div class="brief"><b>🔍 Listening brief:</b> {brief}</div>' if brief else ""
         body.append(f"""<div class="card{sweep_cls}" data-cid="{c['cid']}"
 data-dur="{c['dur']}" data-t0="{c['t0']:.3f}" data-chs='{",".join(c["chs"])}'>
 <h3>{c['title']}</h3>
-<div class="meta">Start {c['start']} UTC · {c['dur']:.0f} s · HP 4.5 kHz aktiv</div>
+<div class="meta">Start {c['start']} UTC · {c['dur']:.0f} s · HP 4.5 kHz active</div>
 {brief_html}
 <div class="wrap"><div class="inner"><img loading="lazy">
 {''.join(marks)}<div class="ph" style="left:0%"></div></div></div>
@@ -379,7 +380,7 @@ function toBlob(url){ if(!BLOBS[url])
 let USER=JSON.parse(localStorage.getItem(MKEY)||'{}'), LAST=null;
 const saveU=()=>{localStorage.setItem(MKEY,JSON.stringify(USER));updCount();};
 const updCount=()=>{const n=Object.values(USER).reduce((a,b)=>a+b.length,0);
-  document.getElementById('mcount').textContent=' '+n+' Marken gesetzt';};
+  document.getElementById('mcount').textContent=' '+n+' marks set';};
 function renderUser(card){
  card.querySelectorAll('.mk.user').forEach(e=>e.remove());
  const dur=+card.dataset.dur, inner=card.querySelector('.inner');
@@ -404,7 +405,7 @@ document.getElementById('exp').onclick=()=>{
  box.value=rows.join('\\n'); box.select();
  try{navigator.clipboard.writeText(box.value);}catch(_){}};
 document.getElementById('clr').onclick=()=>{
- if(confirm('Alle eigenen Marken löschen?')){USER={};saveU();
+ if(confirm('Delete all your marks?')){USER={};saveU();
   document.querySelectorAll('.card').forEach(renderUser);}};
 document.querySelectorAll('.card').forEach(card=>{
  const dur=+card.dataset.dur, cid=card.dataset.cid, a=card.querySelector('audio'),
