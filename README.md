@@ -1677,8 +1677,11 @@ day) shows the constructive flip side: 30 June IN the pool improves the other
 days substantially (290626-pu fusion 0.301 -> 0.033) — diversity beats volume.
 Candidate register after the `IN_SAMPLE_SESSIONS` fit-pool fix and the
 s3-aware regimes: **159 candidates** (69 impulse / 63 transient / 27
-sustained; 70 in-sample / 89 held-out; 38 of 58 author assessments still
-apply, 121 await expert review).
+sustained; 70 in-sample / 89 held-out). Every entry awaits the expert
+listening pass; the author's own informal screening of an earlier build is
+deliberately not published as evidence (it validated the review tooling, and
+a single untrained annotator's judgement is neither an independent label nor
+a reliable one).
 
 ### D2 — named states end to end
 
