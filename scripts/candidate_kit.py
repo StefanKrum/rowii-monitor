@@ -2611,6 +2611,8 @@ _SESSION_LABEL: dict[str, str] = {
     "250526-pu-morning": "25.05. – pump operation (morning)",
     "290626-tu": "29.06. – turbine operation",
     "290626-pu": "29.06. – pump operation",
+    "300626-tu": "30.06. – turbine operation (post-freeze era-B replay day)",
+    "300626-pu": "30.06. – pump operation (post-freeze era-B replay day)",
     "010726-tu_ph_tu": "01.07. – turbine/phase-shifter/turbine",
     "010726-pu": "01.07. – pump operation",
     "080726-pu_strikes": "08.07. – pump trial (hammer-strike campaign, events excluded)",
