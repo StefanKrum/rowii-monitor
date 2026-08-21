@@ -1650,6 +1650,36 @@ decision, identical sentinel verdicts across all three scored representations:
   on foreign-era/foreign-mix days. One calibration per instrumentation era,
   and the sentinel TELLS you when an era ended.
 
+### D1 addendum — third sentinel and the 30 June sessions (2026-08-18/19)
+
+The `illwerke-300626` delivery (turbine morning + pump midday, full-day
+Betriebsdaten, era B by the era-step level chain) joined `_REPLAY` as two
+regular era-B days and exposed the two-sentinel blind spot: `300626-tu` broke
+the frozen thresholds (raw rate 0.376 at alpha=0.05, one recognized state
+flagging 44% of its windows) while s1 sat at its replay-wide MINIMUM (0.013)
+and s2 stayed flat — conditional score drift inside a recognized mode is
+invisible to both by construction. **s3, the alarm-rate watchdog**
+(`_S3_FACTOR`: raw event-inclusive frozen-arm rate >= 2x nominal; fixed
+materiality rule, disclosed post-hoc addition) closes it: it alone recalibrates
+`300626-tu` (0.376 -> 0.056) and the in-sample `010726-pu` (0.192 -> 0.096),
+stays quiet on every healthy frozen day, and the 10-session replay's held-out
+once+triggered ceiling returns to **0.027-0.075**. Matched-power SCADA is
+near-identical across the era-B days (head/vane/flow/pressures), standstill
+scores normal, spectral profile tilts on both mic arrays — the driver is
+acoustic and unlogged. Exploratory bounds (all committed as scripts/leaves):
+finer sub-states fix within-day (0.060 at k=8) but not pool transfer
+(0.235-0.328); per-load-band pool calibration leaves the hot bands at
+0.49-1.00; enriched pools transport worse (0.507); LoRA (0.132-0.480) and the
+majority vote (0.250) do not rescue the day either; rolling M60 nearly does
+(pu 0.047 / tu 0.083) at the documented structural price. The symmetric
+rotation (`cross-day-pooled-sym/`: pool = all era-B sessions except the test
+day) shows the constructive flip side: 30 June IN the pool improves the other
+days substantially (290626-pu fusion 0.301 -> 0.033) — diversity beats volume.
+Candidate register after the `IN_SAMPLE_SESSIONS` fit-pool fix and the
+s3-aware regimes: **159 candidates** (69 impulse / 63 transient / 27
+sustained; 70 in-sample / 89 held-out; 38 of 58 author assessments still
+apply, 121 await expert review).
+
 ### D2 — named states end to end
 
 Snapshots now persist a commissioning-time cluster->mode map (majority vote
