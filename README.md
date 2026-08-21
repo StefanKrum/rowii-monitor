@@ -12,8 +12,11 @@ input modality (audio-only / vibration-only / fusion), audio featurizer
 This code accompanies the thesis *"Self-Supervised Transfer Learning for
 Acoustic Anomaly Detection in Pumped-Storage Hydropower Plants"* (Krummenacher,
 2026, University of St. Gallen); see [`CITATION.cff`](CITATION.cff) for the
-full citation. The sensor recordings used throughout are proprietary plant
-data and are not included — see [`DATA_ACCESS.md`](DATA_ACCESS.md).
+full citation. The raw sensor recordings used throughout are proprietary plant
+data and are not included; the only recording-derived audio in this repository
+is a curated set of short demo excerpts for the public demo site, published
+with the plant operator's data-release approval — see
+[`DATA_ACCESS.md`](DATA_ACCESS.md).
 
 ## Install
 
@@ -37,10 +40,16 @@ cp .env.example .env
 
 ## Data layout
 
-Sensor data is never committed to this repo. The recordings are proprietary
-plant data and are not redistributable — see [`DATA_ACCESS.md`](DATA_ACCESS.md)
-for how to request access, and for what runs perfectly well without them
-(the full test suite, and the public-data scarcity study). `ROWII_DATA_ROOT`
+Raw sensor-data deliveries are never committed to this repo: the full-rate
+multi-channel recordings and SCADA exports that make up the `data/` tree are
+proprietary plant data and are not redistributable — see
+[`DATA_ACCESS.md`](DATA_ACCESS.md) for how to request access, and for what runs
+perfectly well without them (the full test suite, and the public-data scarcity
+study). The one deliberate exception: the public demo site ships a curated set
+of short demo audio excerpts (16 kHz resampled, AAC/WAV) under
+`docs/site/assets/` and `docs/demo/assets/`, published with the plant
+operator's data-release approval; nothing else of the recordings is committed.
+`ROWII_DATA_ROOT`
 (env var or `.env`) points at a local **parent root** containing one
 subdirectory per measurement day (`illwerke-<dayid>/`), each itself a full
 day tree:
@@ -58,8 +67,12 @@ day tree:
 │       └── PU_PH_PU_PH_PU_PH/      # ~4h alternating pump / phase-shifter; NO Betriebsdaten
 ├── illwerke-290626/
 │   └── 20260629 Messung/           # TU (incl. a ~37-min phase-shifter hold), PU, full-day SCADA
-└── illwerke-010726/
-    └── 20260701 Messung/           # PU, TU1, TU2, TU_PH_TU (all 4 operating modes), full-day SCADA
+├── illwerke-300626/
+│   └── 20260630 Messung/           # TU, PU, full-day SCADA — post-freeze era-B replay day (delivered 2026-08-17/18)
+├── illwerke-010726/
+│   └── 20260701 Messung/           # PU, TU1, TU2, TU_PH_TU (all 4 operating modes), full-day SCADA
+└── illwerke-080726/
+    └── 20260708 Messung/           # ST_STRIKES, PU_STRIKES, full-day SCADA — hammer-strike (controlled-event) campaign day
 ```
 
 ### SCADA coverage and permanent gaps (final — no historian re-export will be provided)
@@ -205,7 +218,7 @@ need and listed in the order a from-scratch reproduction would run them.
 **Without any plant data** (works immediately after `pip install -e ".[dev]"`):
 
 ```bash
-pytest tests/ -q                              # full suite, 1,547 tests, synthetic fixtures only
+pytest tests/ -q                              # full suite, 1,762 tests, synthetic fixtures only
 python scripts/download_corpora.py            # fetch + sha256-verify MIMII/CWRU/Paderborn into data/public/
 python scripts/pretrain_tfc.py --corpus mimii     # pretrain the audio TF-C encoder
 python scripts/pretrain_tfc.py --corpus bearings  # pretrain the vibration TF-C encoder
@@ -229,6 +242,7 @@ python scripts/scarcity_detection.py          # public-data scarcity study (the 
 | 8. explainability | `python scripts/analyze_days.py` | `results/analysis-days/` figures + digest |
 | 9. once-calibrated replay | `python scripts/run_once_calibrated.py` | "once-calibrated operation, named states, and transitions" section |
 | 10. runtime + events | `python scripts/monitor.py <snapshot> <new-run>`, then `python scripts/eval_events.py` | runtime prototype + pillar-3 event evaluation |
+| 10b. per-strike register eval | `python scripts/eval_strike_register.py` | seconds-level detection + latency on the 180-slot strike register (`results/strike-register-eval/`, "180-slot strike register" section below) |
 | 11. baseline comparison | `python scripts/run_mad_baseline.py` | fixed-threshold MAD baseline (comparison point, not the thesis system) |
 
 Every script accepts `--help` for its full option set; module-level
@@ -1439,7 +1453,8 @@ including the distant landmarks (EG, 11TG, Kugelschieber) — and frozen BEATs +
 the student do it already at alpha 0.01 with window-FAR 0.003. During pumping,
 three representations reach 13/13 at alpha 0.10; audio-beats detects 11/13 at
 the strictest alpha 0.01 with window-FAR 0.008. Typical latencies 0.3–4 s
-(minute-level ground truth; seconds pending).
+(minute-level ground truth; the seconds-level per-strike basis is the
+"180-slot strike register" section below).
 
 Two planned side arms (fusion): the FROZEN cross-era row detects 13/13 in both
 sessions only trivially — window-FAR 0.62 (PU) / 0.96 (ST), the cross-config
@@ -1479,7 +1494,8 @@ final deployed artifact pools ALL available days; the rotation numbers
 above are its honest generalization estimate.
 
 Honesty: no real machine faults exist in any recording — the hammer strikes are
-surrogate transients (verified minute-level ground truth, seconds pending);
+surrogate transients (verified minute-level ground truth; the seconds-level
+register evaluation is the "180-slot strike register" section below);
 detection numbers reflect these sensors and this plant's noise, not
 exhaustively tuned detectors; the audio-student rotation on 290626-tu is
 pool-tainted for the STUDENT (its distillation pool contains that day's
@@ -1721,3 +1737,41 @@ named standard-statistics constants, nothing partner-derived); 010726 rows are
 in-sample (tagged); the s1 near-miss on 290626-tu and s2's deafness to the
 mic step are reported as measured; ST stays out of reach for operation-pool
 vibration snapshots (TPR <= 0.08) as in the mode-bank evaluation above.
+
+## The 180-slot strike register: seconds-level verification and per-strike evaluation (2026-08-18/19)
+
+The 08.07.2026 campaign protocol prescribed 90 strikes per session — 12 fixed
+positions x 3 plus 18 guide-vane covers x 3, once at standstill (ST) and once
+under pump operation (PU). The finalized register
+(`docs/groundtruth/verification-080726/strikes_register_{st,pu}.csv`) gives
+every one of the 180 protocol slots exactly one row and one provenance-tagged
+timestamp, built from two independent passes on the true-UTC axis: the
+author's interactive per-strike annotation, and a reproduction of the
+measurement partner's impulse-detection method run on our own raw audio
+(attributed external reference; including an edge-artifact correction —
+causal-filter ring-in at read-chunk starts — validated by reproducing the
+partner's published per-minute table 30/30 with the guard disabled). Counting
+the registers' `source` column: **172 of 180 slots are measured** (162
+confirmed by both passes, 10 annotated-only) and **8 are ear-cued** (6
+ear-cued, 2 ear-cued+statistical) — cued, not measured, timestamps from a
+final listening pass over the slots neither pass could measure, kept
+provenance-separated and never pooled into a "measured" claim. The full
+verification trail (protocol tables, raw impulse lists, bearing-based
+vane assignment, last-six scan verdicts) lives in
+`docs/groundtruth/verification-080726/`.
+
+`scripts/eval_strike_register.py` scores every representation's existing
+alarms.parquet against this register (primary basis ALL180: all 90 slots per
+session, measured + ear-cued pooled; outputs under
+`results/strike-register-eval/`). Headline, alpha=0.05, tolerance ±1.0 s:
+**frozen BEATs (audio-beats) detects 90/90 standstill-session strikes and
+84/90 pump-session strikes**; the six PU misses are exactly the six ear-cued
+PU landmark slots (landmark-A_kugelschieber, landmark-C_EG — unreadable under
+pump noise for annotator and detector alike), which no representation detects.
+On the measured-only split audio-beats is 88/88 (ST) and 84/84 (PU). The
+0.8 MB distilled student holds 86/90 (ST) / 79/90 (PU); handcrafted audio,
+vibration, and fusion sit far lower (fusion 17/90 ST, 3/90 PU). First-alarm
+latency (detected physical strikes, 1.5 s folding): median 0.65 s ST / 0.35 s
+PU on the 1 s hop, 0.12 s / 0.09 s on the 0.25 s fine grid. The fixed-threshold
+MAD baseline at its k=2.409 operating point reaches 36/90 in both sessions
+(0/90 at k=5) — far below every learned representation that works at all.

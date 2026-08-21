@@ -2,7 +2,7 @@
 
 ## What is not in this repository
 
-This repository never commits sensor data. The full pipeline was developed
+This repository never commits raw sensor-data deliveries. The full pipeline was developed
 and evaluated against audio, vibration, and SCADA recordings from the
 Rodundwerk II pump-turbine, collected across six measurement days
 (`illwerke-250526`, `illwerke-270626`, `illwerke-290626`, `illwerke-300626`,
@@ -13,9 +13,17 @@ replayed as a held-out post-freeze day (see `data/illwerke-300626/MANIFEST.md`
 in the thesis workspace for its packaging and gap notes).
 
 This dataset is **proprietary plant data owned by illwerke vkw AG** and is
-**not redistributable**. It is not included in this repository, in its
-release archives, or anywhere on GitHub, and it will not be added in the
-future.
+**not redistributable**. The raw deliveries — the full-rate multi-channel
+audio/vibration recordings and the SCADA exports that make up the `data/`
+tree — are not included in this repository, in its release archives, or
+anywhere on GitHub, and they will not be added in the future.
+
+One precisely-scoped exception exists: the public demo site ships a curated
+set of short demo audio excerpts (16 kHz resampled, AAC/WAV) under
+`docs/site/assets/` and `docs/demo/assets/`, published with the plant
+operator's explicit data-release approval (the site states this). These
+excerpts are the only recording-derived audio in the repository; the
+non-redistribution rule for the raw data above is not weakened by them.
 
 ## Requesting access
 
@@ -31,7 +39,7 @@ AG.
 The repository is designed so that almost everything in it can be inspected,
 run, and verified without ever obtaining the plant recordings:
 
-- **The full test suite (1,547 tests) runs without any real data.** Every
+- **The full test suite (1,762 tests) runs without any real data.** Every
   test either operates on small, synthetic, in-memory fixtures (hand-built
   arrays, mocked file structures, monkeypatched I/O seams) or is marked
   `@pytest.mark.data` and skips cleanly when `ROWII_DATA_ROOT` does not point
@@ -59,6 +67,7 @@ root** containing one subdirectory per measurement day:
 ├── illwerke-250526/<date> Messung/{TU,PU,Betriebsdaten}/...
 ├── illwerke-270626/<date> Messung/PU_PH_PU_PH_PU_PH/...
 ├── illwerke-290626/<date> Messung/{TU,PU,Betriebsdaten}/...
+├── illwerke-300626/<date> Messung/{TU,PU,Betriebsdaten}/...          # post-freeze era-B replay day
 ├── illwerke-010726/<date> Messung/{PU,TU1,TU2,TU_PH_TU,Betriebsdaten}/...
 └── illwerke-080726/<date> Messung/{PU,ST,Betriebsdaten}/...   # controlled-event campaign (hammer strikes)
 ```
