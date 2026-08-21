@@ -136,7 +136,11 @@ class SessionMeta:
 
 SESSIONS: tuple[SessionMeta, ...] = (
     SessionMeta("250526-tu", "A", "25 Jun\nTU"),
-    SessionMeta("250526-pu-morning", "A", "25 Jun\nPU (morning)"),
+    # "25 Jun PU" on line 1, "(morning)" on line 2: the natural "25 Jun\n
+    # PU (morning)" split renders a second line wide enough to run into the
+    # neighboring "PU+PS" tick at the shared unit spacing -- re-splitting the
+    # SAME words keeps both lines narrower than one x-step in F1 and F2.
+    SessionMeta("250526-pu-morning", "A", "25 Jun PU\n(morning)"),
     SessionMeta("270626-pu_ph_pu_ph_pu_ph-1", "A", "27 Jun\nPU+PS"),
     SessionMeta("290626-tu", "B", "29 Jun\nTU"),
     SessionMeta("290626-pu", "B", "29 Jun\nPU"),
@@ -292,7 +296,9 @@ def make_f1_era_far(results_dir: Path, out_dir: Path) -> Path:
     ax.set_xlim(xpos[0] - 0.6, xpos[-1] + 2.0)
     ax.set_xticks(xpos)
     ax.set_xticklabels([session_tick_label(s) for s in SESSIONS])
-    ax.tick_params(axis="x", pad=15, labelsize=7.0)
+    # 6.5 pt (not the style default): the era-A trio sits at unit spacing and
+    # the three two-line labels only clear each other at this size (F2 same).
+    ax.tick_params(axis="x", pad=15, labelsize=6.5)
     for tick_label, s in zip(ax.get_xticklabels(), SESSIONS, strict=True):
         tick_label.set_color(ERA_COLOR[s.era])
     ax.set_ylabel("realized false-alarm rate\n(fraction of scored windows, log scale)")
@@ -383,18 +389,22 @@ def make_f2_sentinel(results_dir: Path, out_dir: Path) -> Path:
         bbox={"facecolor": "white", "edgecolor": "none", "pad": 1.0},
     )
 
-    # Near-miss annotation: 29 June turbine, 0.0767 against 0.0805 (Section 3.5.3 prose).
+    # Near-miss annotation: 29 June turbine, 0.0767 against 0.0805 (Section 3.5.3
+    # prose). Stacked directly above that bar's own value label (no arrow): the
+    # old arrow-and-side-text placement sat at the same height as the NEXT bar's
+    # value label and collided with it ("near miss" running into "0.013").
     nm_run = "290626-tu"
     nm_i = [i for i, s in enumerate(SESSIONS) if s.run == nm_run][0]
     nm_val = float(trigger.loc[nm_run, "s1_rate"])
-    ax.annotate(
+    ax.text(
+        xpos[nm_i],
+        nm_val + 0.055,
         "near miss",
-        xy=(xpos[nm_i], nm_val),
-        xytext=(xpos[nm_i] + 0.9, nm_val - 0.05),
         fontsize=6.6,
-        ha="left",
-        va="center",
-        arrowprops={"arrowstyle": "-", "color": "#555555", "linewidth": 0.7},
+        ha="center",
+        va="bottom",
+        style="italic",
+        color="#555555",
         zorder=6,
     )
 
@@ -402,7 +412,7 @@ def make_f2_sentinel(results_dir: Path, out_dir: Path) -> Path:
     ax.set_ylim(0.0, 0.78)
     ax.set_xticks(xpos)
     ax.set_xticklabels([session_tick_label(s) for s in SESSIONS])
-    ax.tick_params(axis="x", pad=20, labelsize=7.0)
+    ax.tick_params(axis="x", pad=20, labelsize=6.5)  # matches F1 (era-A spacing)
     for tick_label, s in zip(ax.get_xticklabels(), SESSIONS, strict=True):
         tick_label.set_color(ERA_COLOR[s.era])
 
