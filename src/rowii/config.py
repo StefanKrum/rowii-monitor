@@ -12,6 +12,17 @@ from dotenv import dotenv_values
 @dataclass(frozen=True)
 class WindowConfig:
     window_s: float = 1.0
+    hop_s: float | None = None
+    """Spacing between consecutive window STARTS in seconds (`ROWII_WINDOW_HOP_S`);
+    `None` (the default) means `window_s`, i.e. the non-overlapping tiling every
+    run before sub-window hops used. Windows stay `window_s` long either way --
+    a shorter hop only starts them more often, so two events closer together than
+    `window_s` can each land in a window that holds ONLY that event
+    (`results/rescoring-subsecond/`'s motivating case: 0.75 s-spaced hammer
+    strikes sharing a 1 s window). Must satisfy `0 < hop_s <= window_s`
+    (`rowii.signals.windows.common_grid`). Part of `rowii.pipeline`'s cache key --
+    but ONLY when set, so no pre-existing `results/cache/*.npz` is invalidated by
+    this field's existence (see `_cache_fingerprint`/`_cache_npz_path`)."""
 
 
 @dataclass(frozen=True)
@@ -154,9 +165,11 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     beats_int8_ckpt = merged.get("ROWII_BEATS_INT8_CHECKPOINT") or None
     xattn_ckpt = merged.get("ROWII_XATTN_CHECKPOINT") or None
     max_invalid = merged.get("ROWII_MAX_INVALID_FRACTION") or None
+    hop_s = merged.get("ROWII_WINDOW_HOP_S") or None
     return Config(
         data_root=Path(merged.get("ROWII_DATA_ROOT", "data")).expanduser(),
         results_root=Path(merged.get("ROWII_RESULTS_ROOT", "results")).expanduser(),
+        window=WindowConfig(hop_s=float(hop_s) if hop_s else None),
         max_invalid_fraction=float(max_invalid) if max_invalid else 0.05,
         beats_checkpoint=Path(ckpt).expanduser() if ckpt else None,
         tfc_audio_checkpoint=Path(tfc_audio_ckpt).expanduser() if tfc_audio_ckpt else None,

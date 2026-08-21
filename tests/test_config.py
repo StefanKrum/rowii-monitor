@@ -6,6 +6,7 @@ from rowii.config import load_config
 def test_defaults_without_env() -> None:
     cfg = load_config(env={})
     assert cfg.window.window_s == 1.0
+    assert cfg.window.hop_s is None
     assert cfg.detect.n_states == 4
     assert cfg.detect.self_transition == 0.98
     assert cfg.beats_checkpoint is None
@@ -89,3 +90,11 @@ def test_beats_int8_checkpoint_env_overrides_independently_of_beats_checkpoint()
     )
     assert cfg.beats_checkpoint == Path("/tmp/beats.pt")
     assert cfg.beats_int8_checkpoint == Path("/tmp/beats_int8.pt")
+
+
+def test_window_hop_s_env_override() -> None:
+    # The window DURATION stays window_s; ROWII_WINDOW_HOP_S only changes the
+    # spacing between consecutive window starts (unset -> hop == window_s).
+    cfg = load_config(env={"ROWII_DATA_ROOT": "/tmp/x", "ROWII_WINDOW_HOP_S": "0.25"})
+    assert cfg.window.window_s == 1.0
+    assert cfg.window.hop_s == 0.25

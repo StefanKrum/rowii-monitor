@@ -209,7 +209,10 @@ def _state_change_indices(states: list[str]) -> list[int]:
 def _boundary_median_abs_s(
     gt_state_col: pd.Series, mapped_full: np.ndarray, grid: WindowGrid
 ) -> float | None:
-    window_s = grid.window_ns / 1e9
+    # A deviation is a distance in WINDOW INDICES, so it converts to seconds via
+    # the grid's STEP (the spacing between consecutive window starts, identical to
+    # the window duration on the default non-overlapping grid), not its duration.
+    step_s = grid.step_ns / 1e9
     gt_changes = _state_change_indices(list(gt_state_col))
     pred_changes = _state_change_indices(list(mapped_full))
 
@@ -218,7 +221,7 @@ def _boundary_median_abs_s(
 
     pred_changes_arr = np.asarray(pred_changes, dtype=np.float64)
     deviations = [
-        float(np.min(np.abs(pred_changes_arr - gt_i))) * window_s for gt_i in gt_changes
+        float(np.min(np.abs(pred_changes_arr - gt_i))) * step_s for gt_i in gt_changes
     ]
     return float(np.median(deviations))
 

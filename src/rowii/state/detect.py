@@ -345,9 +345,16 @@ class FittedDetector:
         return self._finish(smoothed, grid)
 
     def _finish(self, smoothed: np.ndarray, grid: WindowGrid) -> DetectionResult:
-        """Shared tail of fit/apply: duration filter + segments."""
-        window_s = grid.window_ns / 1e9
-        min_dwell = max(1, round(self.min_dwell_s / window_s))
+        """Shared tail of fit/apply: duration filter + segments.
+
+        `min_dwell` counts WINDOWS, so the seconds-to-windows conversion divides
+        by the grid's STEP (`grid.step_ns`, the spacing between consecutive
+        window starts), not by the window duration -- identical on the default
+        tiling, and the only reading that keeps a dwell of `min_dwell_s` seconds
+        meaning the same wall-clock span once windows overlap.
+        """
+        step_s = grid.step_ns / 1e9
+        min_dwell = max(1, round(self.min_dwell_s / step_s))
         filtered = duration_filter(smoothed, min_dwell=min_dwell)
         segments = to_segments(filtered, grid)
         return DetectionResult(frame_labels=filtered, segments=segments, k=self.k)
@@ -368,15 +375,16 @@ def run_detection(
            initial per-window cluster labels.
         3. `StickyHmmSmoother(cfg.self_transition, cfg.random_seed).fit_decode(...)` --
            Viterbi-smoothed labels using a fixed high-self-transition HMM.
-        4. `duration_filter(labels, min_dwell=max(1, round(cfg.min_dwell_s / window_s)))`
-           where `window_s = grid.window_ns / 1e9` -- merges runs shorter than
-           `min_dwell` windows into a neighbour.
+        4. `duration_filter(labels, min_dwell=max(1, round(cfg.min_dwell_s / step_s)))`
+           where `step_s = grid.step_ns / 1e9` (the spacing between consecutive
+           window starts, `= window_s` on the default non-overlapping grid) --
+           merges runs shorter than `min_dwell` windows into a neighbour.
         5. `to_segments(labels, grid)` -- per-run segment table with UTC boundaries.
 
     Args:
         features: Per-window feature matrix, shape (W, F).
         grid: The `WindowGrid` the features were extracted against. Used both
-            for the min_dwell-in-windows conversion (via `window_ns`) and for
+            for the min_dwell-in-windows conversion (via `step_ns`) and for
             `to_segments`'s UTC boundaries.
         cfg: Detection parameters (`n_states`, `self_transition`, `min_dwell_s`,
             `random_seed`).

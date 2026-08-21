@@ -451,6 +451,7 @@ def fit_snapshot(
         t0_ns=prepared.grid.t0_ns,
         window_ns=prepared.grid.window_ns,
         n_windows=int(valid_mask.sum()),
+        hop_ns=prepared.grid.hop_ns,
     )
     detector, det_valid = FittedDetector.fit(
         features_valid,

@@ -195,3 +195,24 @@ def test_to_segments_multiple_maximal_runs_row_count_and_order() -> None:
     assert segments.iloc[-1]["end_utc"] == pd.Timestamp(
         int(grid.edges_ns()[-1]), unit="ns", tz="UTC"
     )
+
+
+def test_to_segments_on_an_overlapping_grid_spans_first_start_to_last_end() -> None:
+    # 1 s windows every 0.25 s: a run of r windows starting at window i spans
+    # [start(i), start(i + r - 1) + window_ns) -- the last window's END, which on
+    # an overlapping grid is NOT the next window's start.
+    grid = WindowGrid(
+        t0_ns=0, window_ns=1_000_000_000, n_windows=5, hop_ns=250_000_000
+    )
+    labels = np.array([3, 3, 3, 8, 8], dtype=np.int64)
+
+    segments = to_segments(labels, grid)
+
+    assert len(segments) == 2
+    row0, row1 = segments.iloc[0], segments.iloc[1]
+    assert row0["start_utc"] == pd.Timestamp(0, unit="ns", tz="UTC")
+    assert row0["end_utc"] == pd.Timestamp(1_500_000_000, unit="ns", tz="UTC")
+    assert row0["duration_s"] == pytest.approx(1.5)
+    assert row1["start_utc"] == pd.Timestamp(750_000_000, unit="ns", tz="UTC")
+    assert row1["end_utc"] == pd.Timestamp(2_000_000_000, unit="ns", tz="UTC")
+    assert row1["duration_s"] == pytest.approx(1.25)

@@ -1691,7 +1691,7 @@ def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
     # FIRST valid 1 (index 6); invalid window 3 is NOT a change.
     labels = np.array([0, 0, 0, -1, 1, 1, 1, 1], dtype=np.int64)
     valid = np.array([1, 1, 1, 0, 1, 1, 1, 1], dtype=bool)
-    mask = monitor._near_transition_mask(labels, valid, window_ns=1_000_000_000, w_seconds=1.0)
+    mask = monitor._near_transition_mask(labels, valid, step_ns=1_000_000_000, w_seconds=1.0)
     assert mask[3] == False  # invalid window never flagged   # noqa: E712
     assert mask[4] == True   # first valid 1 (boundary onset) # noqa: E712
     assert mask[2] == True   # last valid 0, within 1 window of the boundary onset  # noqa: E712
@@ -1701,15 +1701,15 @@ def test_near_transition_mask_marks_boundary_windows_valid_subseq() -> None:
 def test_near_transition_mask_floors_w_windows_at_one() -> None:
     """`_near_transition_mask` must floor its w_windows
     conversion at 1, for literal parity with `FittedDetector._finish`'s own
-    `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
+    `max(1, round(min_dwell_s / step_s))` -- a w_seconds small enough that
     `round()` truncates to 0 steps must still flag the immediate (+-1 step)
     neighbours of a transition, not degenerate to "only the boundary window
     itself"."""
     import monitor
     labels = np.array([0, 0, 0, 1, 1], dtype=np.int64)
     valid = np.ones(5, dtype=bool)
-    # window_ns=1s, w_seconds=0.4 -> round(0.4) == 0 without the floor.
-    mask = monitor._near_transition_mask(labels, valid, window_ns=1_000_000_000, w_seconds=0.4)
+    # step_ns=1s, w_seconds=0.4 -> round(0.4) == 0 without the floor.
+    mask = monitor._near_transition_mask(labels, valid, step_ns=1_000_000_000, w_seconds=0.4)
     assert mask[3] == True    # boundary onset itself                       # noqa: E712
     assert mask[2] == True    # ONE step before onset -- floored in, not dropped  # noqa: E712
     assert mask[4] == True    # ONE step after onset                        # noqa: E712
@@ -1786,3 +1786,81 @@ def test_suppress_transition_alarms_invariant_and_notes(
     assert not bool((scored["alarm"] & scored["near_transition"]).any())
     assert scored["score"].notna().any()
     assert "suppressed_by_transition" in (out_dir / "monitor_notes.md").read_text()
+
+
+# ---------------------------------------------------------------------------
+# --hop-s: sub-window hop (rowii.config.WindowConfig.hop_s) threaded from the CLI
+# into prepare_run, and honoured by every window-index -> timestamp conversion.
+# ---------------------------------------------------------------------------
+
+_FINE_HOP_NS = 250_000_000
+
+
+def _fine_hop_prepared(t0_ns: int, seed: int) -> PreparedRun:
+    """`_two_state_prepared`'s fixture on an OVERLAPPING grid: same windows, same
+    1 s duration, started every 0.25 s."""
+    prepared = _two_state_prepared(t0_ns, seed)
+    return replace(
+        prepared,
+        grid=WindowGrid(
+            t0_ns=t0_ns,
+            window_ns=_WINDOW_NS,
+            n_windows=prepared.grid.n_windows,
+            hop_ns=_FINE_HOP_NS,
+        ),
+    )
+
+
+def test_hop_s_reaches_prepare_run_and_drives_the_alarm_timestamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _fine_hop_prepared(_MON_T0_NS, seed=1)
+    seen_hop_s: list[float | None] = []
+
+    monkeypatch.setattr(monitor, "discover", lambda data_root: _fake_index())
+    monkeypatch.setattr(monitor, "load_config", lambda: _cfg(tmp_path / "results"))
+
+    def _fake_prepare_run(
+        run: Run, variant: str, cfg: Config, *, use_cache: bool
+    ) -> PreparedRun:
+        seen_hop_s.append(cfg.window.hop_s)
+        return mon_prepared
+
+    monkeypatch.setattr(monitor, "prepare_run", _fake_prepare_run)
+    out_dir = tmp_path / "out"
+
+    assert monitor.main(
+        ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN, "--out", str(out_dir),
+         "--hop-s", "0.25"]
+    ) == 0
+
+    assert seen_hop_s == [0.25], "--hop-s must reach prepare_run through the Config"
+
+    alarms = pd.read_parquet(out_dir / "alarms.parquet", engine="pyarrow")
+    assert list(alarms.columns) == _ALARM_COLUMNS
+    # A window index now advances by the HOP, not by the window duration.
+    expected_t = _MON_T0_NS + alarms["window"].to_numpy(dtype=np.int64) * _FINE_HOP_NS
+    assert np.array_equal(alarms["t_utc_ns"].to_numpy(dtype=np.int64), expected_t)
+    # Consecutive scored windows are 0.25 s apart while still spanning 1 s each.
+    t = np.sort(alarms["t_utc_ns"].to_numpy(dtype=np.int64))
+    assert int(np.min(np.diff(t))) == _FINE_HOP_NS
+
+
+def test_hop_s_outside_the_valid_range_exits_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import monitor
+
+    snapshot_path, _snapshot = _make_snapshot(tmp_path)
+    mon_prepared = _two_state_prepared(_MON_T0_NS, seed=1)
+    _install_common_monkeypatches(monkeypatch, monitor, tmp_path / "results", mon_prepared)
+
+    for bad in ("0", "-0.5", "2.0"):
+        assert monitor.main(
+            ["--snapshot", str(snapshot_path), "--run", _MONITOR_RUN,
+             "--out", str(tmp_path / "out"), "--hop-s", bad]
+        ) == 2
+    assert "--hop-s must satisfy" in capsys.readouterr().err

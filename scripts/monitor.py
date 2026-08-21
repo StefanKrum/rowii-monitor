@@ -286,7 +286,7 @@ def _first_n_minutes_rows(prepared: PreparedRun, norm_minutes: float) -> np.ndar
     """
     n_windows = prepared.features.shape[0]
     cutoff_ns = int(round(norm_minutes * 60.0 * 1e9))
-    window_offsets = np.arange(n_windows, dtype=np.int64) * np.int64(prepared.grid.window_ns)
+    window_offsets = np.arange(n_windows, dtype=np.int64) * np.int64(prepared.grid.step_ns)
     qualifying = (window_offsets < cutoff_ns) & prepared.valid_mask
     rows = prepared.features[qualifying]
     if rows.shape[0] == 0:
@@ -401,6 +401,17 @@ def build_parser() -> argparse.ArgumentParser:
              "package makes the trade-off visible, it does not adopt it.",
     )
     parser.add_argument(
+        "--hop-s", type=float, default=None,
+        help="Spacing in seconds between consecutive window STARTS (default: "
+             "the window duration itself, i.e. the non-overlapping 1 s grid "
+             "every other run uses; overrides ROWII_WINDOW_HOP_S). Windows stay "
+             "window_s long -- a shorter hop only starts them more often, so two "
+             "events closer together than one window can each land in a window "
+             "holding only that event. Must satisfy 0 < hop-s <= window_s. The "
+             "hop is part of the feature-cache key, so a fine-hop run neither "
+             "reads nor overwrites the coarse run's cache entry.",
+    )
+    parser.add_argument(
         "--no-cache", action="store_true",
         help="Bypass rowii.pipeline.prepare_run's on-disk feature cache and "
              "recompute features for the monitored run.",
@@ -428,7 +439,10 @@ def _apply_detector_labels(prepared: PreparedRun, detector: FittedDetector) -> n
     features_valid = prepared.features[valid_mask]
     n_valid = int(valid_mask.sum())
     valid_grid = WindowGrid(
-        t0_ns=prepared.grid.t0_ns, window_ns=prepared.grid.window_ns, n_windows=n_valid
+        t0_ns=prepared.grid.t0_ns,
+        window_ns=prepared.grid.window_ns,
+        n_windows=n_valid,
+        hop_ns=prepared.grid.hop_ns,
     )
     det = detector.apply(features_valid, valid_grid)
     full_labels = np.full(prepared.features.shape[0], _INVALID_LABEL, dtype=np.int64)
@@ -633,7 +647,7 @@ def _exclusion_mask(
     event interval expanded by *tolerance_s* on both ends (half-open overlap
     test, mirroring `evaluate_events`' inclusive-start/exclusive-end reading)."""
     tol_ns = int(round(tolerance_s * 1e9))
-    w_start = grid.t0_ns + np.arange(grid.n_windows, dtype=np.int64) * grid.window_ns
+    w_start = grid.t0_ns + np.arange(grid.n_windows, dtype=np.int64) * grid.step_ns
     w_end = w_start + grid.window_ns
     mask = np.zeros(grid.n_windows, dtype=bool)
     for s, e in zip(starts_ns.tolist(), ends_ns.tolist(), strict=True):
@@ -893,8 +907,8 @@ def _rolling_verdicts(
             score[label_scr] = scr_scores
             role[label_scr] = ROLE_SCORED
 
-            cal_t = prepared.grid.t0_ns + label_cal.astype(np.int64) * prepared.grid.window_ns
-            scr_t = prepared.grid.t0_ns + label_scr.astype(np.int64) * prepared.grid.window_ns
+            cal_t = prepared.grid.t0_ns + label_cal.astype(np.int64) * prepared.grid.step_ns
+            scr_t = prepared.grid.t0_ns + label_scr.astype(np.int64) * prepared.grid.step_ns
             lo, hi = _trailing_bounds(cal_t, scr_t, m_ns)
             rolling_mask = (hi - lo) >= floor
 
@@ -966,11 +980,14 @@ def _assert_roles_complete(role: np.ndarray, valid_mask: np.ndarray) -> None:
 
 
 def _near_transition_mask(
-    labels: np.ndarray, valid_mask: np.ndarray, window_ns: int, w_seconds: float
+    labels: np.ndarray, valid_mask: np.ndarray, step_ns: int, w_seconds: float
 ) -> np.ndarray:
-    """(W,) bool, True for every VALID window within `+-round(w_seconds/window_s)`
+    """(W,) bool, True for every VALID window within `+-round(w_seconds/step_s)`
     STEPS -- counted along the VALID subsequence, not raw grid index -- of a
-    detected-state CHANGE found in that same valid subsequence.
+    detected-state CHANGE found in that same valid subsequence. *step_ns* is the
+    grid's own window-start spacing (`WindowGrid.step_ns`; identical to the window
+    duration on the default non-overlapping grid), so the band spans the same
+    wall-clock stretch however densely the grid is hopped.
 
     Invalid windows are filtered FIRST; a change is any label difference between
     consecutive entries of the compacted valid-only label sequence, so a
@@ -993,10 +1010,10 @@ def _near_transition_mask(
     if change_positions.size == 0:
         return out
     # max(1, ...) floor: literal parity with FittedDetector._finish's own
-    # `max(1, round(min_dwell_s / window_s))` -- a w_seconds small enough that
+    # `max(1, round(min_dwell_s / step_s))` -- a w_seconds small enough that
     # round() truncates to 0 steps must still flag the immediate neighbours of a
     # transition, not degenerate to "only the boundary window itself".
-    w_windows = max(1, int(round(w_seconds / (window_ns / 1e9))))
+    w_windows = max(1, int(round(w_seconds / (step_ns / 1e9))))
     positions = np.arange(valid_idx.shape[0])
     near = np.zeros(valid_idx.shape[0], dtype=bool)
     for cp in change_positions.tolist():
@@ -1070,7 +1087,9 @@ def _alarms_frame(
             ),
         }
     )
-    frame = to_utc_ns(frame, prepared.grid.t0_ns, prepared.grid.window_ns)
+    # step_ns, not window_ns: `to_utc_ns` turns a window INDEX into its START
+    # instant, which advances by the grid's hop (identical on a tiling).
+    frame = to_utc_ns(frame, prepared.grid.t0_ns, prepared.grid.step_ns)
     return frame[list(_ALARM_COLUMNS)]
 
 
@@ -1527,6 +1546,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     cfg = load_config()
+    if args.hop_s is not None:
+        if not (args.hop_s > 0 and args.hop_s <= cfg.window.window_s):
+            print(
+                f"monitor: --hop-s must satisfy 0 < hop_s <= window_s "
+                f"({cfg.window.window_s:g}), got {args.hop_s:g}",
+                file=sys.stderr,
+            )
+            return 2
+        cfg = dataclasses.replace(
+            cfg, window=dataclasses.replace(cfg.window, hop_s=args.hop_s)
+        )
     index = discover(cfg.data_root)
     by_name: dict[str, Run] = {r.name: r for r in index.runs}
     if args.run not in by_name:
@@ -1727,7 +1757,7 @@ def main(argv: list[str] | None = None) -> int:
     # forces alarm=False on near-transition SCORED windows BEFORE any output is
     # built, so segments/alarms/alarm_segments/notes all see the suppressed set.
     near_transition = _near_transition_mask(
-        labels, prepared.valid_mask, prepared.grid.window_ns, snapshot.min_dwell_s
+        labels, prepared.valid_mask, prepared.grid.step_ns, snapshot.min_dwell_s
     )
     n_suppressed = (
         _apply_transition_suppression(verdicts.alarm, near_transition, verdicts.role)

@@ -24,8 +24,11 @@ stays a CLI-layer concern (`scripts/run_step1.py`'s `load_run_gt`), called separ
 using this module's `PreparedRun.grid`/`valid_mask`.
 
 On-disk feature cache: `prepare_run(..., use_cache=True)` (the default)
-persists its result to `results/cache/<run.name>--<variant>.npz`, keyed by a sha256
-fingerprint of everything that determines the output (variant, window duration, every
+persists its result to `results/cache/<run.name>--<variant>.npz` (plus a
+`--hop<hop_s>s` element when `cfg.window.hop_s` asks for a denser-than-tiling grid),
+keyed by a sha256
+fingerprint of everything that determines the output (variant, window duration, the
+hop when set, every
 burst file's name+size, the beats-checkpoint path, and -- for the two tfc variants --
 the ONE tfc checkpoint path relevant to that variant; for the two
 beats variants, the int8 checkpoint path too, but ONLY when it is
@@ -291,7 +294,12 @@ def _synthesize_run_header(files: list[BurstFile]) -> GantnerHeader:
 
 
 def build_run_grid(
-    run: Run, streams: tuple[str, ...], window_s: float, *, offset_ns: int | None = None
+    run: Run,
+    streams: tuple[str, ...],
+    window_s: float,
+    *,
+    hop_s: float | None = None,
+    offset_ns: int | None = None,
 ) -> WindowGrid:
     """Common window grid across *streams*, computed from header-only reads.
 
@@ -325,6 +333,12 @@ def build_run_grid(
             `run_utc_offset_ns`'s own docstring on why it is not scoped to just
             these streams).
         window_s: Window duration in seconds.
+        hop_s: Spacing between consecutive window STARTS in seconds, passed
+            straight through to `common_grid`; `None` (the default) means
+            `window_s` -- the non-overlapping tiling. A shorter hop is a pure
+            densification: it never moves an existing window (every coarse start
+            recurs in the fine grid, carrying the identical sample set) and never
+            changes a window's duration.
         offset_ns: Precomputed `run_utc_offset_ns(run)`, if the caller already has
             it (`prepare_run`). `None` (the default -- every other caller, e.g.
             `scripts/analyze_step1.py`'s own direct `build_run_grid` call) derives
@@ -339,7 +353,7 @@ def build_run_grid(
         if offset_ns:
             header = replace(header, t0_ns=header.t0_ns + offset_ns)
         synth_headers.append(header)
-    return common_grid(synth_headers, window_s)
+    return common_grid(synth_headers, window_s, hop_s)
 
 
 # ---------------------------------------------------------------------------
@@ -667,9 +681,19 @@ _CACHE_SUBDIR = "cache"
 # round-trip tests).
 
 
-def _cache_npz_path(results_root: Path, run_name: str, variant: str) -> Path:
-    """`results/cache/<run_name>--<variant>.npz` -- one (run, variant)'s cache entry."""
-    return results_root / _CACHE_SUBDIR / f"{run_name}--{variant}.npz"
+def _cache_npz_path(
+    results_root: Path, run_name: str, variant: str, hop_s: float | None = None
+) -> Path:
+    """`results/cache/<run_name>--<variant>.npz` -- one (run, variant)'s cache entry.
+
+    A non-default *hop_s* (a grid denser than the tiling, `rowii.config.
+    WindowConfig.hop_s`) gets its OWN file, `<run_name>--<variant>--hop<hop_s>s.npz`
+    -- a fine-hop run holds a different number of rows for the same (run, variant),
+    so the two must never share a path. `None` (the default) reproduces the
+    original filename verbatim, so every committed cache entry keeps its name.
+    """
+    stem = f"{run_name}--{variant}" if hop_s is None else f"{run_name}--{variant}--hop{hop_s:g}s"
+    return results_root / _CACHE_SUBDIR / f"{stem}.npz"
 
 
 def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
@@ -719,6 +743,13 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
     entry keyed by the int8 checkpoint path -- intended (int8 embeddings
     genuinely differ numerically from fp32's), not a bug.
 
+    `cfg.window.hop_s` follows the SAME scoped-line convention as
+    `beats_int8_checkpoint`: the line is appended ONLY when the hop is actually
+    set (a denser-than-tiling grid), so every EXISTING cache entry -- all written
+    with the implicit `hop_s == window_s` tiling -- keeps a byte-identical payload
+    and is never invalidated by this field's existence. A fine-hop run also lands
+    in its own file (`_cache_npz_path`), so the two never race for one entry.
+
     `cfg.detect`/`cfg.gt` are deliberately excluded: they govern clustering/GT
     labeling, never feature EXTRACTION, so changing them must not invalidate this
     cache.
@@ -733,6 +764,8 @@ def _cache_fingerprint(run: Run, variant: str, cfg: Config) -> str:
         f"window_s={cfg.window.window_s!r}",
         f"beats_checkpoint={cfg.beats_checkpoint or ''}",
     ]
+    if cfg.window.hop_s is not None:
+        payload_lines.append(f"hop_s={cfg.window.hop_s!r}")
     if _is_beats_variant(variant) and cfg.beats_int8_checkpoint is not None:
         payload_lines.append(f"beats_int8_checkpoint={cfg.beats_int8_checkpoint}")
     if variant == "audio-tfc":
@@ -752,6 +785,7 @@ def _load_cached_prepared_run(
     streams: tuple[str, ...],
     window_s: float,
     offset_ns: int,
+    hop_s: float | None = None,
 ) -> PreparedRun | None:
     """`PreparedRun` from *cache_path* iff it exists, is readable, and its stored
     fingerprint equals *fingerprint*; `None` otherwise (cache miss -- caller
@@ -774,6 +808,14 @@ def _load_cached_prepared_run(
     returned exactly as cached, never recomputed. A cache already written POST-fix
     (t0_ns already true-UTC) is a silent no-op here: the freshly computed t0
     matches the cached one exactly, so nothing changes and nothing is logged.
+
+    `hop_ns` is likewise taken from the FRESH grid rather than the npz, which
+    stores no hop member at all: the on-disk payload is a persistence format
+    (`_cache_fingerprint`'s own docstring) and adding a member would turn every
+    committed cache entry into an unreadable miss -- an hours-expensive BEATs
+    recompute for a value the cache key already pins (a fine-hop run has its own
+    fingerprint AND its own file, `_cache_npz_path`). For the default tiling the
+    fresh hop is exactly `window_ns`, so the reconstructed grid is unchanged.
     """
     if not cache_path.is_file():
         return None
@@ -781,12 +823,15 @@ def _load_cached_prepared_run(
         with np.load(cache_path, allow_pickle=False) as data:
             if str(data["fingerprint"][0]) != fingerprint:
                 return None
+            fresh_grid = build_run_grid(
+                run, streams, window_s, hop_s=hop_s, offset_ns=offset_ns
+            )
             grid = WindowGrid(
                 t0_ns=int(data["grid_t0_ns"][0]),
                 window_ns=int(data["grid_window_ns"][0]),
                 n_windows=int(data["grid_n_windows"][0]),
+                hop_ns=fresh_grid.hop_ns,
             )
-            fresh_grid = build_run_grid(run, streams, window_s, offset_ns=offset_ns)
             if fresh_grid.t0_ns != grid.t0_ns:
                 logger.info(
                     "prepare_run: cache at %s carries a raw-axis grid_t0_ns=%d -- "
@@ -796,7 +841,10 @@ def _load_cached_prepared_run(
                     cache_path, grid.t0_ns, fresh_grid.t0_ns,
                 )
                 grid = WindowGrid(
-                    t0_ns=fresh_grid.t0_ns, window_ns=grid.window_ns, n_windows=grid.n_windows
+                    t0_ns=fresh_grid.t0_ns,
+                    window_ns=grid.window_ns,
+                    n_windows=grid.n_windows,
+                    hop_ns=fresh_grid.hop_ns,
                 )
             return PreparedRun(
                 features=data["features"],
@@ -864,7 +912,8 @@ def prepare_run(
         variant: One of the concrete variant strings (`"audio"`, `"audio-beats"`,
             `"audio-tfc"`, `"audio-student"`, `"vibration"`, `"vibration-tfc"`,
             `"fusion"`, `"fusion-beats"`, `"logmel"`).
-        cfg: Project configuration (`cfg.window.window_s`, `cfg.beats_checkpoint`,
+        cfg: Project configuration (`cfg.window.window_s`, `cfg.window.hop_s`,
+            `cfg.beats_checkpoint`,
             `cfg.tfc_audio_checkpoint`/`cfg.tfc_vib_checkpoint`,
             `cfg.student_checkpoint`, `cfg.results_root` for the cache location).
         betriebsdaten: Accepted for signature symmetry with callers that already have
@@ -891,7 +940,7 @@ def prepare_run(
         ValueError: if *variant* is not a recognised variant string.
     """
     streams = _streams_for_variant(variant)
-    cache_path = _cache_npz_path(cfg.results_root, run.name, variant)
+    cache_path = _cache_npz_path(cfg.results_root, run.name, variant, cfg.window.hop_s)
     fingerprint = _cache_fingerprint(run, variant, cfg)
     # Derived ONCE per call -- header-only reads, cheap -- and
     # threaded through every place below that needs the run's true-UTC axis:
@@ -901,14 +950,17 @@ def prepare_run(
 
     if use_cache:
         cached = _load_cached_prepared_run(
-            cache_path, fingerprint, run, streams, cfg.window.window_s, offset_ns
+            cache_path, fingerprint, run, streams, cfg.window.window_s, offset_ns,
+            cfg.window.hop_s,
         )
         if cached is not None:
             logger.info("prepare_run: cache hit for %s/%s (%s)", run.name, variant, cache_path)
             return cached
         logger.info("prepare_run: cache miss for %s/%s -- recomputing", run.name, variant)
 
-    grid = build_run_grid(run, streams, cfg.window.window_s, offset_ns=offset_ns)
+    grid = build_run_grid(
+        run, streams, cfg.window.window_s, hop_s=cfg.window.hop_s, offset_ns=offset_ns
+    )
 
     stream_results: dict[str, _StreamFeatureResult] = {}
     for stream in streams:

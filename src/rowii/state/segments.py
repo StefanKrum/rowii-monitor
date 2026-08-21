@@ -127,7 +127,11 @@ def to_segments(labels: np.ndarray, grid: WindowGrid) -> pd.DataFrame:
     Args:
         labels: Per-window integer state labels, shape (W,). Must have
             `len(labels) == grid.n_windows`.
-        grid: The `WindowGrid` whose edge timestamps bound each window.
+        grid: The `WindowGrid` whose window timestamps bound each window. Read
+            through `starts_ns()`/`ends_ns()` rather than `edges_ns()` so an
+            OVERLAPPING grid (`hop_ns < window_ns`) works too: a run's upper
+            bound is its LAST window's own end, which on such a grid is not the
+            next window's start.
 
     Returns:
         DataFrame with one row per maximal run of identical labels, columns:
@@ -148,14 +152,15 @@ def to_segments(labels: np.ndarray, grid: WindowGrid) -> pd.DataFrame:
         )
 
     labels_i64 = np.asarray(labels, dtype=np.int64)
-    edges_ns = grid.edges_ns()
+    starts_ns = grid.starts_ns()
+    ends_ns = grid.ends_ns()
     runs = _runs_from_labels(labels_i64)
 
     rows = []
     window_idx = 0
     for r in runs:
-        start_ns = int(edges_ns[window_idx])
-        end_ns = int(edges_ns[window_idx + r.length])
+        start_ns = int(starts_ns[window_idx])
+        end_ns = int(ends_ns[window_idx + r.length - 1])
         rows.append(
             {
                 "start_utc": pd.Timestamp(start_ns, unit="ns", tz="UTC"),

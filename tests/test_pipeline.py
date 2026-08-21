@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from rowii import pipeline
-from rowii.config import Config
+from rowii.config import Config, WindowConfig
 from rowii.io.dataset import BurstFile, Run
 from rowii.pipeline import PreparedRun, prepare_run
 from rowii.signals.features import AudioFeaturizer, VibFeaturizer
@@ -1025,3 +1025,121 @@ class TestStreamColumns:
     def test_unknown_stream_raises_value_error(self):
         with pytest.raises(ValueError, match="MicC"):
             pipeline.stream_columns(["MicA::e0"], "MicC")
+
+
+# ---------------------------------------------------------------------------
+# 10. Sub-window hop (`WindowConfig.hop_s`): the SAME extraction on a denser
+# grid. Window DURATION never changes -- only the spacing between consecutive
+# window starts -- so the fine run must reproduce every coarse window verbatim
+# and must not disturb the coarse run's own cache entry.
+# ---------------------------------------------------------------------------
+
+
+def _hop_cfg(results_root: Path, hop_s: float | None) -> Config:
+    return Config(
+        data_root=results_root,
+        results_root=results_root,
+        window=WindowConfig(window_s=1.0, hop_s=hop_s),
+    )
+
+
+def _varied_audio_run(burst_dir: Path, *, n_seconds: int = 5) -> Run:
+    """`_single_file_audio_run`'s shape, but with per-sample-VARYING data so the
+    handcrafted `AudioFeaturizer` produces a different row per window (the
+    all-ones fixture is window-invariant, which would make the fine-vs-coarse
+    row comparison below vacuous)."""
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    n_samples = round(_RATE_HZ * n_seconds)
+    rng = np.random.default_rng(11)
+    files = {}
+    for stream, name in (
+        ("RAWGeneratorMic__0", "gen_mic.dat"),
+        ("RAWTurbineMic__1", "tur_mic.dat"),
+    ):
+        data = rng.normal(size=(n_samples, 4)).astype(np.float32)
+        build_gantner_file(
+            burst_dir / name, ["ch0", "ch1", "ch2", "ch3"], data, t0_ns=0, rate_hz=_RATE_HZ
+        )
+        files[stream] = [
+            BurstFile(path=burst_dir / name, stream=stream, start_utc_hint=t0)
+        ]
+    return Run(name="unit-test-run", files=files, day_root=burst_dir)
+
+
+def test_prepare_run_hop_s_densifies_the_grid_without_moving_the_coarse_windows(
+    tmp_path,
+) -> None:
+    run = _varied_audio_run(tmp_path / "burst", n_seconds=5)
+
+    coarse = prepare_run(run, "audio", _hop_cfg(tmp_path / "results", None), use_cache=False)
+    fine = prepare_run(run, "audio", _hop_cfg(tmp_path / "results", 0.5), use_cache=False)
+
+    # 5 s of data, 1 s windows every 0.5 s -> (5 - 1) / 0.5 + 1 = 9 windows.
+    assert coarse.grid.n_windows == 5
+    assert fine.grid.n_windows == 9
+    assert fine.grid.window_ns == coarse.grid.window_ns
+    assert fine.grid.hop_ns == 500_000_000
+    assert fine.feature_names == coarse.feature_names
+    assert fine.valid_mask.all()
+
+    # Every coarse window start recurs in the fine grid, carrying an IDENTICAL
+    # feature row -- the fine run is the same extraction, only denser.
+    fine_starts = fine.grid.starts_ns().tolist()
+    for w, start in enumerate(coarse.grid.starts_ns().tolist()):
+        np.testing.assert_array_equal(
+            fine.features[fine_starts.index(start)], coarse.features[w]
+        )
+
+
+def test_prepare_run_hop_s_caches_under_its_own_key(tmp_path) -> None:
+    """A fine-hop run must never read or overwrite the coarse run's cache entry:
+    different file (the hop is part of the cache key) and, for the default
+    hop, a byte-identical fingerprint payload (no pre-existing cache is
+    invalidated by this parameter's mere existence)."""
+    run = _varied_audio_run(tmp_path / "burst", n_seconds=5)
+    results_root = tmp_path / "results"
+    coarse_cfg = _hop_cfg(results_root, None)
+    fine_cfg = _hop_cfg(results_root, 0.5)
+
+    # An UNSET hop must not change the fingerprint at all -- the payload is a
+    # persistence format, and every committed results/cache/*.npz stores a
+    # digest computed from it (see `_cache_fingerprint`'s own docstring).
+    assert pipeline._cache_fingerprint(
+        run, "audio", coarse_cfg
+    ) == pipeline._cache_fingerprint(run, "audio", Config(
+        data_root=results_root, results_root=results_root
+    ))
+    assert pipeline._cache_fingerprint(run, "audio", fine_cfg) != pipeline._cache_fingerprint(
+        run, "audio", coarse_cfg
+    )
+
+    prepare_run(run, "audio", coarse_cfg, use_cache=True)
+    prepare_run(run, "audio", fine_cfg, use_cache=True)
+
+    cache_dir = results_root / "cache"
+    assert (cache_dir / "unit-test-run--audio.npz").is_file()
+    assert (cache_dir / "unit-test-run--audio--hop0.5s.npz").is_file()
+
+
+def test_prepare_run_hop_s_cache_round_trip_preserves_the_hop(tmp_path, monkeypatch) -> None:
+    run = _varied_audio_run(tmp_path / "burst", n_seconds=5)
+    cfg = _hop_cfg(tmp_path / "results", 0.25)
+
+    call_count = {"n": 0}
+    real_extract = pipeline._extract_stream_features
+
+    def counting_extract(*args, **kwargs):
+        call_count["n"] += 1
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_extract_stream_features", counting_extract)
+
+    first = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2
+    second = prepare_run(run, "audio", cfg, use_cache=True)
+    assert call_count["n"] == 2, "second call must be a cache HIT -- no new extraction"
+
+    assert first.grid == second.grid
+    assert second.grid.hop_ns == 250_000_000
+    np.testing.assert_array_equal(first.features, second.features)

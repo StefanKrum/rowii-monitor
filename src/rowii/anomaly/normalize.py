@@ -87,8 +87,9 @@ def fit_session_stats(
     stats are exactly what a deployed monitor could compute before scoring.
 
     Membership is by window START: window `i` qualifies iff its grid start offset
-    `i * grid.window_ns` is strictly below `norm_minutes * 60 * 1e9` ns AND
-    `valid_mask[i]` is True.
+    `i * grid.step_ns` (the spacing between consecutive window starts, `=
+    window_ns` on the default non-overlapping grid) is strictly below
+    `norm_minutes * 60 * 1e9` ns AND `valid_mask[i]` is True.
 
     **State-mix confound (documented caveat).** The first N minutes of a run
     can be -- and measurably are -- a single operating state: 290626's first 20
@@ -131,7 +132,7 @@ def fit_session_stats(
             f"grid {grid.n_windows}"
         )
     cutoff_ns = int(round(norm_minutes * 60.0 * 1e9))
-    offsets = np.arange(n_windows, dtype=np.int64) * np.int64(grid.window_ns)
+    offsets = np.arange(n_windows, dtype=np.int64) * np.int64(grid.step_ns)
     qualifying = (offsets < cutoff_ns) & valid_mask
     rows = features[qualifying]
     if rows.shape[0] == 0:
