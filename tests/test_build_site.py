@@ -446,6 +446,46 @@ def test_render_clip_cards_modes_respects_asset_prefix() -> None:
     assert "../demo/" not in html
 
 
+def test_render_clip_cards_modes_resolves_raw_id_via_state_names() -> None:
+    """A historic manifest carries the RAW cluster id as the label; with the
+    commissioning snapshot's SCADA-plurality map supplied, the card title is
+    the display name (`make_demo_assets.state_display_name`), not `State 0`."""
+    html = bs.render_clip_cards(_demo_manifest(), "modes", state_names={0: "turbine"})
+    assert "Turbine operation" in html
+    assert "State 0" not in html
+    assert "unsupervised cluster" in html  # badge unchanged
+
+
+def test_render_clip_cards_modes_falls_back_without_state_names() -> None:
+    """No map (fresh clone, `models/adapted/` absent) or a `cluster-<id>`
+    naming fallback keeps the old `State <id>` wording."""
+    assert "State 0" in bs.render_clip_cards(_demo_manifest(), "modes")
+    assert "State 0" in bs.render_clip_cards(
+        _demo_manifest(), "modes", state_names={0: "cluster-0"}
+    )
+    # a map that simply lacks this cluster id also falls back
+    assert "State 0" in bs.render_clip_cards(
+        _demo_manifest(), "modes", state_names={7: "turbine"}
+    )
+
+
+def test_render_clip_cards_modes_passes_through_already_resolved_label() -> None:
+    """Newer `make_demo_assets` builds store the resolved display name in the
+    manifest directly -- it must render as-is, map or no map."""
+    manifest = _demo_manifest(label="Standstill")
+    for names in (None, {0: "turbine"}):
+        html = bs.render_clip_cards(manifest, "modes", state_names=names)
+        assert "Standstill" in html
+        assert "State " not in html
+
+
+def test_resolve_state_clip_label_contract() -> None:
+    assert bs.resolve_state_clip_label("3", {3: "standstill"}) == "Standstill"
+    assert bs.resolve_state_clip_label("3", {3: "cluster-3"}) == "State 3"
+    assert bs.resolve_state_clip_label("3", None) == "State 3"
+    assert bs.resolve_state_clip_label("Pump operation", {3: "standstill"}) == "Pump operation"
+
+
 def test_render_clip_cards_unknown_kind_raises() -> None:
     with pytest.raises(ValueError, match="kind"):
         bs.render_clip_cards({"strikes": [], "clips": []}, "bogus")

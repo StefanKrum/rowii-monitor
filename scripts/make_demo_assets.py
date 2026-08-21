@@ -610,6 +610,34 @@ _STATE_NAME = {
     "invalid": "Transition / invalid",
 }
 
+AUDIO_BEATS_NAMED_SNAPSHOT = (
+    REPO_ROOT / "models" / "adapted" / "monitor_pool_b1_audio_beats_named.json"
+)
+"""The commissioning snapshot whose persisted `state_names` member
+(`rowii.eval.metrics.derive_state_names`' SCADA-plurality map, format v2 --
+see `rowii.runtime.snapshot`) named the cluster ids that
+`PU_SEGMENTS_CSV`'s Step-1 decode (and therefore `_build_state_clips`'
+per-mode clips) uses. `models/adapted/` is a local artifact tree, not
+tracked -- loaders must degrade to the bare `State <id>` labels when it is
+absent (fresh clones, CI)."""
+
+
+def load_snapshot_state_names(
+    path: Path = AUDIO_BEATS_NAMED_SNAPSHOT,
+) -> dict[int, str] | None:
+    """`state_names` of a format-v2 monitor snapshot as `{cluster_id: name}`,
+    or `None` when the snapshot (or the member) is unavailable -- callers fall
+    back to raw-id labels, exactly `scripts/monitor.py`'s own degradation for
+    un-named snapshots."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = data.get("state_names")
+    if not isinstance(raw, dict):
+        return None
+    return {int(k): str(v) for k, v in raw.items()}
+
 
 def state_display_name(name: str) -> str:
     """Human-readable display label for one of `rowii.scada.labels._KNOWN_STATES`
@@ -904,6 +932,7 @@ def _build_state_clips(pu_run: Run, out_dir: Path) -> list[ClipMeta]:
     )
     offset_ns = run_utc_offset_ns(pu_run)
     longest = longest_segment_per_cluster(segments)
+    state_names = load_snapshot_state_names()
 
     clips: list[ClipMeta] = []
     for cluster_id in sorted(longest):
@@ -924,11 +953,17 @@ def _build_state_clips(pu_run: Run, out_dir: Path) -> list[ClipMeta]:
             f"measurement day, 1-s grid) – 10 s from the middle of this state's longest "
             f"contiguous segment, checked against the strike ground truth."
         )
+        raw_name = (state_names or {}).get(cluster_id)
+        label = (
+            state_display_name(raw_name)
+            if raw_name is not None and not raw_name.startswith("cluster-")
+            else f"State {cluster_id}"
+        )
         clips.append(
             ClipMeta(
                 file=filename,
                 kind="state",
-                label=str(cluster_id),
+                label=label,
                 start_utc=w_start,
                 duration_s=CLIP_DURATION_S,
                 source_run=pu_run.name,

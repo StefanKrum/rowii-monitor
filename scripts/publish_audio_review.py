@@ -60,6 +60,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import build_site as bs  # noqa: E402
 import candidate_kit as ck  # noqa: E402
+import make_demo_assets as mda  # noqa: E402
 import site_common as sc  # noqa: E402
 
 from rowii.config import load_config  # noqa: E402
@@ -255,7 +256,9 @@ def publish(
         total_bytes += (SITE_MODES_ASSETS_DIR / filename).stat().st_size
 
     strikes_html = bs.render_clip_cards(site_manifest, "strikes")
-    modes_html = bs.render_clip_cards(demo_manifest, "modes")
+    modes_html = bs.render_clip_cards(
+        demo_manifest, "modes", state_names=mda.load_snapshot_state_names()
+    )
     n_strikes = len(site_manifest["strikes"])
     n_modes = len(mode_clip_files)
 

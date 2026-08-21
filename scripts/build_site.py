@@ -872,7 +872,33 @@ def _strike_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
 </div>"""
 
 
-def _demo_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
+def resolve_state_clip_label(
+    label: str, state_names: Mapping[int, str] | None
+) -> str:
+    """Display title for one per-mode clip card. Historic
+    `docs/demo/assets/manifest.json` builds carry the RAW cluster id as the
+    clip label (`"0"`); newer `make_demo_assets` builds already store the
+    resolved display name. Raw ids are resolved here at compose time through
+    the commissioning snapshot's own SCADA-plurality `state_names` map
+    (`make_demo_assets.load_snapshot_state_names`) so a re-publish picks up
+    named states WITHOUT regenerating the audio clips; a missing map or a
+    `cluster-<id>` naming fallback keeps the old `State <id>` wording, and an
+    already-resolved label passes through unchanged."""
+    text = str(label)
+    if not text.isdigit():
+        return text
+    cluster_id = int(text)
+    raw_name = (state_names or {}).get(cluster_id)
+    if raw_name is None or raw_name.startswith("cluster-"):
+        return f"State {cluster_id}"
+    return mda.state_display_name(raw_name)
+
+
+def _demo_clip_card(
+    clip: Mapping[str, Any],
+    asset_prefix: str = "",
+    state_names: Mapping[int, str] | None = None,
+) -> str:
     """v7 `.clip-card` for one `docs/demo/assets/manifest.json` `"state"`-kind
     clip (ordinary per-operating-mode audio, `render_clip_cards(..., "modes")`'s
     only source). Sourced from `<site>/assets/modes/` -- a site-LOCAL, tracked
@@ -887,8 +913,9 @@ def _demo_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
     `_strike_clip_card`'s own convention (prepended to the already-relative
     `assets/modes/...` path); empty by default, same reasoning as strikes."""
     src = f"{asset_prefix}assets/modes/{html.escape(clip['file'])}"
+    title = resolve_state_clip_label(str(clip["label"]), state_names)
     return f"""<div class="clip-card">
-  <div class="ct"><span class="n2">State {html.escape(str(clip['label']))}</span>
+  <div class="ct"><span class="n2">{html.escape(title)}</span>
   <span class="badge">unsupervised cluster</span></div>
   <audio controls preload="none" src="{src}"></audio>
   <p class="meta">{_format_clip_timestamp(clip['start_utc'])}
@@ -896,7 +923,12 @@ def _demo_clip_card(clip: Mapping[str, Any], asset_prefix: str = "") -> str:
 </div>"""
 
 
-def render_clip_cards(manifest: Mapping[str, Any], kind: str, asset_prefix: str = "") -> str:
+def render_clip_cards(
+    manifest: Mapping[str, Any],
+    kind: str,
+    asset_prefix: str = "",
+    state_names: Mapping[int, str] | None = None,
+) -> str:
     """Concatenated v7 `.clip-card` markup for one of `publish_audio_review.py`'s
     two non-candidate `audio_review.html` tabs -- `kind`:
 
@@ -930,7 +962,9 @@ def render_clip_cards(manifest: Mapping[str, Any], kind: str, asset_prefix: str 
         return "".join(_strike_clip_card(c, asset_prefix) for c in manifest["strikes"])
     if kind == "modes":
         return "".join(
-            _demo_clip_card(c, asset_prefix) for c in manifest["clips"] if c["kind"] == "state"
+            _demo_clip_card(c, asset_prefix, state_names)
+            for c in manifest["clips"]
+            if c["kind"] == "state"
         )
     raise ValueError(f"render_clip_cards: unknown kind {kind!r} (expected 'strikes' or 'modes')")
 
