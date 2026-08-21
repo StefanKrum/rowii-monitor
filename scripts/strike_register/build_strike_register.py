@@ -26,6 +26,7 @@ import csv
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -58,30 +59,34 @@ def iso(t: float) -> str:
     return datetime.fromtimestamp(t, UTC).isoformat(timespec="milliseconds")
 
 
-def load_marks(session: str):
+def load_marks(session: str) -> list[dict[str, Any]]:
     lines = [line for line in (GT / f"080726_strikes_seconds_{session.lower()}.csv").open()
              if not line.startswith("#")]
-    out = []
+    out: list[dict[str, Any]] = []
     for r in csv.DictReader(lines):
         out.append({"kind": r["kind"], "no": int(r["strike_no"]),
                     "t": datetime.fromisoformat(r["strike_utc"]).timestamp()})
     return out
 
 
-def load_detector(session: str, which: str):
-    out = []
+def load_detector(session: str, which: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for r in csv.DictReader((HERE / f"{which}_{session.lower()}.csv").open()):
         out.append({"label": r["label"], "t": datetime.fromisoformat(r["t_utc"]).timestamp(),
                     "k": float(r["k"])})
     return out
 
 
-def pair(marks, dets):
+def pair(
+    marks: list[dict[str, Any]], dets: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Unique greedy 1:1 pairing within MATCH_TOL_S; returns list of slots
     sorted by time: {'t','source','det_k','mark_no'}."""
     cand = sorted((abs(m["t"] - d["t"]), i, j) for i, m in enumerate(marks)
                   for j, d in enumerate(dets) if abs(m["t"] - d["t"]) <= MATCH_TOL_S)
-    um, ud, slots = set(), set(), []
+    um: set[int] = set()
+    ud: set[int] = set()
+    slots: list[dict[str, Any]] = []
     for _, i, j in cand:
         if i in um or j in ud:
             continue
@@ -100,7 +105,7 @@ def pair(marks, dets):
     return sorted(slots, key=lambda s: s["t"])
 
 
-def top3(slots):
+def top3(slots: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Keep <=3 intentional strikes: prefer both/detector-backed, then order
     of occurrence; return (kept sorted by time, n_extra)."""
     if len(slots) <= 3:
@@ -110,12 +115,13 @@ def top3(slots):
     return sorted(kept, key=lambda s: s["t"]), len(slots) - 3
 
 
-def vane_groups(marks):
+def vane_groups(marks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """18 groups from the 17 largest inter-mark gaps (order preserved)."""
     ts = sorted(m["t"] for m in marks)
     gaps = np.diff(ts)
     cut_idx = set(np.argsort(gaps)[-17:])
-    groups, cur = [], [marks[0]]
+    groups: list[list[dict[str, Any]]] = []
+    cur = [marks[0]]
     marks_sorted = sorted(marks, key=lambda m: m["t"])
     cur = [marks_sorted[0]]
     for gi, m in enumerate(marks_sorted[1:]):
@@ -127,14 +133,15 @@ def vane_groups(marks):
     return groups
 
 
-def run(session: str):
+def run(session: str) -> list[list[Any]]:
     marks = load_marks(session)
     det_proto = load_detector(session, "protocol")
     det_raw = load_detector(session, "raw")
-    rows, tally = [], {"both": 0, "annotated-only": 0, "detector-only": 0,
-                       "unresolved": 0, "extras": 0}
+    rows: list[list[Any]] = []
+    tally = {"both": 0, "annotated-only": 0, "detector-only": 0,
+             "unresolved": 0, "extras": 0}
 
-    def emit(slot_name, kept, n_extra):
+    def emit(slot_name: str, kept: list[dict[str, Any]], n_extra: int) -> None:
         tally["extras"] += n_extra
         for no in (1, 2, 3):
             if no <= len(kept):

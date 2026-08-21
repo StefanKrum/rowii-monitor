@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import csv
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 
@@ -60,7 +62,7 @@ Z_MATCH = 3.0                     # low_threshold_detect-equivalent z, for chara
 BEARING_EXPECTED_DEG = 275.0
 BEARING_TOL_DEG = 25.0
 
-TARGETS = [
+TARGETS: list[dict[str, Any]] = [
     dict(session="pu", slot="landmark-A_kugelschieber", label="PU A_kugel",
          anchor_iso="2026-07-08T12:49:46.216+00:00",
          win_lo_iso="2026-07-08T12:49:43.4+00:00",
@@ -109,28 +111,43 @@ def ts_to_iso(t: float) -> str:
 # ----------------------------------------------------------------------
 # Scan primitives
 # ----------------------------------------------------------------------
-def scan_grid(ses: Session, t_lo: float, t_hi: float, env_t, spec_t, step=GRID_STEP_S):
+def scan_grid(
+    ses: Session,
+    t_lo: float,
+    t_hi: float,
+    env_t: np.ndarray,
+    spec_t: np.ndarray,
+    step: float = GRID_STEP_S,
+) -> tuple[list[float], list[float | None]]:
     n = int(round((t_hi - t_lo) / step)) + 1
     times = [t_lo + i * step for i in range(n)]
-    scores = []
+    scores: list[float | None] = []
     for t in times:
         e, s = ses.envelope_shape(t)
         scores.append(score(e, s, env_t, spec_t))
     return times, scores
 
 
-def scan_max(ses: Session, t_lo: float, t_hi: float, env_t, spec_t, step=GRID_STEP_S) -> float:
+def scan_max(
+    ses: Session,
+    t_lo: float,
+    t_hi: float,
+    env_t: np.ndarray,
+    spec_t: np.ndarray,
+    step: float = GRID_STEP_S,
+) -> float:
     _, scores = scan_grid(ses, t_lo, t_hi, env_t, spec_t, step)
     valid = [s for s in scores if s is not None]
     return max(valid) if valid else float("-inf")
 
 
-def null_distribution(ses: Session, session: str, width_s: float, env_t, spec_t,
+def null_distribution(ses: Session, session: str, width_s: float, env_t: np.ndarray,
+                       spec_t: np.ndarray,
                        n: int, rng: np.random.Generator) -> np.ndarray:
     ranges = GAP_RANGES[session]
     weights = np.array([hi - lo for lo, hi in ranges], dtype=float)
     weights /= weights.sum()
-    samples = []
+    samples: list[float] = []
     for _ in range(n):
         gi = rng.choice(len(ranges), p=weights)
         lo, hi = ranges[gi]
@@ -142,19 +159,26 @@ def null_distribution(ses: Session, session: str, width_s: float, env_t, spec_t,
     return np.array(samples)
 
 
-def find_peaks(times, scores, exclude_t, exclude_radius, suppress_radius, top_n=4):
+def find_peaks(
+    times: list[float],
+    scores: list[float | None],
+    exclude_t: float,
+    exclude_radius: float,
+    suppress_radius: float,
+    top_n: int = 4,
+) -> list[tuple[float, float]]:
     """Non-max suppression over the scored grid. Excludes a radius around
     the known anchor time, then greedily picks the highest-scoring
     remaining points, suppressing points within suppress_radius of a pick."""
     idx = [i for i, t in enumerate(times)
            if scores[i] is not None and abs(t - exclude_t) > exclude_radius]
-    idx.sort(key=lambda i: scores[i], reverse=True)
-    picked = []
+    idx.sort(key=lambda i: cast(float, scores[i]), reverse=True)
+    picked: list[tuple[float, float]] = []
     for i in idx:
         t = times[i]
         if any(abs(t - pt) <= suppress_radius for pt, _ in picked):
             continue
-        picked.append((t, scores[i]))
+        picked.append((t, cast(float, scores[i])))
         if len(picked) >= top_n:
             break
     return picked
@@ -163,7 +187,9 @@ def find_peaks(times, scores, exclude_t, exclude_radius, suppress_radius, top_n=
 # ----------------------------------------------------------------------
 # Corroborating evidence (reported, never gates)
 # ----------------------------------------------------------------------
-def z_profile(ses: Session, t_lo: float, dur: float):
+def z_profile(
+    ses: Session, t_lo: float, dur: float
+) -> tuple[np.ndarray | None, float | None]:
     """Same envelope + per-frame MAD z-score formula as
     confirm_missing_strikes.low_threshold_detect, returned as a continuous
     array (not grouped) so any query time has a well-defined z."""
@@ -184,20 +210,22 @@ def z_profile(ses: Session, t_lo: float, dur: float):
     return k, dt
 
 
-def energy_z_at(k_arr, dt, t_lo, t_query):
+def energy_z_at(
+    k_arr: np.ndarray | None, dt: float | None, t_lo: float, t_query: float | None
+) -> float:
     if k_arr is None or t_query is None:
         return float("nan")
-    i = int(round((t_query - t_lo) / dt))
+    i = int(round((t_query - t_lo) / cast(float, dt)))
     i = max(0, min(len(k_arr) - 1, i))
     return float(k_arr[i])
 
 
-def rhythm_fit(offset_s):
+def rhythm_fit(offset_s: float | None) -> tuple[int | None, float | None, bool]:
     """Best-fitting lattice multiple k in {1,2} with per-step spacing inside
     [RHYTHM_LO_S, RHYTHM_HI_S]. Returns (k, per_step, consistent)."""
     if offset_s is None:
         return None, None, False
-    best = None
+    best: tuple[int, float, float] | None = None
     for k in (1, 2):
         per_step = abs(offset_s) / k
         if RHYTHM_LO_S <= per_step <= RHYTHM_HI_S:
@@ -210,7 +238,9 @@ def rhythm_fit(offset_s):
     return k, per_step, True
 
 
-def snap_to_lattice(offset_s, nominal=RHYTHM_NOMINAL_S, max_k=2):
+def snap_to_lattice(
+    offset_s: float | None, nominal: float = RHYTHM_NOMINAL_S, max_k: int = 2
+) -> float | None:
     """Fallback prediction for WEAK/NOT-FOUND slots: keep the empirical
     peak's side/rough magnitude, snapped to the nearest nominal step."""
     if offset_s is None:
@@ -227,7 +257,14 @@ def circ_diff(a: float, b: float) -> float:
 # ----------------------------------------------------------------------
 # Per-target processing
 # ----------------------------------------------------------------------
-def process_target(tgt, ses, env_t, spec_t, null_samples, bearer):
+def process_target(
+    tgt: dict[str, Any],
+    ses: Session,
+    env_t: np.ndarray,
+    spec_t: np.ndarray,
+    null_samples: np.ndarray,
+    bearer: Bearer | None,
+) -> dict[str, Any]:
     win_lo, win_hi = iso_to_ts(tgt["win_lo_iso"]), iso_to_ts(tgt["win_hi_iso"])
     anchor = iso_to_ts(tgt["anchor_iso"])
     width = win_hi - win_lo
@@ -243,8 +280,13 @@ def process_target(tgt, ses, env_t, spec_t, null_samples, bearer):
     null_max = float(null_samples.max())
     null_p99 = float(np.percentile(null_samples, 99))
 
-    slots = []
+    slots: list[dict[str, Any]] = []
     for rank in range(2):
+        t_peak: float | None
+        offset: float | None
+        k_fit: int | None
+        per_step: float | None
+        bearing: float | None
         if rank < len(peaks):
             t_peak, sc = peaks[rank]
             offset = t_peak - anchor
@@ -253,7 +295,8 @@ def process_target(tgt, ses, env_t, spec_t, null_samples, bearer):
             k_fit, per_step, consistent = rhythm_fit(offset)
             ez = energy_z_at(k_arr, dt, win_lo, t_peak)
             bearing = bearer.level_azimuth(t_peak) if (bearer and tgt.get("bearing")) else None
-            predicted_t = t_peak if verdict == "FOUND" else anchor + snap_to_lattice(offset)
+            predicted_t = t_peak if verdict == "FOUND" else anchor + cast(
+                float, snap_to_lattice(offset))
         else:
             # defensive fallback -- should not trigger in practice (a ~200+
             # point grid always yields >=2 local maxima outside the anchor
@@ -268,8 +311,8 @@ def process_target(tgt, ses, env_t, spec_t, null_samples, bearer):
                            energy_z=ez, bearing=bearing, predicted_t=predicted_t))
 
     # order by whichever time we actually have (peak time, else predicted)
-    def sort_key(s):
-        return s["t_peak"] if s["t_peak"] is not None else s["predicted_t"]
+    def sort_key(s: dict[str, Any]) -> float:
+        return cast(float, s["t_peak"] if s["t_peak"] is not None else s["predicted_t"])
     slots.sort(key=sort_key)
 
     return dict(tgt=tgt, win_lo=win_lo, win_hi=win_hi, anchor=anchor,
@@ -280,7 +323,7 @@ def process_target(tgt, ses, env_t, spec_t, null_samples, bearer):
 # ----------------------------------------------------------------------
 # Register I/O
 # ----------------------------------------------------------------------
-def load_rows(session: str):
+def load_rows(session: str) -> tuple[Sequence[str] | None, list[dict[str, str]]]:
     with REGISTER_PATH[session].open(newline="") as fh:
         r = csv.DictReader(fh)
         fieldnames = r.fieldnames
@@ -288,14 +331,21 @@ def load_rows(session: str):
     return fieldnames, rows
 
 
-def write_rows(session: str, fieldnames, rows):
+def write_rows(session: str, fieldnames: Sequence[str], rows: list[dict[str, str]]) -> None:
     with REGISTER_PATH[session].open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(rows)
 
 
-def apply_register_update(fieldnames, rows, slot, strike_no, verdict, t_utc_iso):
+def apply_register_update(
+    fieldnames: Sequence[str] | None,
+    rows: list[dict[str, str]],
+    slot: str,
+    strike_no: int,
+    verdict: str,
+    t_utc_iso: str,
+) -> None:
     updated = False
     for row in rows:
         if row["slot"] == slot and row["strike_no"] == str(strike_no):
@@ -320,11 +370,11 @@ def apply_register_update(fieldnames, rows, slot, strike_no, verdict, t_utc_iso)
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
-def main():
+def main() -> None:
     rng = np.random.default_rng(RNG_SEED)
 
-    sessions = {}
-    templates = {}
+    sessions: dict[str, Session] = {}
+    templates: dict[str, tuple[Any, ...]] = {}
     for s in ("st", "pu"):
         ses = Session(s.upper())
         fieldnames, rows = load_rows(s)
@@ -339,7 +389,7 @@ def main():
 
     # one null distribution per (session, window width) pair -- PU A_kugel
     # and PU C_EG share width 5.6 s, so PU needs only one null run.
-    null_cache = {}
+    null_cache: dict[tuple[str, float], np.ndarray] = {}
     print(f"\nbuilding null distributions (n={N_NULL} draws each, 25 ms grid, "
           f"identical scan procedure)...")
     for tgt in TARGETS:
@@ -356,7 +406,7 @@ def main():
               f"mean={samples.mean():.3f} sd={samples.std():.3f}  "
               f"p99={np.percentile(samples, 99):.3f}  max={samples.max():.3f}")
 
-    results = []
+    results: list[dict[str, Any]] = []
     print("\nscanning pre-registered target windows...")
     for tgt in TARGETS:
         s = tgt["session"]

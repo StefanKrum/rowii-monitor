@@ -30,6 +30,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -87,14 +88,14 @@ def circ_mean(deg: np.ndarray, w: np.ndarray) -> float:
 
 
 class Bearer:
-    def __init__(self):
-        self.bf = SRPPHATBeamformer(n_azimuth=72) if SRP_AVAILABLE else None
+    def __init__(self) -> None:
+        self.bf: Any = SRPPHATBeamformer(n_azimuth=72) if SRP_AVAILABLE else None
         self.angles = np.radians(np.linspace(0, 360, 72, endpoint=False))
         self.gen = Stream(SESSION_DIR["ST"], "RAWGeneratorMic__0")
         self.tur = Stream(SESSION_DIR["ST"], "RAWTurbineMic__1")
-        self.sos = None
+        self.sos: np.ndarray | None = None
 
-    def window(self, t_wall: float, dur: float):
+    def window(self, t_wall: float, dur: float) -> tuple[np.ndarray, int] | None:
         g = next(iter(self.gen.chunks(t_wall, dur + 1.0)), None)
         t = next(iter(self.tur.chunks(t_wall, dur + 1.0)), None)
         if g is None or t is None:
@@ -106,7 +107,7 @@ class Bearer:
             return None
         return np.vstack([gd[:, gi:gi + n], td[:, ti:ti + n]]), sr
 
-    def srp_surface(self, t_utc: float):
+    def srp_surface(self, t_utc: float) -> np.ndarray | None:
         if not SRP_AVAILABLE:
             raise RuntimeError(
                 "SRP mode unavailable: the measurement partner's package is "
@@ -123,11 +124,11 @@ class Bearer:
         return np.mean([np.asarray(f[f"srp_phat_{lvl}"], dtype=float)
                         for lvl in ("generator", "turbine")], axis=0)
 
-    def srp_azimuth(self, t_utc: float):
+    def srp_azimuth(self, t_utc: float) -> float | None:
         s = self.srp_surface(t_utc)
         return None if s is None else circ_mean(np.degrees(self.angles), s)
 
-    def level_azimuth(self, t_utc: float):
+    def level_azimuth(self, t_utc: float) -> float | None:
         """Energy-weighted circular mean over the 8 ring mics (both rings)."""
         win = self.window(t_utc + WALL_FROM_UTC - PRE_S, LEVEL_WIN_S)
         if win is None:
@@ -140,7 +141,7 @@ class Bearer:
         return circ_mean(RING_ANGLES, np.sqrt(ring_e))
 
 
-def load_position_times():
+def load_position_times() -> dict[str, list[float]]:
     """Detector peak times (protocol view) for the 8 ring plates."""
     out: dict[str, list[float]] = {}
     for r in csv.DictReader((OUTPUT_ROOT / "protocol_st.csv").open()):
@@ -150,22 +151,24 @@ def load_position_times():
     return out
 
 
-def load_sweep():
+def load_sweep() -> list[dict[str, Any]]:
     """Sweep impulses: detector raw times (peak-referenced); GT mark_no via
     +/-0.3 s pairing for traceability (unmatched detector impulses keep '')."""
-    dets = [{"t": datetime.fromisoformat(r["t_utc"]).timestamp(), "det": True,
-             "k": float(r["k"])}
-            for r in csv.DictReader((OUTPUT_ROOT / "raw_st.csv").open())
-            if r["label"].startswith("vane")]
+    dets: list[dict[str, Any]] = [
+        {"t": datetime.fromisoformat(r["t_utc"]).timestamp(), "det": True,
+         "k": float(r["k"])}
+        for r in csv.DictReader((OUTPUT_ROOT / "raw_st.csv").open())
+        if r["label"].startswith("vane")]
     gt = GT_DIR / "080726_strikes_seconds_st.csv"
-    marks = []
+    marks: list[dict[str, Any]] = []
     for r in csv.DictReader([line for line in gt.open() if not line.startswith("#")]):
         if r["kind"] == "vane-sweep":
             marks.append({"no": r["strike_no"],
                           "t": datetime.fromisoformat(r["strike_utc"]).timestamp()})
     cand = sorted((abs(m["t"] - d["t"]), i, j) for i, m in enumerate(marks)
                   for j, d in enumerate(dets) if abs(m["t"] - d["t"]) <= 0.3)
-    um, ud = set(), set()
+    um: set[int] = set()
+    ud: set[int] = set()
     for _, i, j in cand:
         if i in um or j in ud:
             continue
@@ -173,12 +176,13 @@ def load_sweep():
         ud.add(j)
         dets[j]["no"] = marks[i]["no"]
     # marks the detector missed still deserve a bearing (mark time as onset)
-    extra = [{"t": m["t"], "no": m["no"], "det": False, "k": 0.0}
-             for i, m in enumerate(marks) if i not in um]
+    extra: list[dict[str, Any]] = [
+        {"t": m["t"], "no": m["no"], "det": False, "k": 0.0}
+        for i, m in enumerate(marks) if i not in um]
     return sorted(dets + extra, key=lambda d: d["t"])
 
 
-def main():
+def main() -> None:
     b = Bearer()
     pos_times = load_position_times()
     print("== calibration on the 8 ring plates (detector peak times) ==")
@@ -192,9 +196,9 @@ def main():
     print(f"{'plate':9s} {hdr}   (expected)")
     worst = {name: 0.0 for name, _ in methods}
     for label, expected in EXPECTED.items():
-        errs = {}
+        errs: dict[str, float] = {}
         for name, fn in methods:
-            azs = [fn(t) for t in pos_times.get(label, [])]
+            azs: list[float | None] = [fn(t) for t in pos_times.get(label, [])]
             azs = [a for a in azs if a is not None]
             if not azs:
                 errs[name] = float("nan")
@@ -223,20 +227,20 @@ def main():
     K_MIN = 500.0
     loud = [m for m in ok if m.get("k", 0.0) >= K_MIN]
     quiet = [m for m in ok if m.get("k", 0.0) < K_MIN]
-    bursts: list[list[dict]] = []
+    bursts: list[list[dict[str, Any]]] = []
     for m in loud:
         if bursts and m["t"] - bursts[-1][-1]["t"] < 1.5:
             bursts[-1].append(m)
         else:
             bursts.append([m])
 
-    def burst_az(grp):
+    def burst_az(grp: list[dict[str, Any]]) -> float:
         return circ_mean(np.array([x["az"] for x in grp]), np.ones(len(grp)))
 
     # -- stage 2: merge consecutive bursts of the SAME vane (bounce pauses):
     #    same azimuth within AZ_MERGE_DEG and gap below GAP_MAX_S ----------
     AZ_MERGE_DEG = 11.0
-    groups: list[list[dict]] = [list(bursts[0])]
+    groups: list[list[dict[str, Any]]] = [list(bursts[0])]
     for grp in bursts[1:]:
         prev = groups[-1]
         if (abs(circ_diff(burst_az(grp), burst_az(prev))) <= AZ_MERGE_DEG
@@ -248,7 +252,8 @@ def main():
     #    they never define groups (their bearing is noise) -----------------
     n_orphan = 0
     for m in quiet:
-        best, best_dt = None, 20.0
+        best: list[dict[str, Any]] | None = None
+        best_dt = 20.0
         for grp in groups:
             dt = min(abs(m["t"] - grp[0]["t"]), abs(m["t"] - grp[-1]["t"]))
             if dt < best_dt:
@@ -272,7 +277,7 @@ def main():
                             datetime.fromtimestamp(m["t"], UTC)
                             .isoformat(timespec="milliseconds"),
                             f"{m['az']:.1f}", method])
-    prev_az = None
+    prev_az: float | None = None
     for vi, grp in enumerate(groups, 1):
         az = circ_mean(np.array([m["az"] for m in grp]), np.ones(len(grp)))
         step = f" step={circ_diff(az, prev_az):+6.1f}" if prev_az is not None else ""

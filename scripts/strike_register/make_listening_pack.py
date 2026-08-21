@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import matplotlib
 import numpy as np
@@ -59,12 +60,12 @@ CLIPS = [
 
 
 def wav_norm(x: np.ndarray) -> np.ndarray:
-    return (0.9 * x / (np.max(np.abs(x)) + 1e-12) * 32767).astype(np.int16)
+    return cast(np.ndarray, (0.9 * x / (np.max(np.abs(x)) + 1e-12) * 32767).astype(np.int16))
 
 
-def main():
+def main() -> None:
     sessions = {"ST": Session("ST"), "PU": Session("PU")}
-    hp = None
+    hp: np.ndarray | None = None
     index = ["# Listening pack — open strike slots (2026-08-19)\n",
              "green solid = confirmed strike · orange dashed = rhythm-predicted (NOT detected)\n"]
     for name, ses_name, t0, dur, confirmed, predicted in CLIPS:

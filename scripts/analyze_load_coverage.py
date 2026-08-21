@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 
 from rowii.config import load_config
-from rowii.io.dataset import discover
-from rowii.pipeline import _streams_for_variant, build_run_grid, run_utc_offset_ns
+from rowii.io.dataset import discover, run_utc_offset_ns
+from rowii.pipeline import _streams_for_variant, build_run_grid
 from rowii.scada.labels import load_scada_window_means
 
 cfg = load_config()

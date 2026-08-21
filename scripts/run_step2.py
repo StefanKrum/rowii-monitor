@@ -2394,7 +2394,7 @@ def _run_ensemble_view(
     alpha: float,
     *,
     run_name: str,
-) -> tuple[pd.DataFrame, int]:
+) -> tuple[pd.DataFrame, int, int]:
     """Majority-ensemble FAR table for one (run, labels_mode): OC-SVM + Isolation
     Forest + LSTM-AE (`_ENSEMBLE_MEMBER_FACTORIES`), each calibrated with its OWN
     per-state split-conformal threshold, plus an `_ENSEMBLE_LABEL` row per state

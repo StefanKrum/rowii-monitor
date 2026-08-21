@@ -22,6 +22,7 @@ import csv
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -47,14 +48,14 @@ RNG = np.random.default_rng(80726)
 
 
 class Session:
-    def __init__(self, session: str):
+    def __init__(self, session: str) -> None:
         self.name = session
         self.gen = Stream(SESSION_DIR[session], "RAWGeneratorMic__0")
         self.tur = Stream(SESSION_DIR[session], "RAWTurbineMic__1")
-        self.sos = None
-        self.sr = self.gen.files[0]["sr"]
+        self.sos: np.ndarray | None = None
+        self.sr: int = self.gen.files[0]["sr"]
 
-    def read(self, t_utc: float, dur: float):
+    def read(self, t_utc: float, dur: float) -> np.ndarray | None:
         """9-channel window at true-UTC start (None if not fully readable)."""
         t_wall = t_utc + WALL_FROM_UTC
         g = next(iter(self.gen.chunks(t_wall, dur + 1.0)), None)
@@ -71,9 +72,9 @@ class Session:
     def band(self, x: np.ndarray) -> np.ndarray:
         if self.sos is None:
             self.sos = butter(4, list(BAND), btype="band", fs=self.sr, output="sos")
-        return sosfilt(self.sos, x)
+        return cast(np.ndarray, sosfilt(self.sos, x))
 
-    def envelope_shape(self, t_utc: float):
+    def envelope_shape(self, t_utc: float) -> tuple[np.ndarray | None, np.ndarray | None]:
         """Normalized envelope (2 ms frames) around the candidate's own peak.
 
         The peak is searched only within +/-40 ms of *t_utc* so a louder
@@ -104,7 +105,7 @@ class Session:
         # spectrum: 40 ms starting 5 ms before the peak SAMPLE, same channel
         s0 = max(0, p * w - int(0.005 * self.sr))
         seg = xb[ch, s0: s0 + int(SPEC_WIN_S * self.sr)]
-        spec = None
+        spec: np.ndarray | None = None
         if len(seg) > 1024:
             f = np.fft.rfftfreq(len(seg), 1 / self.sr)
             spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
@@ -113,7 +114,7 @@ class Session:
         return shape / m, spec
 
 
-def cos(a, b):
+def cos(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
     if a is None or b is None:
         return None
     n = min(len(a), len(b))
@@ -121,7 +122,9 @@ def cos(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
 
 
-def score(e, s, env_t, spec_t):
+def score(
+    e: np.ndarray | None, s: np.ndarray | None, env_t: np.ndarray, spec_t: np.ndarray
+) -> float | None:
     """min(envelope cos, spectrum cos); envelope-only when no spectrum."""
     ce, cs = cos(e, env_t), cos(s, spec_t)
     if ce is None:
@@ -129,7 +132,9 @@ def score(e, s, env_t, spec_t):
     return ce if cs is None else min(ce, cs)
 
 
-def low_threshold_detect(ses: Session, t_utc0: float, dur: float, z: float):
+def low_threshold_detect(
+    ses: Session, t_utc0: float, dur: float, z: float
+) -> list[dict[str, float]]:
     """detect_strikes logic at low threshold on a true-UTC window."""
     x = ses.read(t_utc0, dur)
     if x is None:
@@ -144,7 +149,8 @@ def low_threshold_detect(ses: Session, t_utc0: float, dur: float, z: float):
     k[: int(round(EDGE_GUARD_S * 1000 / ENV_MS))] = 0.0
     pk = np.where(k > z)[0]
     dt = ENV_MS / 1000
-    groups, out = [], []
+    groups: list[list[np.intp]] = []
+    out: list[dict[str, float]] = []
     for p in pk:
         if groups and (p - groups[-1][-1]) * dt < MERGE_S:
             groups[-1].append(p)
@@ -156,12 +162,16 @@ def low_threshold_detect(ses: Session, t_utc0: float, dur: float, z: float):
     return out
 
 
-def load_register(session: str):
+def load_register(session: str) -> list[dict[str, str]]:
     return list(csv.DictReader((OUTPUT_ROOT / f"strikes_register_{session}.csv").open()))
 
 
-def build_template(ses: Session, rows, kinds_filter=None):
-    envs, specs, self_scores = [], [], []
+def build_template(
+    ses: Session, rows: list[dict[str, str]], kinds_filter: tuple[str, ...] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    envs: list[np.ndarray] = []
+    specs: list[np.ndarray | None] = []
+    self_scores: list[float] = []
     for r in rows:
         if r["source"] != "both" or not r["t_utc"]:
             continue
@@ -181,8 +191,14 @@ def build_template(ses: Session, rows, kinds_filter=None):
     return env_t, spec_t, np.array(self_scores)
 
 
-def negatives(ses: Session, gap_ranges, env_t, spec_t, n=200):
-    scores = []
+def negatives(
+    ses: Session,
+    gap_ranges: list[tuple[float, float]],
+    env_t: np.ndarray,
+    spec_t: np.ndarray,
+    n: int = 200,
+) -> np.ndarray:
+    scores: list[float] = []
     for _ in range(n):
         lo, hi = gap_ranges[RNG.integers(len(gap_ranges))]
         t = float(RNG.uniform(lo, hi))
@@ -193,7 +209,15 @@ def negatives(ses: Session, gap_ranges, env_t, spec_t, n=200):
     return np.array(scores)
 
 
-def report(tag, cands, ses, env_t, spec_t, neg_max, pos_p5):
+def report(
+    tag: str,
+    cands: list[dict[str, float]],
+    ses: Session,
+    env_t: np.ndarray,
+    spec_t: np.ndarray,
+    neg_max: float,
+    pos_p5: float,
+) -> None:
     print(f"-- {tag}")
     if not cands:
         print("   no candidates above threshold")
@@ -210,7 +234,7 @@ def report(tag, cands, ses, env_t, spec_t, neg_max, pos_p5):
         print(f"   {tt}  z={c.get('z', float('nan')):6.1f}  score={sc:+.3f}  {verdict}")
 
 
-def main():
+def main() -> None:
     for session in ("st", "pu"):
         ses = Session(session.upper())
         reg = load_register(session)

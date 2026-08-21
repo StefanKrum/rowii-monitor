@@ -41,7 +41,7 @@ def bd_for(name: str) -> list[Path]:
     raise KeyError(name)
 
 
-def per_run(name: str) -> dict:
+def per_run(name: str) -> dict[str, np.ndarray]:
     prep = prepare_run(run=runs[name], variant="fusion", cfg=cfg)
     scada = load_scada_window_means(bd_for(name), prep.grid)
     gt = gt_labels(scada, cfg.gt, window_s=cfg.window.window_s)
@@ -81,7 +81,7 @@ def evaluate(banded: bool) -> None:
             continue
         ti = np.where((ct == c) & scored)[0]
         pi = np.where(cp == c)[0]
-        verdict = None
+        verdict: str | float | None = None
         try:
             split = split_by_segments(seg_pool[pi], np.ones(len(pi), bool), 0.5, SEED)
             refs = F_pool[pi][split.scoring_windows]

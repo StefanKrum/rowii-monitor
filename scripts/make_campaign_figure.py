@@ -107,7 +107,7 @@ def day_midnight_utc(day: str) -> datetime:
     return datetime(d.year, d.month, d.day, tzinfo=UTC)
 
 
-def scada_timeline(day: str):
+def scada_timeline(day: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """(hours, state_str_array, power_array) at 1-s resolution, or None."""
     files = next(
         (v for k, v in idx.betriebsdaten_by_day.items() if day in str(k)), None
@@ -126,9 +126,9 @@ def scada_timeline(day: str):
     return hours, gt["state"].to_numpy(), scada["power"].to_numpy()
 
 
-def segments(hours: np.ndarray, states: np.ndarray):
+def segments(hours: np.ndarray, states: np.ndarray) -> list[tuple[float, float, str]]:
     """Contiguous (start_h, width_h, state) runs."""
-    out = []
+    out: list[tuple[float, float, str]] = []
     start = 0
     for i in range(1, len(states) + 1):
         if i == len(states) or states[i] != states[start]:
@@ -137,8 +137,8 @@ def segments(hours: np.ndarray, states: np.ndarray):
     return out
 
 
-def session_extents(day: str):
-    out = []
+def session_extents(day: str) -> list[tuple[str, float, float]]:
+    out: list[tuple[str, float, float]] = []
     for run in idx.runs:
         if not run.name.startswith(day):
             continue
@@ -160,7 +160,9 @@ _decisions = (
 )
 
 
-def usage_segments(name: str, day: str, h0: float, h1: float):
+def usage_segments(
+    name: str, day: str, h0: float, h1: float
+) -> list[tuple[float, float, str]]:
     """Per-window usage of one session as (start_h, end_h, color) segments,
     read off the replayed once-per-era arm's own alarms.parquet role column:
     green = the window's data went into calibration (the whole commissioning
@@ -184,7 +186,7 @@ def usage_segments(name: str, day: str, h0: float, h1: float):
     colors = np.where(
         df["role"].to_numpy() == "consumed_for_calibration", CAL_COLOR, scored_color
     )
-    segs = []
+    segs: list[tuple[float, float, str]] = []
     start = 0
     for i in range(1, len(colors) + 1):
         if i == len(colors) or colors[i] != colors[start] or hours[i] - hours[i - 1] > 0.05:

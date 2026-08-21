@@ -20,6 +20,7 @@ import csv
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paths import OUTPUT_ROOT  # noqa: E402
@@ -35,20 +36,20 @@ def iso_ms(t: float) -> str:
     return datetime.fromtimestamp(t, UTC).isoformat(timespec="milliseconds")
 
 
-def consolidate_st():
+def consolidate_st() -> list[dict[str, str]]:
     reg = list(csv.DictReader((HERE / "strikes_register_st.csv").open()))
     bearing = list(csv.DictReader((HERE / "bearing_st_sweep.csv").open()))
     raw = [r for r in csv.DictReader((HERE / "raw_st.csv").open())
            if r["label"].startswith("vane")]
     det_times = [(ts(r["t_utc"]), float(r["k"])) for r in raw]
 
-    def det_match(t):
+    def det_match(t: float) -> tuple[float, float] | None:
         best = min(det_times, key=lambda d: abs(d[0] - t), default=None)
         return best if best and abs(best[0] - t) <= 0.3 else None
 
-    groups: dict[int, list[dict]] = {}
+    groups: dict[int, list[dict[str, Any]]] = {}
     for r in bearing:
-        m = {"t": ts(r["t_utc"]), "mark_no": r["gt_mark_no"]}
+        m: dict[str, Any] = {"t": ts(r["t_utc"]), "mark_no": r["gt_mark_no"]}
         d = det_match(m["t"])
         m["det_k"] = d[1] if d else None
         m["source"] = ("both" if d and m["mark_no"] else
@@ -81,7 +82,7 @@ def consolidate_st():
     return rows
 
 
-def consolidate_pu():
+def consolidate_pu() -> list[dict[str, str]]:
     reg = list(csv.DictReader((HERE / "strikes_register_pu.csv").open()))
     finds = {("landmark-A_kugelschieber", "1"):
              ("2026-07-08T12:49:46.216+00:00", "template-confirmed"),
@@ -94,7 +95,7 @@ def consolidate_pu():
     return reg
 
 
-def write(session: str, rows):
+def write(session: str, rows: list[dict[str, str]]) -> dict[str, int]:
     path = HERE / f"strikes_register_{session}.csv"
     with path.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["slot", "strike_no", "t_utc",

@@ -18,6 +18,7 @@ import csv
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib
 import numpy as np
@@ -31,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from confirm_missing_strikes import Session  # noqa: E402
 from paths import OUTPUT_ROOT  # noqa: E402
+from repro_bruno_strikes import Stream  # noqa: E402
 
 OUT = OUTPUT_ROOT / "listening" / "full"
 ASSETS = OUT / "assets"
@@ -123,12 +125,13 @@ PREDICTED = {  # slot -> predicted utc (last_six_verdicts sidecar)
 }
 
 
-def _collect(stream, t_wall: float, dur: float, sr: int) -> np.ndarray | None:
+def _collect(stream: Stream, t_wall: float, dur: float, sr: int) -> np.ndarray | None:
     """Concatenate one stream's chunks across burst-file boundaries; files may
     overlap by seconds (the earlier file wins, cursor-deduplicated). Seam
     error is a handful of samples — irrelevant for listening."""
     n_target = int(dur * sr)
-    parts, cursor = [], t_wall
+    parts: list[np.ndarray] = []
+    cursor = t_wall
     for c0, c_sr, data in sorted(stream.chunks(t_wall, dur), key=lambda c: c[0]):
         c_end = c0 + data.shape[1] / c_sr
         if c_end <= cursor + 1e-4:
@@ -142,7 +145,7 @@ def _collect(stream, t_wall: float, dur: float, sr: int) -> np.ndarray | None:
     return x[:, :n_target] if x.shape[1] >= sr else None
 
 
-def read_stitched(ses: Session, t0: float, dur: float):
+def read_stitched(ses: Session, t0: float, dur: float) -> np.ndarray | None:
     t_wall = t0 + 7200.0
     g = _collect(ses.gen, t_wall, dur, ses.sr)
     t = _collect(ses.tur, t_wall, dur, ses.sr)
@@ -152,20 +155,20 @@ def read_stitched(ses: Session, t0: float, dur: float):
     return np.vstack([g[:, :n], t[:, :n]])
 
 
-def load_register(ses):
+def load_register(ses: str) -> list[dict[str, str]]:
     return list(csv.DictReader((OUTPUT_ROOT / f"strikes_register_{ses}.csv").open()))
 
 
-def load_raw(ses):
+def load_raw(ses: str) -> list[dict[str, Any]]:
     return [{"t": utc(r["t_utc"]), "label": r["label"]}
             for r in csv.DictReader((OUTPUT_ROOT / f"raw_{ses}.csv").open())]
 
 
-def png_for(sig, sr, path, width_in):
+def png_for(sig: np.ndarray, sr: int, path: Path, width_in: float) -> None:
     f, t, S = spectrogram(sig, fs=sr, nperseg=1024, noverlap=512)
     db = 10 * np.log10(S + 1e-14)
     fig = plt.figure(figsize=(width_in, 3.4), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1])
+    ax = fig.add_axes((0, 0, 1, 1))
     ax.pcolormesh(t, f / 1000, db, shading="auto", cmap="magma",
                   vmin=np.percentile(db, 55), vmax=np.percentile(db, 99.9))
     ax.set(ylim=(0, 25), xlim=(t[0], t[-1]))
@@ -174,12 +177,12 @@ def png_for(sig, sr, path, width_in):
     plt.close(fig)
 
 
-def wav_for(sig, sr, path):
+def wav_for(sig: np.ndarray, sr: int, path: Path) -> None:
     wavfile.write(path, sr, (0.9 * sig / (np.max(np.abs(sig)) + 1e-12) * 32767)
                   .astype(np.int16))
 
 
-def main():
+def main() -> None:
     sessions = {"st": Session("ST"), "pu": Session("PU")}
     regs = {s: load_register(s) for s in ("st", "pu")}
     raws = {s: load_raw(s) for s in ("st", "pu")}
@@ -187,7 +190,7 @@ def main():
 
     ALL9 = ["TurMic270", "GenMic270", "TurMic90", "TurMic180", "GenMic0",
             "GenMic90", "GenMic180", "TurMic0", "TurMicBottom"]
-    cards = []
+    cards: list[dict[str, Any]] = []
     jobs = ([(s, sl, m, chs, 70.0, False, None) for s, sl, m, chs in POS]
             + [(s, sl, m, chs, d, True, None) for s, sl, m, chs, d in SWEEP]
             + [("st", "vane_18", "focus", ALL9, 75.0, False,
@@ -206,13 +209,16 @@ def main():
             print(f"SKIP {ses_key} {slot_prefix} (unreadable)")
             continue
         for ch in need:
-            sig = x[MIC.index(ch)].astype(np.float64)
+            sig = cast(np.ndarray, x)[MIC.index(ch)].astype(np.float64)
             png_for(sig, ses.sr, ASSETS / f"{cid}_{ch}.png",
                     width_in=min(60, max(14, dur / 4.5)))
             wav_for(sosfilt(hp, sig), ses.sr, ASSETS / f"{cid}_{ch}_hp.wav")
             wav_for(sig, ses.sr, ASSETS / f"{cid}_{ch}_orig.wav")
         # markers
-        greens, oranges, zones, thin = [], [], [], []
+        greens: list[tuple[str, float]] = []
+        oranges: list[tuple[str, float, bool]] = []
+        zones: list[float] = []
+        thin: list[float] = []
         for r in regs[ses_key]:
             in_card = (r["slot"].startswith("vane") if is_sweep
                        else r["slot"] == slot_prefix)
@@ -236,7 +242,7 @@ def main():
                         zones.append(trel)
         marked = [t for _, t in greens] + [t for _, t, _ in oranges]
         slot_ts = [utc(r["t_utc"]) for r in regs[ses_key] if r["t_utc"]]
-        neigh = []
+        neigh: list[float] = []
         for d in raws[ses_key]:
             trel = d["t"] - t0
             match_card = (d["label"].startswith("vane") if is_sweep
@@ -319,14 +325,15 @@ Key <b>M</b> = set a mark at the red cursor of the last-used card ·
 <button id="exp">Export marks</button> <button id="clr">Clear all</button>
 <span id="mcount"></span><textarea id="exportbox" readonly></textarea></div>
 """
-    body, last_ses = [], None
+    body: list[str] = []
+    last_ses: str | None = None
     for c in cards:
         if c["ses"] != last_ses:
             body.append(f'<h2 class="ses">Session {c["ses"]} '
                         f'({"Standstill" if c["ses"] == "ST" else "Pump operation"})</h2>')
             last_ses = c["ses"]
         pw = 100.0 / c["dur"]
-        marks = []
+        marks: list[str] = []
         for t in c["thin"]:
             marks.append(f'<div class="mk x" style="left:{t*pw:.3f}%"></div>')
         for t in c.get("neigh", []):
@@ -334,7 +341,7 @@ Key <b>M</b> = set a mark at the red cursor of the last-used card ·
         for z in c["zones"]:
             marks.append(f'<div class="zone" style="left:{(z-ZONE_HALF_S)*pw:.3f}%;'
                          f'width:{2*ZONE_HALF_S*pw:.3f}%"></div>')
-        btns = []
+        btns: list[str] = []
         for lab, t in c["greens"]:
             marks.append(f'<div class="mk c" style="left:{t*pw:.3f}%"><span>{lab}</span></div>')
             if not c["is_sweep"]:

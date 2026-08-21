@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import csv
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -105,8 +107,8 @@ def wall_to_utc_iso(t_wall: float) -> str:
 class Stream:
     """Seek-reader over one mic stream's burst files (embedded-timestamp based)."""
 
-    def __init__(self, session_dir: Path, stub: str):
-        self.files = []
+    def __init__(self, session_dir: Path, stub: str) -> None:
+        self.files: list[dict[str, Any]] = []
         for p in sorted(session_dir.glob(f"{stub}_*.dat")):
             h = read_header(p)
             _, names, _, data_off = _parse_header_region(p)
@@ -116,7 +118,7 @@ class Stream:
                                "n": h.n_frames, "off": data_off,
                                "n_ch": len(names), "names": names})
 
-    def chunks(self, t_wall: float, dur: float):
+    def chunks(self, t_wall: float, dur: float) -> Iterator[tuple[float, int, np.ndarray]]:
         """Yield (t_start_wall, sr, data[ch, n]) for every file overlap >= 1 s."""
         t_end = t_wall + dur
         for f in self.files:
@@ -138,11 +140,11 @@ class Stream:
             yield f["t0"] + i0 / sr, sr, data
 
 
-def detect_strikes(x: np.ndarray, sr: int, k_thresh: float):
+def detect_strikes(x: np.ndarray, sr: int, k_thresh: float) -> list[dict[str, float]]:
     """Partner's detector, transcribed verbatim (see module docstring)."""
     sos = butter(4, list(BAND), btype="band", fs=sr, output="sos")
     w = int(sr * ENV_MS / 1000)
-    ks = []
+    ks: list[np.ndarray] = []
     for ch in range(x.shape[0]):
         e = sosfilt(sos, x[ch]) ** 2
         n = len(e) // w
@@ -157,13 +159,13 @@ def detect_strikes(x: np.ndarray, sr: int, k_thresh: float):
         kmax[:guard] = 0.0
     pk = np.where(kmax > k_thresh)[0]
     dt = ENV_MS / 1000
-    groups: list[list[int]] = []
+    groups: list[list[np.intp]] = []
     for p in pk:
         if groups and (p - groups[-1][-1]) * dt < MERGE_S:
             groups[-1].append(p)
         else:
             groups.append([p])
-    out = []
+    out: list[dict[str, float]] = []
     for g in groups:
         i = g[int(np.argmax(kmax[g]))]
         out.append({"t_rel": float(i * dt), "k": float(kmax[i]),
@@ -171,11 +173,12 @@ def detect_strikes(x: np.ndarray, sr: int, k_thresh: float):
     return out
 
 
-def pick_triplet(strikes):
+def pick_triplet(strikes: list[dict[str, float]]) -> list[dict[str, float]]:
     """Partner's 3-strongest-within-10 s selection, transcribed verbatim."""
     if len(strikes) <= 3:
         return sorted(strikes, key=lambda s: s["t_wall"])
-    best, best_score = None, -1.0
+    best: list[dict[str, float]] | None = None
+    best_score = -1.0
     ts = [s["t_wall"] for s in strikes]
     for i in range(len(strikes)):
         grp = [s for s in strikes if abs(s["t_wall"] - ts[i]) <= 5.0]
@@ -183,15 +186,17 @@ def pick_triplet(strikes):
         score = sum(s["k"] for s in grp)
         if score > best_score:
             best, best_score = grp, score
-    return sorted(best, key=lambda s: s["t_wall"])
+    return sorted(cast("list[dict[str, float]]", best), key=lambda s: s["t_wall"])
 
 
-def detect_window(gen: Stream, tur: Stream, t_wall: float, dur: float):
+def detect_window(
+    gen: Stream, tur: Stream, t_wall: float, dur: float
+) -> list[dict[str, float]]:
     """Detect impulses in [t_wall, t_wall+dur) across the 9 mics, absolute times."""
     tur_chunks = list(tur.chunks(t_wall, dur))
-    out = []
+    out: list[dict[str, float]] = []
     for g_t0, sr, g_data in gen.chunks(t_wall, dur):
-        match = None
+        match: tuple[float, int, np.ndarray] | None = None
         for t_t0, t_sr, t_data in tur_chunks:
             if abs(t_t0 - g_t0) < 5.0:
                 match = (t_t0, t_sr, t_data)
@@ -210,7 +215,7 @@ def detect_window(gen: Stream, tur: Stream, t_wall: float, dur: float):
             s["t_wall"] = start + s["t_rel"]
             out.append(s)
     out.sort(key=lambda s: s["t_wall"])
-    dedup = []
+    dedup: list[dict[str, float]] = []
     for s in out:
         if dedup and s["t_wall"] - dedup[-1]["t_wall"] < MERGE_S:
             continue
@@ -218,8 +223,10 @@ def detect_window(gen: Stream, tur: Stream, t_wall: float, dur: float):
     return dedup
 
 
-def cluster_vanes(strikes, gap_s: float = 1.5):
-    vanes: list[list[dict]] = []
+def cluster_vanes(
+    strikes: list[dict[str, float]], gap_s: float = 1.5
+) -> list[list[dict[str, float]]]:
+    vanes: list[list[dict[str, float]]] = []
     for s in strikes:
         if vanes and s["t_wall"] - vanes[-1][-1]["t_wall"] <= gap_s:
             vanes[-1].append(s)
@@ -228,9 +235,9 @@ def cluster_vanes(strikes, gap_s: float = 1.5):
     return vanes
 
 
-def load_gt_marks(session: str):
+def load_gt_marks(session: str) -> list[dict[str, Any]]:
     path = GT_DIR / f"080726_strikes_seconds_{session.lower()}.csv"
-    marks = []
+    marks: list[dict[str, Any]] = []
     with path.open() as fh:
         rows = [r for r in fh if not r.startswith("#")]
     for rec in csv.DictReader(rows):
@@ -239,7 +246,9 @@ def load_gt_marks(session: str):
     return marks
 
 
-def match_report(detections, marks, tol: float):
+def match_report(
+    detections: list[dict[str, float]], marks: list[dict[str, Any]], tol: float
+) -> tuple[int, int, list[float]]:
     """Fraction of detections with a GT mark within tol (and vice versa)."""
     det_t = np.array([d["t_wall"] + WALL_TO_UTC_S for d in detections])
     mark_t = np.array([m["t_utc"] for m in marks])
@@ -251,14 +260,15 @@ def match_report(detections, marks, tol: float):
     return d_hit, m_hit, dts
 
 
-def run_session(session: str):
+def run_session(session: str) -> bool:
     print(f"\n================ session {session} ({SESSION_DIR[session].name}) ================")
     gen = Stream(SESSION_DIR[session], "RAWGeneratorMic__0")
     tur = Stream(SESSION_DIR[session], "RAWTurbineMic__1")
     print(f"files: gen={len(gen.files)} tur={len(tur.files)}  "
           f"(sr={gen.files[0]['sr']} Hz, ch={gen.files[0]['n_ch']}+{tur.files[0]['n_ch']})")
 
-    raw_rows, proto_rows = [], []
+    raw_rows: list[tuple[Any, ...]] = []
+    proto_rows: list[tuple[Any, ...]] = []
     # -- positions ------------------------------------------------------
     print(f"{'minute':6s} {'label':11s} {'#det':>4s} {'ref':>4s} {'max_k':>10s}  triplet(kept)")
     ok = True
@@ -281,7 +291,7 @@ def run_session(session: str):
     t0 = wall(start) - 10.0
     dur = n_min * 60.0 + 30.0
     det = detect_window(gen, tur, t0, dur)
-    per_min = {}
+    per_min: dict[str, int] = {}
     for s in det:
         m = datetime.fromtimestamp(s["t_wall"], UTC).strftime("%H:%M")
         per_min[m] = per_min.get(m, 0) + 1
@@ -339,7 +349,7 @@ def run_session(session: str):
     return ok
 
 
-def main():
+def main() -> None:
     sessions = sys.argv[1:] or ["ST", "PU"]
     OUT.mkdir(parents=True, exist_ok=True)
     for session in sessions:
