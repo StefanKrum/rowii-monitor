@@ -9,7 +9,7 @@ usage constants; writes graphics for the thesis campaign section."""
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -103,8 +103,8 @@ def day_midnight_utc(day: str) -> datetime:
         for run in idx.runs if run.name.startswith(day)
         for files in run.files.values() for bf in files
     ]
-    d = min(starts).astimezone(timezone.utc).date()
-    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    d = min(starts).astimezone(UTC).date()
+    return datetime(d.year, d.month, d.day, tzinfo=UTC)
 
 
 def scada_timeline(day: str):
@@ -199,7 +199,7 @@ plt.rcParams.update({
 })
 fig, axes = plt.subplots(len(DAYS), 1, figsize=(7.0, 7.6), sharex=True)
 
-for ax, (day, label, era) in zip(axes, DAYS):
+for ax, (day, label, era) in zip(axes, DAYS, strict=True):
     tl = scada_timeline(day)
     if tl is not None:
         hours, states, power = tl

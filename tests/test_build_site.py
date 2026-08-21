@@ -456,7 +456,7 @@ def test_render_clip_cards_unknown_kind_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_audio_review_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_audio_review_compose() -> None:
     import publish_audio_review as par
     html = par.compose_audio_review_html(
         candidates_fragment=("/*css*/", "<div id='cand'></div>", "/*js*/"),

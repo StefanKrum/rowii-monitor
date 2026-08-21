@@ -13,7 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import numpy as np
-import pandas as pd
 
 from rowii.anomaly.conformal import calibrate
 from rowii.anomaly.references import split_by_segments
@@ -59,7 +58,7 @@ def cells(state: np.ndarray, power: np.ndarray, banded: bool) -> np.ndarray:
     band = np.floor(np.nan_to_num(power, nan=-1e9) / BIN_MW).astype(int)
     return np.array([
         f"{s}@{b}" if (banded and s == "turbine") else str(s)
-        for s, b in zip(state, band)
+        for s, b in zip(state, band, strict=True)
     ])
 
 

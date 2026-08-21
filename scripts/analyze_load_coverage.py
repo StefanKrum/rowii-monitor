@@ -41,7 +41,9 @@ def bd_for(run_name: str) -> list[Path]:
 def window_power(run_name: str) -> pd.DataFrame:
     run = runs[run_name]
     offset = run_utc_offset_ns(run)
-    grid = build_run_grid(run, _streams_for_variant("fusion"), cfg.window.window_s, offset_ns=offset)
+    grid = build_run_grid(
+        run, _streams_for_variant("fusion"), cfg.window.window_s, offset_ns=offset
+    )
     df = load_scada_window_means(bd_for(run_name), grid)
     df = df.reset_index(drop=True)
     df["window"] = np.arange(len(df))
@@ -91,8 +93,14 @@ test_tu["covered"] = test_tu["bin"].map(lambda b: pool_n[int(b)] >= FLOOR if pd.
 cov = test_tu[test_tu["covered"]]
 unc = test_tu[~test_tu["covered"]]
 print(f"\n30.06-tu Turbinenfenster (scored): {len(test_tu)}")
-print(f"  in Pool-abgedeckten Lastbaendern (>= {FLOOR} Pool-Fenster): {len(cov)}  -> Flag-Rate {cov['alarm'].mean():.3f}")
+print(
+    f"  in Pool-abgedeckten Lastbaendern (>= {FLOOR} Pool-Fenster): {len(cov)}"
+    f"  -> Flag-Rate {cov['alarm'].mean():.3f}"
+)
 print(f"  in NICHT abgedeckten Baendern: {len(unc)}  -> Flag-Rate {unc['alarm'].mean():.3f}")
 unc_bins = sorted(test_tu[~test_tu['covered']]['bin'].dropna().unique())
 alt_could = sum(alt_n[int(b)] >= FLOOR for b in unc_bins)
-print(f"  nicht abgedeckte Baender: {len(unc_bins)}, davon durch 29.06-tu abdeckbar (>= {FLOOR}): {alt_could}")
+print(
+    f"  nicht abgedeckte Baender: {len(unc_bins)},"
+    f" davon durch 29.06-tu abdeckbar (>= {FLOOR}): {alt_could}"
+)

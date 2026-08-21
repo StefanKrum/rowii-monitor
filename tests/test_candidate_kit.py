@@ -1580,7 +1580,7 @@ def test_in_sample_sessions_covers_entire_snapshot_fit_pool() -> None:
     constant equality: the snapshot JSON lives under `models/adapted/`, which is not
     present in data-free test environments, so the pool membership is restated here
     verbatim rather than re-read from disk."""
-    assert ck.IN_SAMPLE_SESSIONS == frozenset(
+    assert frozenset(
         {"010726-tu_ph_tu", "010726-pu", "010726-tu1-morning", "010726-tu2"}
-    )
-    assert ck.IN_SAMPLE_SESSIONS <= set(ck.SESSIONS)
+    ) == ck.IN_SAMPLE_SESSIONS
+    assert set(ck.SESSIONS) >= ck.IN_SAMPLE_SESSIONS

@@ -74,4 +74,7 @@ print(pd.DataFrame(rows).to_string(index=False))
 print("\n=== Leistungsverteilung Turbine (Perzentile) ===")
 for name, df in frames.items():
     q = np.percentile(df.power.dropna(), [5, 25, 50, 75, 95])
-    print(f"{name:22} P5={q[0]:6.1f}  P25={q[1]:6.1f}  Median={q[2]:6.1f}  P75={q[3]:6.1f}  P95={q[4]:6.1f}")
+    print(
+        f"{name:22} P5={q[0]:6.1f}  P25={q[1]:6.1f}  Median={q[2]:6.1f}"
+        f"  P75={q[3]:6.1f}  P95={q[4]:6.1f}"
+    )
